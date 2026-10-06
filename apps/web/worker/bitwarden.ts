@@ -568,7 +568,10 @@ async function publicSendFileLink(
   }
 }
 
-export async function handleBitwarden(request: Request, env: CloudflareEnv) {
+export async function handleBitwarden(
+  request: Request,
+  env: CloudflareEnv
+): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname.toLowerCase()
   const method = request.method.toUpperCase()
@@ -2331,6 +2334,61 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(
       await cipherResponse(stored.cipher!, vault, user.id, url.origin)
     )
+  }
+
+  if (path === "/api/ciphers/share" && method === "PUT") {
+    const body = await bodyOf(request)
+    const rawCiphers = body && field(body, "ciphers")
+    const collectionIds = body && collectionIdsField(body)
+    if (
+      !Array.isArray(rawCiphers) ||
+      rawCiphers.length === 0 ||
+      rawCiphers.length > 100 ||
+      !collectionIds ||
+      new Set(collectionIds).size !== collectionIds.length
+    )
+      return failure("Invalid shared ciphers")
+    const ids = new Set<string>()
+    let orgId: string | undefined
+    for (const raw of rawCiphers) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid shared ciphers")
+      const cipher = raw as Body
+      const id = stringField(cipher, "id")
+      const target = stringField(cipher, "organizationId")
+      if (
+        !id ||
+        !/^[0-9a-f-]{36}$/i.test(id) ||
+        ids.has(id) ||
+        !target ||
+        (orgId && target !== orgId)
+      )
+        return failure("Invalid shared ciphers")
+      ids.add(id)
+      orgId = target
+    }
+    const member = await getVaultMembership(env, orgId!, user.id)
+    if (!member || member.role > 1)
+      return failure("Cipher sharing is forbidden", 403)
+    if (!(await validOrgCollections(env, orgId!, member, collectionIds)))
+      return failure("Invalid collections")
+    for (const raw of rawCiphers) {
+      const cipher = raw as Body
+      const id = stringField(cipher, "id")!
+      const response = await handleBitwarden(
+        new Request(`${url.origin}/api/ciphers/${id}/share`, {
+          method: "PUT",
+          headers: {
+            Authorization: request.headers.get("Authorization") ?? "",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ cipher, collectionIds }),
+        }),
+        env
+      )
+      if (!response.ok) return response
+    }
+    return new Response(null, { status: 200 })
   }
 
   const shareMatch = /^\/api\/ciphers\/([0-9a-f-]{36})\/share$/.exec(path)

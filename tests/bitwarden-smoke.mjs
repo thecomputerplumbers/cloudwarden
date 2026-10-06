@@ -635,6 +635,46 @@ const plainMoved = await authorized(
 assert.equal(plainMoved.status, 200)
 assert.equal(plainMoved.body.organizationId, orgId)
 assert.equal(plainMoved.body.notes, "2.shared-plain-notes")
+const bulkSources = await Promise.all(
+  ["first", "second"].map((part) =>
+    authorized("/api/ciphers", "POST", {
+      type: 2,
+      name: `2.personal-bulk-${part}`,
+    })
+  )
+)
+assert.ok(bulkSources.every((source) => source.status === 200))
+const bulkCiphers = bulkSources.map((source, index) => ({
+  id: source.body.id,
+  type: 2,
+  name: `2.shared-bulk-${index}`,
+  organizationId: orgId,
+  lastKnownRevisionDate: source.body.revisionDate,
+}))
+assert.equal(
+  (
+    await authorized("/api/ciphers/share", "PUT", {
+      ciphers: [...bulkCiphers, { ...bulkCiphers[0], id: "invalid" }],
+      collectionIds: [secondCollection.body.id],
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized("/api/ciphers/share", "PUT", {
+      ciphers: bulkCiphers,
+      collectionIds: [secondCollection.body.id],
+    })
+  ).status,
+  200
+)
+for (const cipher of bulkCiphers) {
+  const movedBulk = await authorized(`/api/ciphers/${cipher.id}`)
+  assert.equal(movedBulk.status, 200)
+  assert.equal(movedBulk.body.organizationId, orgId)
+  assert.equal(movedBulk.body.name, cipher.name)
+}
 const sharedCipherBody = {
   type: 1,
   name: "2.encrypted-shared-name",

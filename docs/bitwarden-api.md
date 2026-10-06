@@ -85,6 +85,9 @@ organization-encrypted cipher and rewrapped attachment keys. A D1 transfer
 record and a frozen source cipher let the scheduled handler resume an
 interrupted R2 copy or source cleanup. The transfer waits for source preparation
 and uses a D1 lease so cleanup and retries cannot process it concurrently.
+`PUT /api/ciphers/share` applies the same transfer to a selected group of
+personal ciphers. As with Vaultwarden, a failed item can leave earlier items
+from the request already shared.
 Organization and account deletion first settle pending transfers.
 Organization metadata and public-key reads, owner edits, and global collection
 listing are available for client administration screens. Owners and admins with
