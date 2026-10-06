@@ -180,7 +180,10 @@ test("signed invitation can register a stub while public registration is disable
       (
         await requestRegistration(
           "/identity/accounts/register/verification-email-clicked",
-          { email: "owner@example.test", emailVerificationToken: `${ownerToken}tampered` }
+          {
+            email: "owner@example.test",
+            emailVerificationToken: `${ownerToken}tampered`,
+          }
         )
       ).status,
       400
