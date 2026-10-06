@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/d1"
 import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
-import { pbkdf2Sync } from "node:crypto"
+import { pbkdf2 } from "@noble/hashes/pbkdf2.js"
+import { sha256 } from "@noble/hashes/sha2.js"
 
 import {
   vaultApiKey,
@@ -96,7 +97,12 @@ export async function tokenHash(token: string) {
 }
 
 export async function hashClientPassword(password: string, salt: string) {
-  return pbkdf2Sync(password, salt, 120_000, 32, "sha256").toString("hex")
+  return bytesToHex(
+    pbkdf2(sha256, encoder.encode(password), encoder.encode(salt), {
+      c: 120_000,
+      dkLen: 32,
+    })
+  )
 }
 
 function constantTimeEqual(a: string, b: string) {
