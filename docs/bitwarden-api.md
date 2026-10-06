@@ -285,6 +285,16 @@ disposable local HTTPS Worker and retained a locked account session. API-key
 login does not unlock a vault by itself; the test account used placeholder
 encrypted keys, so this check did not exercise client-side decryption.
 
+Run `pnpm test:cli` against a disposable account to repeat a native-client
+check. Set `BW_TEST_SERVER` to its HTTPS origin, `BW_TEST_EMAIL` and
+`BW_TEST_PASSWORD` to the disposable credentials, and `BW_CLI_PATH` to the
+Bitwarden CLI JavaScript executable. The script creates an isolated CLI profile,
+then tests login, sync, encrypted item creation and editing, folder assignment,
+attachment upload and byte-for-byte download, Trash, restore, and permanent
+deletion. It logs out and removes its temporary profile. This passed locally
+with Bitwarden CLI 2026.2.0 against the current Worker on 2026-10-06; a hosted
+run remains pending.
+
 The account revision endpoint includes organization Durable Object revisions,
 so edits to shared ciphers trigger a client sync even when the personal vault
 has not changed.

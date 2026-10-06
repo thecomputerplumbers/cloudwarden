@@ -44,7 +44,8 @@ Cloudwarden's proposed environment configuration is already recorded in
 mise run dev    # Start the development server
 mise run check  # oxlint, oxfmt --check, type checking, regression tests, and a production build
 mise run format # Format the workspace with oxfmt
-pnpm test:worker # Full local account + OAuth/MCP smoke test
+pnpm test:worker # Isolated local Bitwarden Worker smoke test
+pnpm test:cli    # Optional native Bitwarden CLI check with a disposable account
 pnpm project:init # Configure Cloudflare account and environments
 pnpm run doctor  # Check local setup; also accepts staging or production
 pnpm db:seed     # Repeatable local demo users, organizations and projects
