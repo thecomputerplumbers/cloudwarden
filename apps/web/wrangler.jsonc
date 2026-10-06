@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cloudwarden",
+  "name": "cloudwarden-prod",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-09-17",
   "compatibility_flags": ["nodejs_compat"],
@@ -14,8 +14,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cloudwarden",
-      "database_id": "REPLACE_WITH_YOUR_PRODUCTION_D1_DATABASE_ID",
+      "database_name": "cloudwarden-prod",
+      "database_id": "bab5a885-1648-40d8-a240-d168a3efa012",
       "migrations_dir": "migrations",
       "migrations_pattern": "migrations/*/migration.sql",
     },
@@ -23,7 +23,7 @@
   "r2_buckets": [
     {
       "binding": "VAULT_ATTACHMENTS",
-      "bucket_name": "cloudwarden-attachments",
+      "bucket_name": "cloudwarden-prod-attachments",
       "preview_bucket_name": "cloudwarden-attachments-preview",
     },
   ],

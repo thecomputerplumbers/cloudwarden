@@ -1,27 +1,36 @@
 # Cloudwarden launch proposal
 
 This file tracks the configured targets and the remaining release work. Staging
-exists in Cloudflare; the production Cloudwarden resources are not provisioned.
+and production both exist in Cloudflare.
 
 | Setting      | Production                              | Staging                                               |
 | ------------ | --------------------------------------- | ----------------------------------------------------- |
-| Worker       | `cloudwarden`                           | `cloudwarden-staging`                                 |
+| Worker       | `cloudwarden-prod`                      | `cloudwarden-staging`                                 |
 | Origin       | `https://vault.thecomputerplumbers.com` | `https://cloudwarden-staging.thecomputerplumbers.com` |
-| D1 database  | `cloudwarden`                           | `cloudwarden-staging`                                 |
-| R2 bucket    | `cloudwarden-attachments`               | `cloudwarden-attachments-staging`                     |
+| D1 database  | `cloudwarden-prod`                      | `cloudwarden-staging`                                 |
+| R2 bucket    | `cloudwarden-prod-attachments`          | `cloudwarden-attachments-staging`                     |
 | Email sender | `cloudwarden@thecomputerplumbers.com`   | Same sender                                           |
 
 The GitHub repository is `thecomputerplumbers/cloudwarden`, public.
 The Wrangler configuration targets Cloudflare account
-`865d0c927a18e87c0a0701b8d1f18ee9`. The production D1 ID remains a
-placeholder. The first owner email address is still undecided; it is needed
-only for owner signup.
+`865d0c927a18e87c0a0701b8d1f18ee9`.
 
-`vault.thecomputerplumbers.com` currently serves the separate, active
-Vaultwarden Container with an organization and R2 checkpoints. Do not attach
-Cloudwarden to that hostname until the existing vault data has a verified
-migration or the owner explicitly chooses to discard it. Cloudwarden's mobile
-and desktop client coverage is also incomplete.
+Production was first provisioned on 2026-10-06 through the Deploy to Cloudflare
+button, which is why its resources carry the `cloudwarden-prod` name. The
+button's generated copy of this repository has been removed; this repository is
+the only source, and `apps/web/wrangler.jsonc` names the live resources.
+Registration on production is controlled by `SIGNUPS_ALLOWED`,
+`SIGNUPS_ALLOWED_EMAILS` and `SIGNUPS_VERIFY`. They are deliberately not
+committed: the allow-list is private and registration is closed when
+`SIGNUPS_ALLOWED` is absent. The first `pnpm run deploy production` from this
+repository replaces the button's variables, so set those three as Worker
+secrets immediately afterwards (`wrangler secret put <NAME>` in `apps/web`).
+
+`vault.thecomputerplumbers.com` has been attached to the `cloudwarden-prod`
+Worker since 2026-10-06. It previously served a separate Vaultwarden Container
+with an organization and R2 checkpoints; whether that data was migrated or
+deliberately left behind is not recorded here. Cloudwarden's mobile and desktop
+client coverage is still incomplete.
 
 On 2026-10-06, `cloudwarden-staging` was deployed with its own D1 database,
 R2 bucket, Durable Object, and Worker secret. Public DNS resolved its custom
