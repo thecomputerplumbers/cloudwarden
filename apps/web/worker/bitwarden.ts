@@ -34,6 +34,7 @@ import {
   matchingTotpStep,
   newTotpSecret,
   redeemTotpRecoveryCode,
+  revokeOtherSessions,
   verifyTotpLogin,
 } from "./bitwarden-totp"
 import {
@@ -124,6 +125,16 @@ import {
   pendingAuthRequests,
 } from "./bitwarden-auth-request"
 import { publishVaultNotification } from "./bitwarden-notifications"
+import {
+  deleteWebauthnCredential,
+  disableWebauthn,
+  finishWebauthnRegistration,
+  getWebauthn,
+  redeemWebauthnRecoveryCode,
+  startWebauthnLogin,
+  startWebauthnRegistration,
+  verifyWebauthnLogin,
+} from "./bitwarden-webauthn"
 import {
   consumeProtectedOtp,
   requestProtectedOtp,
@@ -254,19 +265,23 @@ function registrationEmailVerificationRequired(env: CloudflareEnv) {
 }
 
 async function enabledTwoFactors(env: CloudflareEnv, userId: string) {
-  const [totp, email] = await Promise.all([
+  const [totp, email, webauthn] = await Promise.all([
     getTotp(env, userId),
     getEmailTwoFactor(env, userId),
+    getWebauthn(env, userId),
   ])
-  return { totp, email: email?.email ? email : null }
+  return { totp, email: email?.email ? email : null, webauthn }
 }
 
-function twoFactorChallenge(
+async function twoFactorChallenge(
+  env: CloudflareEnv,
+  userId: string,
   factors: Awaited<ReturnType<typeof enabledTwoFactors>>
 ) {
   const providers = [
     ...(factors.totp ? ["0"] : []),
     ...(factors.email ? ["1"] : []),
+    ...(factors.webauthn.factor ? ["7"] : []),
   ]
   const email = factors.email?.email
   const maskedEmail = email ? `${email[0]}***@${email.split("@")[1]}` : null
@@ -278,6 +293,9 @@ function twoFactorChallenge(
       TwoFactorProviders2: {
         ...(factors.totp ? { "0": null } : {}),
         ...(maskedEmail ? { "1": { Email: maskedEmail } } : {}),
+        ...(factors.webauthn.factor
+          ? { "7": await startWebauthnLogin(env, userId) }
+          : {}),
       },
       MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
     },
@@ -299,10 +317,14 @@ async function verifySecondFactor(
     return verifyTotpLogin(env, factors.totp, code)
   if (provider === 1 && factors.email)
     return verifyEmailLogin(env, userId, code)
+  if (provider === 7 && factors.webauthn.factor)
+    return verifyWebauthnLogin(env, userId, code)
   if (provider === 8) {
     const recovered =
       (factors.totp && (await redeemTotpRecoveryCode(env, userId, code))) ||
       (factors.email && (await redeemEmailRecoveryCode(env, userId, code))) ||
+      (factors.webauthn.factor &&
+        (await redeemWebauthnRecoveryCode(env, userId, code))) ||
       false
     if (recovered) await clearRememberedVaultDevices(env, userId)
     return recovered
@@ -1369,10 +1391,10 @@ export async function handleBitwarden(
       }
       const ssoUser = sso.user
       const factors = await enabledTwoFactors(env, ssoUser.id)
-      if (factors.totp || factors.email) {
+      if (factors.totp || factors.email || factors.webauthn.factor) {
         const factorCode = stringField(body, "two_factor_token")
         const provider = integerField(body, "two_factor_provider") ?? 0
-        if (!factorCode) return twoFactorChallenge(factors)
+        if (!factorCode) return twoFactorChallenge(env, ssoUser.id, factors)
         if (
           !(
             await limiter.consumeRateLimit(`totp:${ssoUser.id}`, 15, 5 * 60_000)
@@ -1407,7 +1429,7 @@ export async function handleBitwarden(
         }
       )
       const remember =
-        (factors.totp || factors.email) &&
+        (factors.totp || factors.email || factors.webauthn.factor) &&
         integerField(body, "two_factor_provider") !== 8 &&
         integerField(body, "two_factor_remember") === 1
           ? await rememberVaultDevice(env, ssoUser.id, deviceId)
@@ -1539,10 +1561,10 @@ export async function handleBitwarden(
     )
       return failure("Username or password is incorrect", 400)
     const factors = await enabledTwoFactors(env, user.id)
-    if (factors.totp || factors.email) {
+    if (factors.totp || factors.email || factors.webauthn.factor) {
       const code = stringField(body, "two_factor_token")
       const provider = integerField(body, "two_factor_provider") ?? 0
-      if (!code) return twoFactorChallenge(factors)
+      if (!code) return twoFactorChallenge(env, user.id, factors)
       const secondFactorAllowed = await limiter.consumeRateLimit(
         `totp:${user.id}`,
         15,
@@ -1576,7 +1598,7 @@ export async function handleBitwarden(
       }
     )
     const remember =
-      (factors.totp || factors.email) &&
+      (factors.totp || factors.email || factors.webauthn.factor) &&
       integerField(body, "two_factor_provider") !== 8 &&
       integerField(body, "two_factor_remember") === 1
         ? await rememberVaultDevice(env, user.id, deviceId)
@@ -1894,6 +1916,9 @@ export async function handleBitwarden(
         ...(factors.email
           ? [{ enabled: true, type: 1, object: "twoFactorProvider" }]
           : []),
+        ...(factors.webauthn.factor
+          ? [{ enabled: true, type: 7, object: "twoFactorProvider" }]
+          : []),
       ],
       object: "list",
       continuationToken: null,
@@ -2000,13 +2025,94 @@ export async function handleBitwarden(
       object: "twoFactorAuthenticator",
     })
   }
+  if (path === "/api/two-factor/get-webauthn" && method === "POST") {
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    const { credentials } = await getWebauthn(env, user.id)
+    return json({
+      enabled: credentials.length > 0,
+      keys: credentials.map((credential) => ({
+        id: credential.slot,
+        name: credential.name,
+        migrated: false,
+      })),
+      object: "twoFactorWebAuthn",
+    })
+  }
+  if (path === "/api/two-factor/get-webauthn-challenge" && method === "POST") {
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    return json(await startWebauthnRegistration(env, user))
+  }
+  if (
+    path === "/api/two-factor/webauthn" &&
+    (method === "POST" || method === "PUT")
+  ) {
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    const slot = body && integerField(body, "id")
+    const name = body && stringField(body, "name")
+    const deviceResponse = body && field(body, "deviceResponse")
+    if (!slot || slot < 1 || slot > 5 || !name || name.length > 100)
+      return failure("Invalid WebAuthn key")
+    if (
+      !(await finishWebauthnRegistration(
+        env,
+        user.id,
+        slot,
+        name,
+        deviceResponse
+      ))
+    )
+      return failure("Invalid WebAuthn response", 400)
+    await revokeOtherSessions(env, user.id, request)
+    await clearRememberedVaultDevices(env, user.id)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
+    const { credentials } = await getWebauthn(env, user.id)
+    return json({
+      enabled: true,
+      keys: credentials.map((credential) => ({
+        id: credential.slot,
+        name: credential.name,
+        migrated: false,
+      })),
+      object: "twoFactorU2f",
+    })
+  }
+  if (path === "/api/two-factor/webauthn" && method === "DELETE") {
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    const slot = body && integerField(body, "id")
+    if (!slot || !(await deleteWebauthnCredential(env, user.id, slot)))
+      return failure("WebAuthn key not found", 404)
+    await revokeOtherSessions(env, user.id, request)
+    await clearRememberedVaultDevices(env, user.id)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
+    const { credentials } = await getWebauthn(env, user.id)
+    return json({
+      enabled: credentials.length > 0,
+      keys: credentials.map((credential) => ({
+        id: credential.slot,
+        name: credential.name,
+        migrated: false,
+      })),
+      object: "twoFactorU2f",
+    })
+  }
   if (path === "/api/two-factor/get-recover" && method === "POST") {
     const body = await bodyOf(request)
     const password = body && stringField(body, "masterPasswordHash")
     if (!password || !(await verifyVaultPassword(user, password)))
       return failure("Invalid password", 403)
     const factors = await enabledTwoFactors(env, user.id)
-    const recovery = factors.email?.recoveryCode ?? factors.totp?.recoveryCode
+    const recovery =
+      factors.email?.recoveryCode ??
+      factors.totp?.recoveryCode ??
+      factors.webauthn.factor?.recoveryCode
     return recovery
       ? json({ code: recovery, object: "twoFactorRecover" })
       : failure("Two-factor authentication is disabled", 404)
@@ -2022,7 +2128,17 @@ export async function handleBitwarden(
     if (!password || !(await verifyVaultPassword(user, password)))
       return failure("Invalid password", 403)
     const type = body && integerField(body, "type")
-    if (type !== 0 && type !== 1) return failure("Invalid two-factor provider")
+    if (type !== 0 && type !== 1 && type !== 7)
+      return failure("Invalid two-factor provider")
+    if (type === 7) {
+      if (!(await getWebauthn(env, user.id)).factor)
+        return failure("Two-factor authentication is disabled", 404)
+      await disableWebauthn(env, user.id)
+      await revokeOtherSessions(env, user.id, request)
+      await clearRememberedVaultDevices(env, user.id)
+      await publishVaultNotification(env, { type: 11, userId: user.id })
+      return json({ enabled: false, type: 7, object: "twoFactorProvider" })
+    }
     if (type === 1) {
       if (!(await getEmailTwoFactor(env, user.id))?.email)
         return failure("Two-factor authentication is disabled", 404)
@@ -2052,7 +2168,8 @@ export async function handleBitwarden(
       profile(
         user,
         !!(await getTotp(env, user.id)) ||
-          !!(await getEmailTwoFactor(env, user.id))?.email,
+          !!(await getEmailTwoFactor(env, user.id))?.email ||
+          !!(await getWebauthn(env, user.id)).factor,
         await profileOrganizations()
       )
     )
@@ -2069,7 +2186,8 @@ export async function handleBitwarden(
       profile(
         updated,
         !!(await getTotp(env, user.id)) ||
-          !!(await getEmailTwoFactor(env, user.id))?.email,
+          !!(await getEmailTwoFactor(env, user.id))?.email ||
+          !!(await getWebauthn(env, user.id)).factor,
         await profileOrganizations()
       )
     )
@@ -2726,7 +2844,8 @@ export async function handleBitwarden(
       profile: profile(
         user,
         !!(await getTotp(env, user.id)) ||
-          !!(await getEmailTwoFactor(env, user.id))?.email,
+          !!(await getEmailTwoFactor(env, user.id))?.email ||
+          !!(await getWebauthn(env, user.id)).factor,
         organizations.map(({ organization, membership }) =>
           profileOrganizationResponse(organization, membership)
         )

@@ -100,6 +100,48 @@ export const vaultDevice = sqliteTable(
   ]
 )
 
+export const vaultWebauthnFactor = sqliteTable("vault_webauthn_factor", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  recoveryCode: text("recovery_code").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultWebauthnCredential = sqliteTable(
+  "vault_webauthn_credential",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    slot: integer("slot").notNull(),
+    name: text("name").notNull(),
+    credentialId: text("credential_id").notNull(),
+    publicKey: text("public_key").notNull(),
+    counter: integer("counter").notNull(),
+    transports: text("transports").notNull(),
+    deviceType: text("device_type").notNull(),
+    backedUp: integer("backed_up", { mode: "boolean" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_webauthn_user_slot_unique").on(table.userId, table.slot),
+    uniqueIndex("vault_webauthn_credential_id_unique").on(table.credentialId),
+  ]
+)
+
+export const vaultWebauthnChallenge = sqliteTable("vault_webauthn_challenge", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  challenge: text("challenge").notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+})
+
 export const vaultApiKey = sqliteTable("vault_api_key", {
   userId: text("user_id")
     .primaryKey()

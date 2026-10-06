@@ -29,6 +29,11 @@ uses the native Cloudflare Email Service when `EMAIL_2FA_ENABLED=true` and
 after ten minutes and can be used once. Enrolling an email address requires
 the account password and verification of a code sent to that address. Login
 codes are rate limited; recovery disables all active two-factor methods.
+WebAuthn security keys and passkeys can be enrolled in five slots as provider
+`7`. Registration and login use one-minute, single-use challenges bound to the
+configured `APP_URL` origin. Each login verifies the authenticator signature
+and advances its counter. The server stores only public credential material.
+The WebAuthn recovery code also disables all active two-factor methods.
 Clients can remember a device for 30 days by sending `two_factor_remember=1`
 after a successful second-factor login. The response returns `TwoFactorToken`;
 subsequent logins from the same device can present it with provider `5`.
@@ -213,7 +218,7 @@ have not been tested, so this cannot yet replace Vaultwarden.
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
 token rotation, encrypted item and folder sync, attachment upload/download,
-TOTP enrollment and login, recovery, password changes, text and file Send access,
+TOTP and WebAuthn enrollment and login, recovery, password changes, text and file Send access,
 account deletion, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 

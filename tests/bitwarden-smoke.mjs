@@ -1,7 +1,19 @@
 import assert from "node:assert/strict"
-import { createHmac } from "node:crypto"
+import {
+  createHash,
+  createHmac,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+} from "node:crypto"
 import { readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { setTimeout as delay } from "node:timers/promises"
+
+const requireWeb = createRequire(
+  new URL("../apps/web/package.json", import.meta.url)
+)
+const { encodeCBOR } = requireWeb("@levischuck/tiny-cbor")
 
 const origin = process.argv[2]
 const storage = process.argv[3]
@@ -2075,6 +2087,185 @@ assert.equal(
   0
 )
 
+const webauthnUser = `webauthn-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await registerWithEmail({
+      email: webauthnUser,
+      masterPasswordHash: "webauthn-secret",
+      key: "2.webauthn-key",
+      kdf: 0,
+      kdfIterations: 600_000,
+    })
+  ).status,
+  200
+)
+const webauthnInitialLogin = await tokenRequest(
+  webauthnUser,
+  "webauthn-secret",
+  {},
+  "203.0.113.70"
+)
+assert.equal(webauthnInitialLogin.status, 200)
+const webauthnToken = (await webauthnInitialLogin.json()).access_token
+const webauthnAuthorized = (path, body, method = "POST") =>
+  call(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${webauthnToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  })
+const webauthnEnrollment = await webauthnAuthorized(
+  "/api/two-factor/get-webauthn-challenge",
+  { masterPasswordHash: "webauthn-secret" }
+)
+assert.equal(webauthnEnrollment.status, 200)
+assert.equal(webauthnEnrollment.body.status, "ok")
+const { privateKey, publicKey } = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+})
+const jwk = publicKey.export({ format: "jwk" })
+const credentialId = randomBytes(32).toString("base64url")
+const rpIdHash = createHash("sha256").update("localhost").digest()
+const authenticatorRegistration = Buffer.concat([
+  rpIdHash,
+  Buffer.from([0x41, 0, 0, 0, 0]),
+  Buffer.alloc(16),
+  Buffer.from([0, 32]),
+  Buffer.from(credentialId, "base64url"),
+  Buffer.from(
+    encodeCBOR(
+      new Map([
+        [1, 2],
+        [3, -7],
+        [-1, 1],
+        [-2, Buffer.from(jwk.x, "base64url")],
+        [-3, Buffer.from(jwk.y, "base64url")],
+      ])
+    )
+  ),
+])
+const registrationClientData = Buffer.from(
+  JSON.stringify({
+    type: "webauthn.create",
+    challenge: webauthnEnrollment.body.challenge,
+    origin,
+  })
+)
+const webauthnRegistered = await webauthnAuthorized(
+  "/api/two-factor/webauthn",
+  {
+    masterPasswordHash: "webauthn-secret",
+    id: 1,
+    name: "Smoke authenticator",
+    deviceResponse: {
+      id: credentialId,
+      rawId: credentialId,
+      response: {
+        clientDataJson: registrationClientData.toString("base64url"),
+        AttestationObject: Buffer.from(
+          encodeCBOR(
+            new Map([
+              ["fmt", "none"],
+              ["attStmt", new Map()],
+              ["authData", authenticatorRegistration],
+            ])
+          )
+        ).toString("base64url"),
+      },
+    },
+  }
+)
+assert.equal(webauthnRegistered.status, 200, JSON.stringify(webauthnRegistered))
+assert.equal(webauthnRegistered.body.keys[0].name, "Smoke authenticator")
+const webauthnListing = await webauthnAuthorized(
+  "/api/two-factor/get-webauthn",
+  {
+    masterPasswordHash: "webauthn-secret",
+  }
+)
+assert.equal(webauthnListing.body.keys.length, 1)
+const webauthnChallenge = await tokenRequest(
+  webauthnUser,
+  "webauthn-secret",
+  {},
+  "203.0.113.71"
+)
+assert.equal(webauthnChallenge.status, 400)
+const webauthnChallengeBody = await webauthnChallenge.json()
+assert.deepEqual(webauthnChallengeBody.TwoFactorProviders, ["7"])
+const authenticationClientData = Buffer.from(
+  JSON.stringify({
+    type: "webauthn.get",
+    challenge: webauthnChallengeBody.TwoFactorProviders2["7"].challenge,
+    origin,
+  })
+)
+const authenticatorAssertion = Buffer.concat([
+  rpIdHash,
+  Buffer.from([0x01, 0, 0, 0, 1]),
+])
+const assertion = JSON.stringify({
+  id: credentialId,
+  rawId: credentialId,
+  response: {
+    clientDataJson: authenticationClientData.toString("base64url"),
+    authenticatorData: authenticatorAssertion.toString("base64url"),
+    signature: sign(
+      "sha256",
+      Buffer.concat([
+        authenticatorAssertion,
+        createHash("sha256").update(authenticationClientData).digest(),
+      ]),
+      privateKey
+    ).toString("base64url"),
+  },
+})
+const webauthnVerified = await tokenRequest(
+  webauthnUser,
+  "webauthn-secret",
+  { two_factor_provider: "7", two_factor_token: assertion },
+  "203.0.113.72"
+)
+assert.equal(webauthnVerified.status, 200, await webauthnVerified.text())
+assert.equal(
+  (
+    await tokenRequest(
+      webauthnUser,
+      "webauthn-secret",
+      { two_factor_provider: "7", two_factor_token: assertion },
+      "203.0.113.73"
+    )
+  ).status,
+  400
+)
+const webauthnRecovery = await webauthnAuthorized(
+  "/api/two-factor/get-recover",
+  { masterPasswordHash: "webauthn-secret" }
+)
+assert.match(webauthnRecovery.body.code, /^[A-Z2-7]{32}$/)
+const webauthnRecovered = await tokenRequest(
+  webauthnUser,
+  "webauthn-secret",
+  {
+    two_factor_provider: "8",
+    two_factor_token: webauthnRecovery.body.code,
+  },
+  "203.0.113.74"
+)
+assert.equal(webauthnRecovered.status, 200)
+const webauthnRecoveredToken = (await webauthnRecovered.json()).access_token
+assert.equal(
+  (
+    await call("/api/two-factor", {
+      headers: { Authorization: `Bearer ${webauthnRecoveredToken}` },
+    })
+  ).body.data.length,
+  0
+)
+
 assert.equal(
   (
     await otherAuthorized("/api/two-factor/get-authenticator", {
@@ -2680,7 +2871,14 @@ assert.equal(
   200
 )
 assert.equal(
-  (await tokenRequest(emailFactorUser, "email-factor-secret")).status,
+  (
+    await tokenRequest(
+      emailFactorUser,
+      "email-factor-secret",
+      {},
+      "203.0.113.75"
+    )
+  ).status,
   400
 )
 assert.equal(

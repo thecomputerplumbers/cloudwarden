@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^14.0.3",
     "@vinext/cloudflare": "1.0.0",
     "@workspace/auth": "workspace:*",
     "@workspace/email": "workspace:*",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.56.0",
+    "@levischuck/tiny-cbor": "0.2.11",
     "@tailwindcss/postcss": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

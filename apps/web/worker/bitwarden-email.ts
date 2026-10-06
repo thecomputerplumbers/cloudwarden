@@ -5,6 +5,8 @@ import {
   vaultEmailTwoFactor,
   vaultSession,
   vaultTotp,
+  vaultWebauthnCredential,
+  vaultWebauthnFactor,
 } from "../db/schema/vault"
 import { newTotpSecret, revokeOtherSessions } from "./bitwarden-totp"
 
@@ -230,6 +232,14 @@ export async function redeemEmailRecoveryCode(
     .get()
   if (!removed) return false
   await db.delete(vaultTotp).where(eq(vaultTotp.userId, userId)).run()
+  await db
+    .delete(vaultWebauthnCredential)
+    .where(eq(vaultWebauthnCredential.userId, userId))
+    .run()
+  await db
+    .delete(vaultWebauthnFactor)
+    .where(eq(vaultWebauthnFactor.userId, userId))
+    .run()
   await db.delete(vaultSession).where(eq(vaultSession.userId, userId)).run()
   return true
 }

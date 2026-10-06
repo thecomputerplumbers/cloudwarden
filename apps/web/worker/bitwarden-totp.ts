@@ -5,6 +5,8 @@ import {
   vaultEmailTwoFactor,
   vaultSession,
   vaultTotp,
+  vaultWebauthnCredential,
+  vaultWebauthnFactor,
 } from "../db/schema/vault"
 import { tokenHash } from "./bitwarden-auth"
 
@@ -153,6 +155,14 @@ export async function redeemTotpRecoveryCode(
   await drizzle(env.DB)
     .delete(vaultEmailTwoFactor)
     .where(eq(vaultEmailTwoFactor.userId, userId))
+    .run()
+  await drizzle(env.DB)
+    .delete(vaultWebauthnCredential)
+    .where(eq(vaultWebauthnCredential.userId, userId))
+    .run()
+  await drizzle(env.DB)
+    .delete(vaultWebauthnFactor)
+    .where(eq(vaultWebauthnFactor.userId, userId))
     .run()
   await drizzle(env.DB)
     .delete(vaultSession)
