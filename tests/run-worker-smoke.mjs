@@ -48,6 +48,8 @@ try {
       String(port),
       "--var",
       `APP_URL:${origin}`,
+      "--var",
+      "SIGNUPS_ALLOWED:true",
       "--persist-to",
       storage,
     ],
@@ -75,6 +77,13 @@ try {
   )
   const [code] = await once(test, "exit")
   if (code !== 0) throw new Error("Worker smoke test failed")
+  const vaultTest = spawn(
+    process.execPath,
+    ["tests/bitwarden-smoke.mjs", origin],
+    { stdio: "inherit" }
+  )
+  const [vaultCode] = await once(vaultTest, "exit")
+  if (vaultCode !== 0) throw new Error("Bitwarden API smoke test failed")
   passed = true
 } finally {
   if (worker?.pid) {

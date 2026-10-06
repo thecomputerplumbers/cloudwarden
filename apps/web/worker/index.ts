@@ -6,11 +6,13 @@ export { AppDatabase } from "./database"
 
 import { auth } from "../lib/auth"
 import { handleMcp } from "../mcp/handler"
+import { handleBitwarden, isBitwardenPath } from "./bitwarden"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     return observeRequest(request, async () => {
       const path = new URL(request.url).pathname
+      if (isBitwardenPath(path)) return handleBitwarden(request, env)
       if (
         (!product.features.mcp &&
           (path === "/mcp" ||
