@@ -392,6 +392,97 @@ assert.equal(
 )
 assert.equal((await sendAccessRequest(send.body.accessId)).status, 404)
 
+const fileSend = await otherAuthorized("/api/sends/file/v2", {
+  ...sendBody,
+  type: 1,
+  text: null,
+  file: { fileName: "2.encrypted-file-name" },
+  fileLength: 4,
+  maxAccessCount: 2,
+})
+assert.equal(fileSend.status, 200)
+assert.equal(fileSend.body.fileUploadType, 0)
+assert.equal(fileSend.body.sendResponse.file.size, "4")
+const fileSendId = fileSend.body.sendResponse.id
+const fileId = fileSend.body.sendResponse.file.id
+assert.equal(
+  (await sendAccessRequest(fileSend.body.sendResponse.accessId)).status,
+  404
+)
+const wrongUpload = new FormData()
+wrongUpload.append(
+  "data",
+  new File([new Uint8Array([5, 6, 7])], "2.encrypted-file-name")
+)
+assert.equal(
+  (
+    await fetch(`${origin}/api${fileSend.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${otherTokens.access_token}` },
+      body: wrongUpload,
+    })
+  ).status,
+  400
+)
+const fileUpload = new FormData()
+fileUpload.append(
+  "data",
+  new File([new Uint8Array([5, 6, 7, 8])], "2.encrypted-file-name")
+)
+assert.equal(
+  (
+    await fetch(`${origin}/api${fileSend.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${otherTokens.access_token}` },
+      body: fileUpload,
+    })
+  ).status,
+  204
+)
+const fileGrant = await sendAccessRequest(fileSend.body.sendResponse.accessId)
+assert.equal(fileGrant.status, 200)
+const fileToken = (await fileGrant.json()).access_token
+const fileMetadata = await call("/api/sends/access", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${fileToken}` },
+})
+assert.equal(fileMetadata.body.file.id, fileId)
+assert.equal(fileMetadata.body.key, undefined)
+const fileLink = await call(`/api/sends/access/file/${fileId}`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${fileToken}` },
+})
+assert.equal(fileLink.status, 200)
+assert.equal(fileLink.body.object, "send-fileDownload")
+assert.deepEqual(
+  new Uint8Array(await (await fetch(fileLink.body.url)).arrayBuffer()),
+  new Uint8Array([5, 6, 7, 8])
+)
+assert.equal(
+  (await fetch(`${origin}/api/sends/${fileSendId}/${fileId}?t=invalid`)).status,
+  404
+)
+const legacyFileLink = await call(
+  `/api/sends/${fileSendId}/access/file/${fileId}`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }
+)
+assert.equal(legacyFileLink.status, 200)
+assert.equal((await fetch(legacyFileLink.body.url)).status, 200)
+assert.equal(
+  (await sendAccessRequest(fileSend.body.sendResponse.accessId)).status,
+  404
+)
+assert.equal(
+  (await otherAuthorized(`/api/sends/${fileSendId}`, undefined, "DELETE"))
+    .status,
+  200
+)
+assert.equal((await fetch(fileLink.body.url)).status, 404)
+
 function totp(secret, step) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
   let bits = 0
@@ -561,5 +652,5 @@ const finalProfile = await call("/api/accounts/profile", {
 assert.equal(finalProfile.body.privateKey, "2.new-private-key")
 
 console.log(
-  "Bitwarden auth, vault lifecycle, account changes, text Sends, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, account changes, Sends, two-factor, and isolation passed"
 )

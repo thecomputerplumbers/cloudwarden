@@ -46,11 +46,19 @@ export function sendIdFromAccessId(accessId: string) {
   }
 }
 
-export function parseTextSend(body: Body) {
+export function newSendFileId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("")
+}
+
+export function parseSend(body: Body, existing?: SendRow) {
   const type = field(body, "type")
   const name = field(body, "name")
   const key = field(body, "key")
   const text = field(body, "text")
+  const file = field(body, "file")
+  const fileLength = field(body, "fileLength")
   const notes = field(body, "notes")
   const password = field(body, "password")
   const deletion = field(body, "deletionDate")
@@ -68,17 +76,36 @@ export function parseTextSend(body: Body) {
       : typeof maximum === "string" && /^\d+$/.test(maximum)
         ? Number(maximum)
         : null
+  const prior = existing ? (JSON.parse(existing.payload) as Body) : null
+  const priorFile = prior?.file as Body | undefined
+  const announcedSize =
+    typeof fileLength === "number"
+      ? fileLength
+      : typeof fileLength === "string" && /^\d+$/.test(fileLength)
+        ? Number(fileLength)
+        : null
   if (
-    type !== 0 ||
+    (type !== 0 && type !== 1) ||
+    (prior && type !== (prior.type === 1 ? 1 : 0)) ||
     typeof name !== "string" ||
     !name ||
     name.length > 20_000 ||
     typeof key !== "string" ||
     !key ||
     key.length > 20_000 ||
-    !text ||
-    typeof text !== "object" ||
-    Array.isArray(text) ||
+    (type === 0 &&
+      (!text || typeof text !== "object" || Array.isArray(text))) ||
+    (type === 1 &&
+      !existing &&
+      (!file ||
+        typeof file !== "object" ||
+        Array.isArray(file) ||
+        typeof field(file as Body, "fileName") !== "string" ||
+        !field(file as Body, "fileName") ||
+        typeof fileLength === "undefined" ||
+        !Number.isSafeInteger(announcedSize) ||
+        announcedSize! < 0 ||
+        announcedSize! > 20_000_000)) ||
     (notes !== undefined && notes !== null && typeof notes !== "string") ||
     (password !== undefined &&
       password !== null &&
@@ -98,14 +125,28 @@ export function parseTextSend(body: Body) {
     (emails !== undefined && emails !== null)
   )
     return null
-  const sanitizedText = { ...(text as Body) }
-  delete sanitizedText.response
+  const sanitizedText = type === 0 ? { ...(text as Body) } : null
+  if (sanitizedText) delete sanitizedText.response
+  const sanitizedFile =
+    type === 1
+      ? existing
+        ? priorFile
+        : {
+            ...(file as Body),
+            id: newSendFileId(),
+            size: announcedSize,
+            sizeName: `${announcedSize} bytes`,
+          }
+      : null
+  if (sanitizedFile) delete sanitizedFile.response
   return {
     payload: JSON.stringify({
+      type,
       name,
       key,
       notes: notes ?? null,
       text: sanitizedText,
+      file: sanitizedFile,
       hideEmail: hideEmail ?? false,
     }),
     maxAccessCount,
@@ -143,14 +184,19 @@ export function newSendPasswordSalt() {
 
 export function sendResponse(row: SendRow) {
   const data = JSON.parse(row.payload) as Body
+  const type = data.type === 1 ? 1 : 0
+  const file =
+    data.file && typeof data.file === "object"
+      ? { ...(data.file as Body), size: String((data.file as Body).size) }
+      : null
   return {
     id: row.id,
     accessId: sendAccessId(row.id),
-    type: 0,
+    type,
     name: data.name,
     notes: data.notes,
-    text: data.text,
-    file: null,
+    text: type === 0 ? data.text : null,
+    file: type === 1 ? file : null,
     key: data.key,
     maxAccessCount: row.maxAccessCount,
     accessCount: row.accessCount,
@@ -167,12 +213,17 @@ export function sendResponse(row: SendRow) {
 
 export function sendAccessResponse(row: SendRow, email: string) {
   const data = JSON.parse(row.payload) as Body
+  const type = data.type === 1 ? 1 : 0
+  const file =
+    data.file && typeof data.file === "object"
+      ? { ...(data.file as Body), size: String((data.file as Body).size) }
+      : null
   return {
     id: row.id,
-    type: 0,
+    type,
     name: data.name,
-    text: data.text,
-    file: null,
+    text: type === 0 ? data.text : null,
+    file: type === 1 ? file : null,
     expirationDate: row.expirationAt?.toISOString() ?? null,
     creatorIdentifier: data.hideEmail ? null : email,
     object: "send-access",

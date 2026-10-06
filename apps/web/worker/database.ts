@@ -159,6 +159,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       deletionAt: Date
       disabled: boolean
       password: { hash: string; salt: string } | null | undefined
+      uploaded?: boolean
     }
   ) {
     const existing = this.db
@@ -173,6 +174,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       expirationAt: input.expirationAt,
       deletionAt: input.deletionAt,
       disabled: input.disabled,
+      uploaded: input.uploaded ?? existing?.uploaded ?? true,
       passwordHash:
         input.password === undefined
           ? (existing?.passwordHash ?? null)
@@ -213,6 +215,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultSendToken)
         .where(eq(schema.vaultSendToken.sendId, id))
         .run()
+      tx.delete(schema.vaultSendDownloadToken)
+        .where(eq(schema.vaultSendDownloadToken.sendId, id))
+        .run()
       return !!tx
         .delete(schema.vaultSend)
         .where(eq(schema.vaultSend.id, id))
@@ -232,6 +237,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .where(eq(schema.vaultSend.id, id))
       .get()
     if (!send || !this.vaultSendAccessible(send)) return "unavailable" as const
+    if (!send.uploaded) return "unavailable" as const
     if (send.maxAccessCount !== null && send.accessCount >= send.maxAccessCount)
       return "unavailable" as const
     if (send.passwordHash) {
@@ -276,7 +282,83 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .from(schema.vaultSend)
       .where(eq(schema.vaultSend.id, id))
       .get()
-    return send && this.vaultSendAccessible(send) ? send : null
+    return send && send.uploaded && this.vaultSendAccessible(send) ? send : null
+  }
+
+  async completeVaultSendFile(
+    id: string,
+    fileId: string,
+    size: number,
+    name: string
+  ) {
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    if (!send || send.uploaded) return false
+    const data = JSON.parse(send.payload) as {
+      type?: number
+      file?: { id?: string; size?: number; fileName?: string }
+    }
+    if (
+      data.type !== 1 ||
+      data.file?.id !== fileId ||
+      data.file.size !== size ||
+      data.file.fileName !== name
+    )
+      return false
+    this.db
+      .update(schema.vaultSend)
+      .set({ uploaded: true, updatedAt: new Date() })
+      .where(eq(schema.vaultSend.id, id))
+      .run()
+    return true
+  }
+
+  async issueVaultSendDownload(id: string, fileId: string, hash: string) {
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    if (!send || !send.uploaded || !this.vaultSendAccessible(send)) return false
+    const data = JSON.parse(send.payload) as {
+      type?: number
+      file?: { id?: string }
+    }
+    if (data.type !== 1 || data.file?.id !== fileId) return false
+    this.db
+      .insert(schema.vaultSendDownloadToken)
+      .values({
+        hash,
+        sendId: id,
+        fileId,
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+      })
+      .run()
+    return true
+  }
+
+  async validateVaultSendDownload(id: string, fileId: string, hash: string) {
+    const token = this.db
+      .select()
+      .from(schema.vaultSendDownloadToken)
+      .where(eq(schema.vaultSendDownloadToken.hash, hash))
+      .get()
+    if (
+      !token ||
+      token.sendId !== id ||
+      token.fileId !== fileId ||
+      token.expiresAt.getTime() <= Date.now()
+    )
+      return false
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    return !!send && send.uploaded && this.vaultSendAccessible(send)
   }
 
   private vaultSendAccessible(send: typeof schema.vaultSend.$inferSelect) {

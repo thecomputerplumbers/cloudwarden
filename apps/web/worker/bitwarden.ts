@@ -30,7 +30,8 @@ import {
   hashSendPassword,
   newSendAccessToken,
   newSendPasswordSalt,
-  parseTextSend,
+  parseSend,
+  sendAccessId,
   sendAccessResponse,
   sendIdFromAccessId,
   sendResponse,
@@ -322,7 +323,7 @@ async function issuePublicSendAccess(
     : { error: result }
 }
 
-async function readPublicSend(env: CloudflareEnv, bearer: string) {
+async function publicSendRecord(env: CloudflareEnv, bearer: string) {
   const [accessId] = bearer.split(".")
   const id = accessId && sendIdFromAccessId(accessId)
   if (!id) return null
@@ -331,13 +332,109 @@ async function readPublicSend(env: CloudflareEnv, bearer: string) {
   const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
   const send = await vault.accessVaultSend(id, await tokenHash(bearer))
   const user = send && (await findVaultUserById(env, locator.userId))
-  return send && user ? sendAccessResponse(send, user.email) : null
+  return send && user
+    ? { send, userId: user.id, email: user.email, vault }
+    : null
+}
+
+async function readPublicSend(env: CloudflareEnv, bearer: string) {
+  const record = await publicSendRecord(env, bearer)
+  return record ? sendAccessResponse(record.send, record.email) : null
+}
+
+async function publicSendFileLink(
+  env: CloudflareEnv,
+  origin: string,
+  bearer: string,
+  id: string,
+  fileId: string
+) {
+  const record = await publicSendRecord(env, bearer)
+  if (!record || record.send.id !== id) return null
+  const token = await newSendAccessToken(id)
+  if (!(await record.vault.issueVaultSendDownload(id, fileId, token.hash)))
+    return null
+  return {
+    object: "send-fileDownload",
+    id: fileId,
+    url: `${origin}/api/sends/${id}/${fileId}?t=${encodeURIComponent(token.token)}`,
+  }
 }
 
 export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const url = new URL(request.url)
   const path = url.pathname.toLowerCase()
   const method = request.method.toUpperCase()
+
+  const sendDownload = /^\/api\/sends\/([0-9a-f-]{36})\/([0-9a-f]{64})$/.exec(
+    path
+  )
+  if (sendDownload && method === "GET") {
+    const id = sendDownload[1]!
+    const fileId = sendDownload[2]!
+    const token = url.searchParams.get("t")
+    if (!token) return failure("Send file not found", 404)
+    const locator = await getSendLocator(env, id)
+    if (!locator) return failure("Send file not found", 404)
+    const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
+    if (
+      !(await vault.validateVaultSendDownload(
+        id,
+        fileId,
+        await tokenHash(token)
+      ))
+    )
+      return failure("Send file not found", 404)
+    const object = await env.VAULT_ATTACHMENTS.get(
+      `sends/${locator.userId}/${id}/${fileId}`
+    )
+    if (!object) return failure("Send file not found", 404)
+    return new Response(object.body, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(object.size),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
+    })
+  }
+
+  const fileAccess = /^\/api\/sends\/access\/file\/([0-9a-f]{64})$/.exec(path)
+  if (fileAccess && method === "POST") {
+    const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
+      request.headers.get("Authorization") ?? ""
+    )?.[1]
+    const id = bearer && sendIdFromAccessId(bearer.split(".")[0]!)
+    const link =
+      bearer &&
+      id &&
+      (await publicSendFileLink(env, url.origin, bearer, id, fileAccess[1]!))
+    return link ? json(link) : failure("Send file not found", 404)
+  }
+  const legacyFileAccess =
+    /^\/api\/sends\/([0-9a-f-]{36})\/access\/file\/([0-9a-f]{64})$/.exec(path)
+  if (legacyFileAccess && method === "POST") {
+    const body = await bodyOf(request)
+    const result = await issuePublicSendAccess(
+      env,
+      request,
+      sendAccessId(legacyFileAccess[1]!),
+      (body && stringField(body, "password")) || null
+    )
+    if ("error" in result)
+      return failure(
+        "Send file not found",
+        result.error === "limited" ? 429 : 404
+      )
+    const link = await publicSendFileLink(
+      env,
+      url.origin,
+      result.token,
+      legacyFileAccess[1]!,
+      legacyFileAccess[2]!
+    )
+    return link ? json(link) : failure("Send file not found", 404)
+  }
 
   if (path === "/api/sends/access" && method === "POST") {
     const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
@@ -812,10 +909,18 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     })
   if (path === "/api/sends" && method === "GET")
     return json(list((await vault.listVaultSends()).map(sendResponse)))
-  if (path === "/api/sends" && method === "POST") {
+  if (
+    (path === "/api/sends" || path === "/api/sends/file/v2") &&
+    method === "POST"
+  ) {
     const body = await bodyOf(request)
-    const input = body && parseTextSend(body)
-    if (!input) return failure("Invalid Send")
+    const input = body && parseSend(body)
+    const fileSend = path === "/api/sends/file/v2"
+    if (
+      !input ||
+      (JSON.parse(input.payload) as Body).type !== (fileSend ? 1 : 0)
+    )
+      return failure("Invalid Send")
     const id = crypto.randomUUID()
     const password = input.password
       ? await (async () => {
@@ -823,14 +928,56 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
           return { salt, hash: await hashSendPassword(input.password!, salt) }
         })()
       : null
-    const send = await vault.putVaultSend(id, { ...input, password })
+    const send = await vault.putVaultSend(id, {
+      ...input,
+      password,
+      uploaded: !fileSend,
+    })
     try {
       await createSendLocator(env, id, user.id)
     } catch {
       await vault.deleteVaultSend(id)
       return failure("Could not create Send", 503)
     }
-    return json(sendResponse(send))
+    if (!fileSend) return json(sendResponse(send))
+    const file = (JSON.parse(send.payload) as { file: { id: string } }).file
+    return json({
+      fileUploadType: 0,
+      object: "send-fileUpload",
+      url: `/sends/${id}/file/${file.id}`,
+      sendResponse: sendResponse(send),
+    })
+  }
+  const sendUpload =
+    /^\/api\/sends\/([0-9a-f-]{36})\/file\/([0-9a-f]{64})$/.exec(path)
+  if (sendUpload && method === "POST") {
+    const id = sendUpload[1]!
+    const fileId = sendUpload[2]!
+    const send = await vault.getVaultSend(id)
+    if (!send || send.uploaded) return failure("Send file not found", 404)
+    const file = (
+      JSON.parse(send.payload) as {
+        file?: { id?: string; size?: number; fileName?: string }
+      }
+    ).file
+    if (!file || file.id !== fileId) return failure("Send file not found", 404)
+    const form = await request.formData()
+    const data = form.get("data")
+    if (
+      !(data instanceof File) ||
+      data.size !== file.size ||
+      (data.name !== file.fileName && !file.fileName?.endsWith(data.name))
+    )
+      return failure("Send file does not match")
+    await env.VAULT_ATTACHMENTS.put(
+      `sends/${user.id}/${id}/${fileId}`,
+      data.stream()
+    )
+    if (
+      !(await vault.completeVaultSendFile(id, fileId, data.size, file.fileName))
+    )
+      return failure("Send upload failed", 503)
+    return new Response(null, { status: 204 })
   }
   const sendMatch =
     /^\/api\/sends\/([0-9a-f-]{36})(?:\/(remove-password))?$/.exec(path)
@@ -846,11 +993,16 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!sendMatch[2] && method === "DELETE") {
       await vault.deleteVaultSend(id)
       await deleteSendLocator(env, id)
+      const data = JSON.parse(existing.payload) as { file?: { id?: string } }
+      if (data.file?.id)
+        await env.VAULT_ATTACHMENTS.delete(
+          `sends/${user.id}/${id}/${data.file.id}`
+        )
       return new Response(null, { status: 200 })
     }
     if (!sendMatch[2] && method === "PUT") {
       const body = await bodyOf(request)
-      const input = body && parseTextSend(body)
+      const input = body && parseSend(body, existing)
       if (!input) return failure("Invalid Send")
       const password = input.password
         ? await (async () => {
