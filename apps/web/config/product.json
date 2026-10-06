@@ -1,8 +1,8 @@
 {
   "name": "Cloudwarden",
   "slug": "cloudwarden",
-  "description": "A workspace for your team and projects.",
-  "supportEmail": "support@example.com",
+  "description": "A Bitwarden-compatible encrypted vault on Cloudflare.",
+  "supportEmail": "cloudwarden@thecomputerplumbers.com",
   "features": { "billing": false, "mcp": false, "projects": false },
   "navigation": [
     { "href": "/dashboard", "label": "Dashboard", "icon": "dashboard" },

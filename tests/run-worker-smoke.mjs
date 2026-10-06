@@ -58,7 +58,7 @@ try {
       "--var",
       "EMAIL_2FA_ENABLED:true",
       "--var",
-      "EMAIL_FROM:cloudwarden@example.com",
+      `EMAIL_FROM:${product.supportEmail}`,
       "--var",
       "SSO_AUTHORITY:https://auth.example.test/api/auth",
       "--var",

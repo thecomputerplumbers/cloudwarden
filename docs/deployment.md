@@ -15,8 +15,9 @@ to a different Worker namespace in each deployment.
 
 1. Run the printed D1 creation commands and save each returned ID in its own
    environment. Keep database names unique to the new project.
-2. Configure the matching custom domain for each Worker, or set APP_URL to its
-   actual workers.dev origin. The post-deploy check uses this URL.
+2. `project:init` writes a custom domain route for each HTTPS hostname. For a
+   workers.dev origin it writes no custom route. Confirm each `APP_URL` is the
+   origin clients will use; the post-deploy check uses this URL.
 3. Verify a sending domain in Cloudflare Email Service and set EMAIL_FROM.
 4. Set BETTER_AUTH_SECRET separately for each Worker. If billing is enabled,
    set STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and the plan price secrets too.
@@ -62,8 +63,9 @@ with code. A failed post-deploy health check means the upload may have succeeded
 inspect the deployment before retrying. Keep tested recovery procedures for each
 product's data before destructive migrations.
 
-The template's real domains, sending service and credentials are deliberately
-unconfigured. This repository's local checks do not certify an actual deployment.
+Cloudwarden's domain names and sender are locally proposed; its D1 IDs, remote
+storage, Worker secrets, and GitHub deployment credentials are still unconfigured.
+Local checks do not certify an actual deployment.
 
 References: [Wrangler environments](https://developers.cloudflare.com/workers/wrangler/environments/)
 and [GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/).

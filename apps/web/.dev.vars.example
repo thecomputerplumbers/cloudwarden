@@ -1,5 +1,5 @@
 APP_URL=http://localhost:3000
-EMAIL_FROM=cloudwarden@example.com
+EMAIL_FROM=cloudwarden@thecomputerplumbers.com
 SIGNUPS_ALLOWED=true
 SIGNUPS_VERIFY=false
 # Set a unique BETTER_AUTH_SECRET outside local development.

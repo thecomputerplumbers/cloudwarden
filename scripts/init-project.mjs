@@ -49,6 +49,16 @@ export function initialize(directory, options) {
       preview_bucket_name: `${slug}-attachments${suffix}-preview`,
     },
   ]
+  const routes = (value) => {
+    const hostname = new URL(value).hostname
+    return hostname.endsWith(".workers.dev")
+      ? []
+      : [{ pattern: hostname, custom_domain: true }]
+  }
+  const emailBinding = config.send_email.map((binding) => ({
+    ...binding,
+    allowed_sender_addresses: [emailFrom],
+  }))
   editJson(resolve(directory, "package.json"), [[["name"], slug]])
   editJson(resolve(directory, "apps/web/config/product.json"), [
     [["name"], name],
@@ -59,6 +69,10 @@ export function initialize(directory, options) {
     [["name"], slug],
     [["account_id"], accountId],
     [["vars"], { APP_URL: origin, EMAIL_FROM: emailFrom }],
+    [["workers_dev"], routes(origin).length === 0],
+    [["preview_urls"], false],
+    [["routes"], routes(origin)],
+    [["send_email"], emailBinding],
     [["d1_databases"], database("", productionDbId)],
     [["r2_buckets"], attachments("")],
     [
@@ -66,10 +80,13 @@ export function initialize(directory, options) {
       {
         name: `${slug}-staging`,
         vars: { APP_URL: stagingOrigin, EMAIL_FROM: emailFrom },
+        workers_dev: routes(stagingOrigin).length === 0,
+        preview_urls: false,
+        routes: routes(stagingOrigin),
         d1_databases: database("-staging", stagingDbId),
         r2_buckets: attachments("-staging"),
         durable_objects: config.durable_objects,
-        send_email: config.send_email,
+        send_email: emailBinding,
       },
     ],
   ])
@@ -77,7 +94,7 @@ export function initialize(directory, options) {
   if (!existsSync(local))
     writeFileSync(
       local,
-      `APP_URL=http://localhost:3000\nEMAIL_FROM=cloudwarden@example.com\nBETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\n`,
+      `APP_URL=http://localhost:3000\nEMAIL_FROM=${emailFrom}\nBETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\n`,
       { mode: 0o600 }
     )
   return [

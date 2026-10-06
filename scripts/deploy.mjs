@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { root, targetConfig, wranglerArgs } from "./project-lib.mjs"
+import {
+  artifactMatchesTarget,
+  root,
+  targetConfig,
+  wranglerArgs,
+} from "./project-lib.mjs"
 const environment = process.argv[2]
 if (!["staging", "production"].includes(environment))
   throw new Error("Usage: pnpm deploy staging|production")
@@ -39,10 +44,7 @@ run("pnpm", ["--filter", "web", "build"], {
 })
 const artifact = resolve(root, "apps/web/dist/server/wrangler.json"),
   built = JSON.parse(readFileSync(artifact, "utf8"))
-if (
-  built.name !== config.name ||
-  built.d1_databases?.[0]?.database_id !== config.d1_databases?.[0]?.database_id
-)
+if (!artifactMatchesTarget(built, config))
   throw new Error("Built Worker does not match the selected environment")
 built.vars = { ...built.vars, BUILD_ID: buildId }
 writeFileSync(artifact, JSON.stringify(built, null, 2))

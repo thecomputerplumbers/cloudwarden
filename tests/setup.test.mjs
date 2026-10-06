@@ -11,6 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { initialize } from "../scripts/init-project.mjs"
 import {
+  artifactMatchesTarget,
   readJson,
   targetConfig,
   wranglerArgs,
@@ -42,6 +43,16 @@ test("new-project setup isolates environments and preserves existing local secre
     secret = readFileSync(join(root, "apps/web/.dev.vars"), "utf8")
   assert.equal(config.name, options.slug)
   assert.equal(config.env.staging.name, `${options.slug}-staging`)
+  assert.equal(config.workers_dev, false)
+  assert.equal(config.env.staging.workers_dev, false)
+  assert.equal(config.preview_urls, false)
+  assert.equal(config.env.staging.preview_urls, false)
+  assert.deepEqual(config.routes, [
+    { pattern: "app.example.test", custom_domain: true },
+  ])
+  assert.deepEqual(config.env.staging.routes, [
+    { pattern: "staging.example.test", custom_domain: true },
+  ])
   assert.deepEqual(wranglerArgs("staging", config), ["--env", "staging"])
   assert.deepEqual(wranglerArgs("production", config), [])
   assert.notEqual(
@@ -53,6 +64,12 @@ test("new-project setup isolates environments and preserves existing local secre
     "APP_DATABASE"
   )
   assert.equal(config.env.staging.send_email[0].name, "EMAIL")
+  assert.deepEqual(config.send_email[0].allowed_sender_addresses, [
+    options.emailFrom,
+  ])
+  assert.deepEqual(config.env.staging.send_email[0].allowed_sender_addresses, [
+    options.emailFrom,
+  ])
   assert.equal(config.r2_buckets[0].bucket_name, "example-studio-attachments")
   assert.equal(
     config.env.staging.r2_buckets[0].bucket_name,
@@ -63,6 +80,7 @@ test("new-project setup isolates environments and preserves existing local secre
     options.name
   )
   assert.ok(secret.includes("APP_URL=http://localhost:3000"))
+  assert.ok(secret.includes(`EMAIL_FROM=${options.emailFrom}`))
   assert.match(secret, /BETTER_AUTH_SECRET=.{40,}/)
   initialize(root, options)
   assert.equal(readFileSync(join(root, "apps/web/.dev.vars"), "utf8"), secret)
@@ -81,4 +99,44 @@ test("setup rejects unsafe targets before changing files", (t) => {
   assert.equal(readFileSync(join(root, "package.json"), "utf8"), before)
   assert.throws(() => targetConfig("staging", {}), /staging/i)
   assert.throws(() => wranglerArgs("staging", {}), /staging/i)
+})
+
+test("release artifact must match the selected account, origin, and storage", (t) => {
+  const root = fixture(t)
+  initialize(root, options)
+  const config = readJson(join(root, "apps/web/wrangler.jsonc"))
+  const staging = targetConfig("staging", config)
+  assert.equal(artifactMatchesTarget(staging, staging), true)
+  for (const artifact of [
+    { ...staging, name: config.name },
+    { ...staging, account_id: "b".repeat(32) },
+    { ...staging, workers_dev: true },
+    { ...staging, vars: { ...staging.vars, APP_URL: config.vars.APP_URL } },
+    { ...staging, routes: config.routes },
+    { ...staging, d1_databases: config.d1_databases },
+    { ...staging, r2_buckets: config.r2_buckets },
+    { ...staging, send_email: [] },
+    {
+      ...staging,
+      send_email: [
+        { name: "EMAIL", allowed_sender_addresses: ["bad@example.test"] },
+      ],
+    },
+    { ...staging, durable_objects: { bindings: [] } },
+  ])
+    assert.equal(artifactMatchesTarget(artifact, staging), false)
+})
+
+test("workers.dev origins do not create custom domain routes", (t) => {
+  const root = fixture(t)
+  initialize(root, {
+    ...options,
+    origin: "https://example-studio.account.workers.dev",
+    stagingOrigin: "https://example-studio-staging.account.workers.dev",
+  })
+  const config = readJson(join(root, "apps/web/wrangler.jsonc"))
+  assert.deepEqual(config.routes, [])
+  assert.deepEqual(config.env.staging.routes, [])
+  assert.equal(config.workers_dev, true)
+  assert.equal(config.env.staging.workers_dev, true)
 })

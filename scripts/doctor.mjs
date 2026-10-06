@@ -86,9 +86,28 @@ if (environment === "local") {
     (config.vars?.APP_URL ?? "").startsWith("https://"),
     "Canonical HTTPS APP_URL"
   )
+  const hostname = new URL(config.vars.APP_URL).hostname
+  check(
+    hostname.endsWith(".workers.dev")
+      ? config.workers_dev === true && (config.routes ?? []).length === 0
+      : config.workers_dev === false &&
+          config.routes?.some(
+            (route) =>
+              route.pattern === hostname && route.custom_domain === true
+          ),
+    "Canonical origin route"
+  )
   check(
     Boolean(config.vars?.EMAIL_FROM),
     "EMAIL_FROM (domain must also be verified in Cloudflare)"
+  )
+  check(
+    config.send_email?.some(
+      (binding) =>
+        binding.name === "EMAIL" &&
+        binding.allowed_sender_addresses?.includes(config.vars.EMAIL_FROM)
+    ),
+    "EMAIL binding allows configured sender"
   )
   check(
     config.vars?.SIGNUPS_VERIFY !== "false",

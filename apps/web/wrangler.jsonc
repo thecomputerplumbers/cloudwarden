@@ -4,8 +4,8 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-09-17",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": true,
+  "workers_dev": false,
+  "preview_urls": false,
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
@@ -13,15 +13,10 @@
   },
   "d1_databases": [
     {
-      // Relational, queryable, reachable from the request handler: auth and
-      // billing live here. Create it once with
-      // `wrangler d1 create cloudwarden` and paste the id it prints.
       "binding": "DB",
       "database_name": "cloudwarden",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "REPLACE_WITH_YOUR_PRODUCTION_D1_DATABASE_ID",
       "migrations_dir": "migrations",
-      // drizzle-kit writes one folder per migration rather than flat .sql
-      // files; wrangler reads that layout when pointed at it.
       "migrations_pattern": "migrations/*/migration.sql",
     },
   ],
@@ -47,10 +42,73 @@
       "storage": "sqlite",
     },
   },
-  "send_email": [{ "name": "EMAIL" }],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["cloudwarden@thecomputerplumbers.com"],
+    },
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
   },
   "upload_source_maps": true,
+  "account_id": "865d0c927a18e87c0a0701b8d1f18ee9",
+  "vars": {
+    "APP_URL": "https://cloudwarden.thecomputerplumbers.com",
+    "EMAIL_FROM": "cloudwarden@thecomputerplumbers.com",
+  },
+  "env": {
+    "staging": {
+      "name": "cloudwarden-staging",
+      "vars": {
+        "APP_URL": "https://cloudwarden-staging.thecomputerplumbers.com",
+        "EMAIL_FROM": "cloudwarden@thecomputerplumbers.com",
+      },
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "cloudwarden-staging.thecomputerplumbers.com",
+          "custom_domain": true,
+        },
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cloudwarden-staging",
+          "database_id": "REPLACE_WITH_YOUR_STAGING_D1_DATABASE_ID",
+          "migrations_dir": "migrations",
+          "migrations_pattern": "migrations/*/migration.sql",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "VAULT_ATTACHMENTS",
+          "bucket_name": "cloudwarden-attachments-staging",
+          "preview_bucket_name": "cloudwarden-attachments-staging-preview",
+        },
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "APP_DATABASE",
+            "class_name": "AppDatabase",
+          },
+        ],
+      },
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["cloudwarden@thecomputerplumbers.com"],
+        },
+      ],
+    },
+  },
+  "routes": [
+    {
+      "pattern": "cloudwarden.thecomputerplumbers.com",
+      "custom_domain": true,
+    },
+  ],
 }

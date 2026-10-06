@@ -41,6 +41,32 @@ export function wranglerArgs(
     throw new Error("Configure the staging environment with pnpm project:init")
   return environment === "staging" ? ["--env", "staging"] : []
 }
+export function artifactMatchesTarget(built, config) {
+  const binding = (items, name) =>
+    items?.find((item) => item.binding === name || item.name === name)
+  return (
+    built.name === config.name &&
+    built.account_id === config.account_id &&
+    built.workers_dev === config.workers_dev &&
+    built.preview_urls === config.preview_urls &&
+    built.vars?.APP_URL === config.vars?.APP_URL &&
+    built.vars?.EMAIL_FROM === config.vars?.EMAIL_FROM &&
+    JSON.stringify(built.routes ?? []) ===
+      JSON.stringify(config.routes ?? []) &&
+    binding(built.d1_databases, "DB")?.database_id ===
+      binding(config.d1_databases, "DB")?.database_id &&
+    binding(built.r2_buckets, "VAULT_ATTACHMENTS")?.bucket_name ===
+      binding(config.r2_buckets, "VAULT_ATTACHMENTS")?.bucket_name &&
+    JSON.stringify(
+      binding(built.send_email, "EMAIL")?.allowed_sender_addresses ?? []
+    ) ===
+      JSON.stringify(
+        binding(config.send_email, "EMAIL")?.allowed_sender_addresses ?? []
+      ) &&
+    Boolean(binding(built.send_email, "EMAIL")) &&
+    Boolean(binding(built.durable_objects?.bindings, "APP_DATABASE"))
+  )
+}
 export function validOrigin(value) {
   const url = new URL(value)
   if (url.protocol !== "https:" || url.origin !== value)
