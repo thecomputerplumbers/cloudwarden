@@ -27,8 +27,10 @@ owner email address is still undecided; it is needed only for owner signup.
 3. Deploy staging on a trusted HTTPS origin. Verify the health endpoint and
    Bitwarden configuration route. In the bundled web vault, create a disposable
    account and test encrypted item creation and reading, organization creation,
-   a collection and member, TOTP and WebAuthn enrollment, email verification
-   and password reset, an attachment and file Send. Test a native client login
+   a collection and member, TOTP and WebAuthn enrollment, signup email verification
+   and an authenticated master password change, an attachment and file Send.
+   Test lost-password account deletion separately; encrypted vault data cannot be
+   reset or recovered through email. Test a native client login
    and vault sync. Promote the same commit to production only after the staging
    checks pass. The web vault rejected local HTTP signup with "Insecure URL not
    allowed". A disposable account was created through isolated Chrome on
