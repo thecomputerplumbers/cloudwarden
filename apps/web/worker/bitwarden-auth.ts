@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/d1"
-import { and, eq, isNotNull, isNull, ne } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, ne, sql } from "drizzle-orm"
 
-import { vaultSession, vaultUser } from "../db/schema/vault"
+import { vaultMembership, vaultSession, vaultUser } from "../db/schema/vault"
 
 export type VaultUser = typeof vaultUser.$inferSelect
 
@@ -188,7 +188,18 @@ export async function beginVaultDeletion(
       and(
         eq(vaultUser.id, id),
         eq(vaultUser.passwordHash, expectedPasswordHash),
-        isNull(vaultUser.deletingAt)
+        isNull(vaultUser.deletingAt),
+        sql`not exists (
+          select 1 from ${vaultMembership} owned
+          where owned.user_id = ${id} and owned.role = 0 and owned.status = 2
+            and not exists (
+              select 1 from ${vaultMembership} other
+              inner join ${vaultUser} other_user on other_user.id = other.user_id
+              where other.org_id = owned.org_id and other.id != owned.id
+                and other.role = 0 and other.status = 2
+                and other_user.deleting_at is null
+            )
+        )`
       )
     )
     .returning({ id: vaultUser.id })

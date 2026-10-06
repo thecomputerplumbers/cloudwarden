@@ -38,6 +38,18 @@ import {
   sendResponse,
 } from "./bitwarden-send"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
+import {
+  collectionResponse,
+  createVaultCollection,
+  createVaultOrganization,
+  getVaultMembership,
+  getVaultOrganization,
+  isLastVaultOwner,
+  listVaultCollections,
+  listVaultOrganizations,
+  organizationResponse,
+  profileOrganizationResponse,
+} from "./bitwarden-org"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -120,7 +132,11 @@ function registrationsAllowed(env: CloudflareEnv) {
   )
 }
 
-function profile(user: VaultUser, twoFactorEnabled = false) {
+function profile(
+  user: VaultUser,
+  twoFactorEnabled = false,
+  organizations: unknown[] = []
+) {
   const accountKeys =
     user.privateKey && user.publicKey
       ? {
@@ -148,7 +164,7 @@ function profile(user: VaultUser, twoFactorEnabled = false) {
     privateKey: user.privateKey,
     accountKeys,
     securityStamp: user.securityStamp,
-    organizations: [],
+    organizations,
     providers: [],
     providerOrganizations: [],
     forcePasswordReset: false,
@@ -301,6 +317,8 @@ export function isBitwardenPath(path: string) {
     path === "/api/now" ||
     path === "/api/version" ||
     path === "/api/sync" ||
+    path === "/api/organizations" ||
+    path.startsWith("/api/organizations/") ||
     path === "/api/settings/domains" ||
     path === "/api/ciphers" ||
     path.startsWith("/api/ciphers/") ||
@@ -752,6 +770,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const password = body && stringField(body, "masterPasswordHash")
     if (!password || !(await verifyVaultPassword(user, password)))
       return failure("Invalid password", 403)
+    if (await isLastVaultOwner(env, user.id))
+      return failure("Transfer or delete owned organizations first", 409)
     if (!(await beginVaultDeletion(env, user.id, user.passwordHash)))
       return failure("Account deletion already started", 409)
     try {
@@ -910,8 +930,19 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json({ enabled: false, type: 0, object: "twoFactorProvider" })
   }
 
+  const profileOrganizations = async () =>
+    (await listVaultOrganizations(env, user.id)).map(
+      ({ organization, membership }) =>
+        profileOrganizationResponse(organization, membership)
+    )
   if (path === "/api/accounts/profile" && method === "GET")
-    return json(profile(user, !!(await getTotp(env, user.id))))
+    return json(
+      profile(
+        user,
+        !!(await getTotp(env, user.id)),
+        await profileOrganizations()
+      )
+    )
   if (
     path === "/api/accounts/profile" &&
     (method === "POST" || method === "PUT")
@@ -920,7 +951,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const name = body && stringField(body, "name")
     if (!name || name.length > 50) return failure("Invalid profile name")
     const updated = await updateVaultProfile(env, user.id, name)
-    return json(profile(updated, !!(await getTotp(env, user.id))))
+    return json(
+      profile(
+        updated,
+        !!(await getTotp(env, user.id)),
+        await profileOrganizations()
+      )
+    )
   }
   if (path === "/api/accounts/keys" && method === "POST") {
     const body = await bodyOf(request)
@@ -948,6 +985,84 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       globalEquivalentDomains: [],
       object: "domains",
     })
+  if (path === "/api/organizations" && method === "POST") {
+    const allowed = (env as CloudflareEnv & { ORG_CREATION_USERS?: string })
+      .ORG_CREATION_USERS
+    if (
+      allowed &&
+      !allowed.split(",").some((email) => normalizeEmail(email) === user.email)
+    )
+      return failure("Organization creation is disabled for this account", 403)
+    const body = await bodyOf(request)
+    const name = body && stringField(body, "name")
+    const collectionName = body && stringField(body, "collectionName")
+    const key = body && stringField(body, "key")
+    const billingEmail = body && stringField(body, "billingEmail")
+    const keys = body && field(body, "keys")
+    const keyBody =
+      keys && typeof keys === "object" && !Array.isArray(keys)
+        ? (keys as Body)
+        : null
+    const privateKey = keyBody && stringField(keyBody, "encryptedPrivateKey")
+    const publicKey = keyBody && stringField(keyBody, "publicKey")
+    if (
+      !name ||
+      name.length > 100 ||
+      !collectionName ||
+      collectionName.length > 100 ||
+      !key ||
+      key.length > 20_000 ||
+      (billingEmail && billingEmail.length > 254) ||
+      !!privateKey !== !!publicKey
+    )
+      return failure("Invalid organization")
+    const created = await createVaultOrganization(env, user.id, {
+      name,
+      collectionName,
+      key,
+      billingEmail: billingEmail || user.email,
+      privateKey: privateKey ?? null,
+      publicKey: publicKey ?? null,
+    })
+    return json(organizationResponse(created.org))
+  }
+  const organizationMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})(?:\/collections(?:\/([0-9a-f-]{36}))?)?$/.exec(
+      path
+    )
+  if (organizationMatch) {
+    const orgId = organizationMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    const org = await getVaultOrganization(env, orgId)
+    if (!org) return failure("Organization not found", 404)
+    if (!path.includes("/collections") && method === "GET")
+      return json(organizationResponse(org))
+    if (path.endsWith("/collections") && method === "GET")
+      return json(
+        list(
+          (await listVaultCollections(env, orgId, membership)).map(
+            (collection) => collectionResponse(collection, membership)
+          )
+        )
+      )
+    if (path.endsWith("/collections") && method === "POST") {
+      if (membership.role !== 0 && membership.role !== 1)
+        return failure("Collection management is forbidden", 403)
+      const body = await bodyOf(request)
+      const name = body && stringField(body, "name")
+      const externalId = body && stringField(body, "externalId")
+      if (!name || name.length > 100 || (externalId && externalId.length > 255))
+        return failure("Invalid collection")
+      const collection = await createVaultCollection(
+        env,
+        orgId,
+        name,
+        externalId ?? null
+      )
+      return json(collectionResponse(collection, membership))
+    }
+  }
   if (path === "/api/sends" && method === "GET")
     return json(list((await vault.listVaultSends()).map(sendResponse)))
   if (
@@ -1059,10 +1174,26 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   }
   if (path === "/api/sync" && method === "GET") {
     const data = await vault.listVault()
+    const organizations = await listVaultOrganizations(env, user.id)
+    const collections = (
+      await Promise.all(
+        organizations.map(async ({ organization, membership }) =>
+          (await listVaultCollections(env, organization.id, membership)).map(
+            (collection) => collectionResponse(collection, membership)
+          )
+        )
+      )
+    ).flat()
     return json({
-      profile: profile(user, !!(await getTotp(env, user.id))),
+      profile: profile(
+        user,
+        !!(await getTotp(env, user.id)),
+        organizations.map(({ organization, membership }) =>
+          profileOrganizationResponse(organization, membership)
+        )
+      ),
       folders: data.folders.map(folderResponse),
-      collections: [],
+      collections,
       policies: [],
       ciphers: await Promise.all(
         data.ciphers.map((cipher) =>

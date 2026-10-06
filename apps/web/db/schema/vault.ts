@@ -74,3 +74,98 @@ export const vaultSendLocator = sqliteTable("vault_send_locator", {
     .notNull()
     .references(() => vaultUser.id, { onDelete: "cascade" }),
 })
+
+export const vaultOrganization = sqliteTable("vault_organization", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  billingEmail: text("billing_email").notNull(),
+  publicKey: text("public_key"),
+  privateKey: text("private_key"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultMembership = sqliteTable(
+  "vault_membership",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    key: text("key"),
+    role: integer("role").notNull(),
+    status: integer("status").notNull(),
+    accessAll: integer("access_all", { mode: "boolean" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_membership_org_user_unique").on(
+      table.orgId,
+      table.userId
+    ),
+  ]
+)
+
+export const vaultCollection = sqliteTable("vault_collection", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  externalId: text("external_id"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultCollectionMember = sqliteTable(
+  "vault_collection_member",
+  {
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => vaultCollection.id, { onDelete: "cascade" }),
+    membershipId: text("membership_id")
+      .notNull()
+      .references(() => vaultMembership.id, { onDelete: "cascade" }),
+    readOnly: integer("read_only", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    hidePasswords: integer("hide_passwords", { mode: "boolean" })
+      .notNull()
+      .default(false),
+  },
+  (table) => [
+    uniqueIndex("vault_collection_member_unique").on(
+      table.collectionId,
+      table.membershipId
+    ),
+  ]
+)
+
+export const vaultOrgCipher = sqliteTable("vault_org_cipher", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultOrgCipherCollection = sqliteTable(
+  "vault_org_cipher_collection",
+  {
+    cipherId: text("cipher_id")
+      .notNull()
+      .references(() => vaultOrgCipher.id, { onDelete: "cascade" }),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => vaultCollection.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("vault_org_cipher_collection_unique").on(
+      table.cipherId,
+      table.collectionId
+    ),
+  ]
+)

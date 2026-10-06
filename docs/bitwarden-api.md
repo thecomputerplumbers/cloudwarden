@@ -25,6 +25,14 @@ against the current session on every request. Access tokens expire after one
 hour and refresh tokens after 30 days. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
+Organization creation stores client-encrypted organization keys, an owner
+membership, and a default collection in D1. Profile and sync expose the current
+member's wrapped key and available collections. Collection reads and writes
+recheck confirmed membership; only owners and admins can create collections.
+Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
+who can create organizations. An owner cannot delete their account while they
+are the only active owner of an organization.
+
 Authenticated account deletion requires the master-password hash. It marks the
 account as deleting in D1, which immediately blocks login and existing sessions,
 then clears the account's Durable Object and removes attachment and Send objects
@@ -33,8 +41,8 @@ interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. The web vault,
-organizations and collections, other two-factor providers and remembered
+response fields beyond the ones listed above. Shared organization ciphers,
+member invitations, the web vault, other two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,
 mobile, and desktop clients have not been tested, so this cannot yet replace

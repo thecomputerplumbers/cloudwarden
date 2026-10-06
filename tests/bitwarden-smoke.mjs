@@ -75,11 +75,12 @@ assert.equal(
 assert.equal(tokens.access_token.split(".").length, 3)
 
 assert.equal((await call("/api/sync")).status, 401)
+let currentAccessToken = tokens.access_token
 const authorized = (path, method = "GET", body) =>
   call(path, {
     method,
     headers: {
-      Authorization: `Bearer ${tokens.access_token}`,
+      Authorization: `Bearer ${currentAccessToken}`,
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -195,6 +196,7 @@ const refreshed = await fetch(`${origin}/identity/connect/token`, {
 })
 assert.equal(refreshed.status, 200)
 const refreshedTokens = await refreshed.json()
+currentAccessToken = refreshedTokens.access_token
 assert.equal(
   (
     await fetch(`${origin}/identity/connect/token`, {
@@ -239,6 +241,54 @@ const otherAuthorized = (path, body, method = "POST") =>
     },
     body: JSON.stringify(body),
   })
+
+const organization = await authorized("/api/organizations", "POST", {
+  name: "Encrypted Team",
+  billingEmail: email,
+  collectionName: "Default collection",
+  key: "2.encrypted-organization-key",
+  keys: {
+    encryptedPrivateKey: "2.encrypted-organization-private-key",
+    publicKey: "organization-public-key",
+  },
+})
+assert.equal(organization.status, 200)
+const orgId = organization.body.id
+const orgCollections = await authorized(
+  `/api/organizations/${orgId}/collections`
+)
+assert.equal(orgCollections.status, 200)
+assert.equal(orgCollections.body.data.length, 1)
+assert.equal(orgCollections.body.data[0].name, "Default collection")
+const secondCollection = await authorized(
+  `/api/organizations/${orgId}/collections`,
+  "POST",
+  { name: "Shared logins" }
+)
+assert.equal(secondCollection.status, 200)
+const orgSync = await authorized("/api/sync")
+assert.equal(
+  orgSync.body.profile.organizations[0].key,
+  "2.encrypted-organization-key"
+)
+assert.equal(orgSync.body.collections.length, 2)
+assert.equal(
+  (await otherAuthorized(`/api/organizations/${orgId}`, undefined, "GET"))
+    .status,
+  404
+)
+assert.deepEqual(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.collections,
+  []
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/delete", "POST", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).status,
+  409
+)
 
 const sendBody = {
   type: 0,
