@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { and, eq, isNull, lt, or } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import { vaultCipherTransfer } from "../db/schema/vault"
@@ -46,6 +46,12 @@ export async function startVaultShare(
   if (prepared !== "prepared") {
     await db
       .delete(vaultCipherTransfer)
+      .where(eq(vaultCipherTransfer.cipherId, input.cipherId))
+      .run()
+  } else {
+    await db
+      .update(vaultCipherTransfer)
+      .set({ prepared: true })
       .where(eq(vaultCipherTransfer.cipherId, input.cipherId))
       .run()
   }
@@ -123,6 +129,50 @@ export async function completeVaultShare(env: CloudflareEnv, cipherId: string) {
     .where(eq(vaultCipherTransfer.cipherId, cipherId))
     .get()
   if (!transfer) return !!(await getOrgCipherLocator(env, cipherId))
+  const now = new Date()
+  if (
+    !transfer.prepared &&
+    now.getTime() - transfer.createdAt.getTime() < 60_000
+  )
+    return false
+  const leaseId = crypto.randomUUID()
+  const claimed = await db
+    .update(vaultCipherTransfer)
+    .set({ leaseId, leaseUntil: new Date(now.getTime() + 15 * 60_000) })
+    .where(
+      and(
+        eq(vaultCipherTransfer.cipherId, cipherId),
+        or(
+          isNull(vaultCipherTransfer.leaseUntil),
+          lt(vaultCipherTransfer.leaseUntil, now)
+        )
+      )
+    )
+    .returning({ cipherId: vaultCipherTransfer.cipherId })
+    .get()
+  if (!claimed) return false
+  try {
+    return await completeClaimedVaultShare(env, transfer)
+  } finally {
+    await db
+      .update(vaultCipherTransfer)
+      .set({ leaseId: null, leaseUntil: null })
+      .where(
+        and(
+          eq(vaultCipherTransfer.cipherId, cipherId),
+          eq(vaultCipherTransfer.leaseId, leaseId)
+        )
+      )
+      .run()
+  }
+}
+
+async function completeClaimedVaultShare(
+  env: CloudflareEnv,
+  transfer: typeof vaultCipherTransfer.$inferSelect
+) {
+  const cipherId = transfer.cipherId
+  const db = drizzle(env.DB)
   const source = await env.APP_DATABASE.getByName(`vault:${transfer.userId}`)
   const snapshot = await source.getVaultShare(cipherId)
   const locator = await getOrgCipherLocator(env, cipherId)

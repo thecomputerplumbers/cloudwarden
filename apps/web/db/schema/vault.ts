@@ -285,4 +285,7 @@ export const vaultCipherTransfer = sqliteTable("vault_cipher_transfer", {
     .notNull()
     .references(() => vaultOrganization.id, { onDelete: "cascade" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  prepared: integer("prepared", { mode: "boolean" }).notNull().default(false),
+  leaseId: text("lease_id"),
+  leaseUntil: integer("lease_until", { mode: "timestamp_ms" }),
 })
