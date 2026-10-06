@@ -30,10 +30,10 @@ owner email address is still undecided; it is needed only for owner signup.
    checks pass.
 4. Prove recovery before relying on the service for real vault data. D1 Time
    Travel and SQLite Durable Object point-in-time recovery cover their
-   respective stores. R2 objects need a separate backup or retention process:
-   deleting an R2 object cannot be undone through D1 or Durable Object recovery.
-   Exercise restore on staging, including an attachment and encrypted vault
-   record, and document the recovery point and operator steps.
+   respective stores. Run the [R2 snapshot procedure](recovery.md) on a quiet
+   vault and store the result outside the Cloudflare account. Exercise restore
+   on staging, including an attachment and encrypted vault record, and document
+   the recovery point and operator steps.
 
 References: [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/),
 [Durable Object SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
