@@ -1245,6 +1245,22 @@ export async function handleBitwarden(
   }
 
   if (
+    (path === "/identity/accounts/register/verification-email-clicked" ||
+      path === "/api/accounts/register/verification-email-clicked") &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    const token = body && stringField(body, "emailVerificationToken")
+    if (
+      !email ||
+      !token ||
+      !(await verifyRegistrationToken(env, token, normalizeEmail(email)))
+    )
+      return failure("Expired link", 400)
+    return new Response(null, { status: 204 })
+  }
+  if (
     (path === "/identity/accounts/register/send-verification-email" ||
       path === "/api/accounts/register/send-verification-email") &&
     method === "POST"

@@ -169,6 +169,24 @@ test("signed invitation can register a stub while public registration is disable
     assert.ok(ownerToken)
     assert.equal(
       (
+        await requestRegistration(
+          "/identity/accounts/register/verification-email-clicked",
+          { email: "owner@example.test", emailVerificationToken: ownerToken }
+        )
+      ).status,
+      204
+    )
+    assert.equal(
+      (
+        await requestRegistration(
+          "/identity/accounts/register/verification-email-clicked",
+          { email: "owner@example.test", emailVerificationToken: `${ownerToken}tampered` }
+        )
+      ).status,
+      400
+    )
+    assert.equal(
+      (
         await requestRegistration("/identity/accounts/register/finish", {
           ...body,
           email: "owner@example.test",
