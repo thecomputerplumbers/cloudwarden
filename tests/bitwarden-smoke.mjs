@@ -631,6 +631,56 @@ const bulkUnarchived = await authorized("/api/ciphers/unarchive", "PUT", {
 assert.equal(bulkUnarchived.status, 200)
 assert.equal(bulkUnarchived.body.data[0].archivedDate, null)
 
+const permanentlyDeletedPersonal = await authorized("/api/ciphers", "POST", {
+  type: 1,
+  name: "2.personal-permanent-delete",
+})
+assert.equal(permanentlyDeletedPersonal.status, 200)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${permanentlyDeletedPersonal.body.id}/delete`,
+      "PUT"
+    )
+  ).status,
+  204
+)
+assert.ok(
+  (await authorized(`/api/ciphers/${permanentlyDeletedPersonal.body.id}`)).body
+    .deletedDate
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${permanentlyDeletedPersonal.body.id}/delete`,
+      "POST"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${permanentlyDeletedPersonal.body.id}`))
+    .status,
+  404
+)
+const batchDeletedPersonal = await authorized("/api/ciphers", "POST", {
+  type: 1,
+  name: "2.personal-batch-permanent-delete",
+})
+assert.equal(batchDeletedPersonal.status, 200)
+assert.equal(
+  (
+    await authorized("/api/ciphers", "DELETE", {
+      ids: [batchDeletedPersonal.body.id],
+    })
+  ).status,
+  204
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${batchDeletedPersonal.body.id}`)).status,
+  404
+)
+
 const sync = await authorized("/api/sync")
 assert.equal(sync.status, 200)
 assert.equal(sync.body.profile.email, email)
@@ -1156,7 +1206,7 @@ assert.equal(
 )
 assert.equal((await authorized(`/api/ciphers/${cipherId}`)).body.folderId, null)
 assert.equal(
-  (await authorized(`/api/ciphers/${cipherId}`, "DELETE")).status,
+  (await authorized(`/api/ciphers/${cipherId}/delete`, "PUT")).status,
   204
 )
 assert.ok((await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate)
@@ -1652,7 +1702,7 @@ assert.ok(
     Date.parse(beforeSharedEditRevision)
 )
 assert.equal(
-  (await authorized(`/api/ciphers/${sharedId}`, "DELETE")).status,
+  (await authorized(`/api/ciphers/${sharedId}/delete`, "PUT")).status,
   204
 )
 assert.ok((await authorized(`/api/ciphers/${sharedId}`)).body.deletedDate)
@@ -1931,6 +1981,60 @@ assert.equal(
     )
   ).status,
   200
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      "/api/ciphers/delete",
+      { ids: [memberCreated.body.id] },
+      "POST"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${memberCreated.body.id}`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  404
+)
+assert.equal((await fetch(memberAttachmentUrl)).status, 404)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.ciphers.some(
+    (cipher) => cipher.id === memberCreated.body.id
+  ),
+  false
+)
+const directDeleted = await otherAuthorized("/api/ciphers", {
+  type: 1,
+  name: "2.member-direct-delete",
+  organizationId: orgId,
+  collectionIds: [secondCollection.body.id],
+})
+assert.equal(directDeleted.status, 200)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${directDeleted.body.id}`,
+      undefined,
+      "DELETE"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${directDeleted.body.id}`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  404
 )
 assert.equal(
   (
@@ -2362,6 +2466,11 @@ assert.equal(
 )
 assert.equal(
   (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "PUT"))
+    .status,
+  403
+)
+assert.equal(
+  (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "POST"))
     .status,
   403
 )

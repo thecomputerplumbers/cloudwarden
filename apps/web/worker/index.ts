@@ -79,8 +79,12 @@ export default {
           : null
         const batchIds =
           user &&
-          request.method === "PUT" &&
-          (path === "/api/ciphers/delete" || path === "/api/ciphers/restore")
+          (request.method === "PUT" ||
+            (path !== "/api/ciphers/restore" &&
+              (request.method === "POST" || request.method === "DELETE"))) &&
+          (path === "/api/ciphers/delete" ||
+            path === "/api/ciphers/restore" ||
+            (path === "/api/ciphers" && request.method === "DELETE"))
             ? (
                 (await request
                   .clone()

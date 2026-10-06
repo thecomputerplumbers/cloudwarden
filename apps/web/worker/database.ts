@@ -128,7 +128,38 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
         socket.close(1011, "Send failed")
       }
     }
-    if (this.ctx.getWebSockets().length)
+    const pendingDeletes = this.db
+      .select()
+      .from(schema.setting)
+      .where(like(schema.setting.key, "vault:delete:cipher:%"))
+      .limit(10)
+      .all()
+    for (const pending of pendingDeletes) {
+      try {
+        const found = await this.env.VAULT_ATTACHMENTS.list({
+          prefix: pending.value,
+          limit: 1000,
+        })
+        if (found.objects.length)
+          await this.env.VAULT_ATTACHMENTS.delete(
+            found.objects.map((object) => object.key)
+          )
+        if (!found.truncated)
+          this.db
+            .delete(schema.setting)
+            .where(eq(schema.setting.key, pending.key))
+            .run()
+      } catch {
+        console.error("Cipher attachment cleanup will retry")
+      }
+    }
+    const hasPendingDeletes = !!this.db
+      .select({ key: schema.setting.key })
+      .from(schema.setting)
+      .where(like(schema.setting.key, "vault:delete:cipher:%"))
+      .limit(1)
+      .get()
+    if (this.ctx.getWebSockets().length || hasPendingDeletes)
       await this.ctx.storage.setAlarm(Date.now() + 15_000)
   }
 
@@ -1155,6 +1186,59 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .returning()
       .get()
     return { found: true as const, conflict: !cipher }
+  }
+
+  async permanentlyDeleteVaultCipher(id: string, objectPrefix: string) {
+    this.assertVaultActive()
+    this.assertCipherNotSharing(id)
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !objectPrefix.endsWith(`/${id}/`))
+      throw new Error("Invalid cipher deletion")
+    const pendingKey = `vault:delete:cipher:${id}`
+    const found = this.db.transaction((tx) => {
+      const cipher = tx
+        .select({ id: schema.vaultCipher.id })
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, id))
+        .get()
+      if (!cipher) return false
+      const attachments = tx
+        .select({ id: schema.vaultAttachment.id })
+        .from(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.cipherId, id))
+        .all()
+      for (const attachment of attachments)
+        tx.delete(schema.vaultAttachmentToken)
+          .where(eq(schema.vaultAttachmentToken.attachmentId, attachment.id))
+          .run()
+      tx.delete(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.cipherId, id))
+        .run()
+      tx.delete(schema.vaultCipherPreference)
+        .where(eq(schema.vaultCipherPreference.cipherId, id))
+        .run()
+      tx.delete(schema.vaultCipherArchive)
+        .where(eq(schema.vaultCipherArchive.cipherId, id))
+        .run()
+      tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
+      tx.insert(schema.setting)
+        .values({ key: pendingKey, value: objectPrefix, updatedAt: new Date() })
+        .onConflictDoNothing()
+        .run()
+      return true
+    })
+    if (
+      found ||
+      this.db
+        .select()
+        .from(schema.setting)
+        .where(eq(schema.setting.key, pendingKey))
+        .get()
+    ) {
+      const alarm = await this.ctx.storage.getAlarm()
+      if (alarm === null || alarm > Date.now() + 15_000)
+        await this.ctx.storage.setAlarm(Date.now() + 1000)
+    }
+    return found
   }
 
   async restoreVaultCipher(id: string) {

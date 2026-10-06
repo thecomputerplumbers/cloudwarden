@@ -3805,14 +3805,22 @@ export async function handleBitwarden(
         const restored = await orgVault.restoreVaultCipher(locator.id)
         return restored ? response(restored) : failure("Cipher not found", 404)
       }
-      if (
-        method === "DELETE" ||
-        (method === "POST" && path.endsWith("/delete"))
-      ) {
+      if (path.endsWith("/delete") && method === "PUT") {
         const result = await orgVault.trashVaultCipher(locator.id)
         return result.found
           ? new Response(null, { status: 204 })
           : failure("Cipher not found", 404)
+      }
+      if (
+        (method === "DELETE" && path === `/api/ciphers/${locator.id}`) ||
+        (method === "POST" && path.endsWith("/delete"))
+      ) {
+        await orgVault.permanentlyDeleteVaultCipher(
+          locator.id,
+          `org/${locator.orgId}/${locator.id}/`
+        )
+        await deleteOrgCipherLocator(env, locator.id)
+        return new Response(null, { status: 204 })
       }
       if (method === "PUT" || method === "POST") {
         const body = await bodyOf(request)
@@ -4141,8 +4149,10 @@ export async function handleBitwarden(
     return new Response(null, { status: 200 })
   }
   if (
-    (path === "/api/ciphers/delete" || path === "/api/ciphers/restore") &&
-    method === "PUT"
+    (path === "/api/ciphers/restore" && method === "PUT") ||
+    (path === "/api/ciphers/delete" &&
+      (method === "PUT" || method === "POST" || method === "DELETE")) ||
+    (path === "/api/ciphers" && method === "DELETE")
   ) {
     const body = await bodyOf(request)
     const ids = body && field(body, "ids")
@@ -4180,7 +4190,10 @@ export async function handleBitwarden(
         const targetVault = await env.APP_DATABASE.getByName(
           `org:${locator.orgId}`
         )
-        if (!(await targetVault.getVaultCipher(id)))
+        if (
+          !(await targetVault.getVaultCipher(id)) &&
+          (method === "PUT" || path === "/api/ciphers/restore")
+        )
           return failure("Cipher not found", 404)
         selected.push({
           id,
@@ -4195,10 +4208,20 @@ export async function handleBitwarden(
     }
     const restored = []
     for (const target of selected) {
-      if (path === "/api/ciphers/delete") {
-        const result = await target.targetVault.trashVaultCipher(target.id)
-        if (!result.found || result.conflict)
-          return failure("Cipher was changed concurrently", 409)
+      if (path !== "/api/ciphers/restore") {
+        if (method === "PUT") {
+          const result = await target.targetVault.trashVaultCipher(target.id)
+          if (!result.found || result.conflict)
+            return failure("Cipher was changed concurrently", 409)
+        } else {
+          await target.targetVault.permanentlyDeleteVaultCipher(
+            target.id,
+            target.organization
+              ? `org/${target.organization.id}/${target.id}/`
+              : `${user.id}/${target.id}/`
+          )
+          if (target.organization) await deleteOrgCipherLocator(env, target.id)
+        }
       } else {
         const row = await target.targetVault.restoreVaultCipher(target.id)
         if (!row) return failure("Cipher not found", 404)
@@ -4214,7 +4237,7 @@ export async function handleBitwarden(
         )
       }
     }
-    return path === "/api/ciphers/delete"
+    return path !== "/api/ciphers/restore"
       ? new Response(null, { status: 204 })
       : json(list(restored))
   }
@@ -4282,11 +4305,20 @@ export async function handleBitwarden(
             await cipherResponse(stored.cipher!, vault, env, user.id, origin)
           )
     }
-    if (method === "DELETE" || path.endsWith("/delete")) {
+    if (path.endsWith("/delete") && method === "PUT") {
       const result = await vault.trashVaultCipher(id)
       return result.found
         ? new Response(null, { status: 204 })
         : failure("Cipher not found", 404)
+    }
+    if (
+      (method === "DELETE" && path === `/api/ciphers/${id}`) ||
+      (method === "POST" && path.endsWith("/delete"))
+    ) {
+      if (!(await vault.getVaultCipher(id)))
+        return failure("Cipher not found", 404)
+      await vault.permanentlyDeleteVaultCipher(id, `${user.id}/${id}/`)
+      return new Response(null, { status: 204 })
     }
   }
 
