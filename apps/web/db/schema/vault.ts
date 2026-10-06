@@ -110,6 +110,37 @@ export const vaultMembership = sqliteTable(
   ]
 )
 
+// Directory identities are tracked separately from vault accounts. A SCIM
+// user cannot access encrypted organization data until an account exists and
+// an owner confirms its organization key.
+export const vaultDirectoryIdentity = sqliteTable(
+  "vault_directory_identity",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+    externalId: text("external_id").notNull(),
+    email: text("email").notNull(),
+    name: text("name").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull(),
+    membershipId: text("membership_id").references(() => vaultMembership.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_directory_identity_org_external_unique").on(
+      table.orgId,
+      table.externalId
+    ),
+    uniqueIndex("vault_directory_identity_membership_unique").on(
+      table.membershipId
+    ),
+  ]
+)
+
 export const vaultCollection = sqliteTable("vault_collection", {
   id: text("id").primaryKey(),
   orgId: text("org_id")

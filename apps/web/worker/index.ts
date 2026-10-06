@@ -9,6 +9,7 @@ import { handleMcp } from "../mcp/handler"
 import { handleBitwarden, isBitwardenPath } from "./bitwarden"
 import { deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
+import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
 import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
 
 export default {
@@ -35,6 +36,11 @@ export default {
     })
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv) {
+    try {
+      await reconcileVaultDirectory(env)
+    } catch {
+      console.error("SCIM directory sync will retry")
+    }
     for (const organization of await deletingOrganizations(env)) {
       try {
         await cleanupOrgDeletion(env, organization.id)

@@ -65,6 +65,23 @@ Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.
 
+Optional SCIM directory sync runs on the five-minute scheduled handler when
+`SCIM_DIRECTORY_URL`, `SCIM_TOKEN`, and `SCIM_ORGANIZATION_ID` are configured.
+The source must be HTTPS and return complete, version-consistent SCIM `/Users`
+pages with `urn:thecomputerplumbers:scim:directoryVersion`. The Worker validates
+every page before changing memberships. It tracks directory identities in D1
+and revokes only memberships created by this sync when an identity disappears,
+is disabled, or changes email. It never revokes an owner. Set
+`SCIM_INVITATIONS_ENABLED=true` to create pending memberships for directory
+users who have already registered a vault account with a public key. Pending
+members still require owner confirmation with a client-wrapped organization
+key. Unregistered identities remain pending in D1 and are considered again on
+the next scheduled run after account creation. No invitation email is sent,
+and SCIM group-to-collection mapping is not implemented; new members start
+without collection access. Configure the URL, token, and organization ID as
+Worker secrets in the intended environment. The token is sent only to the
+configured HTTPS source, with redirects disabled.
+
 Authenticated account deletion requires the master-password hash. It marks the
 account as deleting in D1, which immediately blocks login and existing sessions,
 then clears the account's Durable Object and removes attachment and Send objects
