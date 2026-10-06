@@ -177,8 +177,11 @@ account stubs for unregistered users, sends signed invitation links, and
 retries failed delivery. The recipient accepts before an owner confirms the
 client-wrapped organization key. With email sending disabled, only accounts
 that already have a public key become pending members, and those members are
-ready for owner confirmation. SCIM group-to-collection mapping is not yet implemented; new members start
-without collection access until an owner assigns collections. Configure the URL, token, and organization ID as
+ready for owner confirmation. A collection whose `externalId` matches a SCIM
+group ID grants access to linked members in that group. The sync removes only
+collection grants it created when group membership disappears; manual grants
+remain. Members without a matching collection start without collection access
+until an owner assigns it. Configure the URL, token, and organization ID as
 Worker secrets in the intended environment. The token is sent only to the
 configured HTTPS source, with redirects disabled.
 

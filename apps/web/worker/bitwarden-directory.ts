@@ -3,6 +3,7 @@ export type DirectoryUser = {
   email: string
   name: string
   active: boolean
+  groups?: string[]
 }
 
 type ScimUser = {
@@ -10,6 +11,7 @@ type ScimUser = {
   userName?: unknown
   displayName?: unknown
   active?: unknown
+  groups?: unknown
 }
 
 type ScimPage = {
@@ -99,6 +101,31 @@ export async function readVaultDirectory(
       throw new Error("SCIM directory user is invalid")
     ids.add(user.id)
     emails.add(email)
-    return { id: user.id, email, name: user.displayName, active: user.active }
+    let groups: string[] | undefined
+    if (user.groups !== undefined) {
+      if (
+        !Array.isArray(user.groups) ||
+        user.groups.length > 100 ||
+        user.groups.some(
+          (group) =>
+            !group ||
+            typeof group !== "object" ||
+            typeof group.value !== "string" ||
+            !group.value ||
+            group.value.length > 255
+        )
+      )
+        throw new Error("SCIM directory groups are invalid")
+      groups = user.groups.map((group) => group.value as string)
+      if (new Set(groups).size !== groups.length)
+        throw new Error("SCIM directory groups are invalid")
+    }
+    return {
+      id: user.id,
+      email,
+      name: user.displayName,
+      active: user.active,
+      ...(groups ? { groups } : {}),
+    }
   })
 }

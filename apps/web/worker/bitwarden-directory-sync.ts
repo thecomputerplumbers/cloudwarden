@@ -2,6 +2,9 @@ import { and, eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import {
+  vaultCollection,
+  vaultCollectionMember,
+  vaultDirectoryCollectionGrant,
   vaultDirectoryIdentity,
   vaultMembership,
   vaultUser,
@@ -54,6 +57,18 @@ export async function reconcileVaultDirectory(
     fetcher
   )
   const db = drizzle(env.DB)
+  const collections = await db
+    .select({ id: vaultCollection.id, externalId: vaultCollection.externalId })
+    .from(vaultCollection)
+    .where(eq(vaultCollection.orgId, orgId))
+    .all()
+  const collectionByGroup = new Map<string, string>()
+  for (const collection of collections) {
+    if (!collection.externalId) continue
+    if (collectionByGroup.has(collection.externalId))
+      throw new Error("Duplicate collection directory ID")
+    collectionByGroup.set(collection.externalId, collection.id)
+  }
   const known = await db
     .select()
     .from(vaultDirectoryIdentity)
@@ -65,6 +80,7 @@ export async function reconcileVaultDirectory(
   const beforeRecipients = new Set(
     await organizationNotificationTargets(env, orgId, null)
   )
+  const collectionChangedUsers = new Set<string>()
 
   try {
     // Revoke links whose identity disappeared, was disabled, or changed email.
@@ -272,6 +288,118 @@ export async function reconcileVaultDirectory(
           .run()
       }
     }
+
+    // Only mutate collection assignments that this sync previously created.
+    // An absent groups field means the source did not send group information.
+    const linked = await db
+      .select({
+        externalId: vaultDirectoryIdentity.externalId,
+        membershipId: vaultDirectoryIdentity.membershipId,
+      })
+      .from(vaultDirectoryIdentity)
+      .where(eq(vaultDirectoryIdentity.orgId, orgId))
+      .all()
+    for (const identity of linked) {
+      if (!identity.membershipId) continue
+      const user = current.get(identity.externalId)
+      if (user?.active && user.groups === undefined) continue
+      const member = await db
+        .select({
+          userId: vaultMembership.userId,
+          role: vaultMembership.role,
+          status: vaultMembership.status,
+        })
+        .from(vaultMembership)
+        .where(
+          and(
+            eq(vaultMembership.id, identity.membershipId),
+            eq(vaultMembership.orgId, orgId)
+          )
+        )
+        .get()
+      if (!member || member.role !== 2) continue
+      const desired = new Set(
+        user?.active && member.status !== 3
+          ? (user.groups?.flatMap((group) => {
+              const collectionId = collectionByGroup.get(group)
+              return collectionId ? [collectionId] : []
+            }) ?? [])
+          : []
+      )
+      const owned = await db
+        .select({ collectionId: vaultDirectoryCollectionGrant.collectionId })
+        .from(vaultDirectoryCollectionGrant)
+        .where(
+          eq(vaultDirectoryCollectionGrant.membershipId, identity.membershipId)
+        )
+        .all()
+      const ownedIds = new Set(owned.map((grant) => grant.collectionId))
+      for (const grant of owned) {
+        if (desired.has(grant.collectionId)) continue
+        await db.batch([
+          db
+            .delete(vaultCollectionMember)
+            .where(
+              and(
+                eq(vaultCollectionMember.membershipId, identity.membershipId),
+                eq(vaultCollectionMember.collectionId, grant.collectionId)
+              )
+            ),
+          db
+            .delete(vaultDirectoryCollectionGrant)
+            .where(
+              and(
+                eq(
+                  vaultDirectoryCollectionGrant.membershipId,
+                  identity.membershipId
+                ),
+                eq(
+                  vaultDirectoryCollectionGrant.collectionId,
+                  grant.collectionId
+                )
+              )
+            ),
+        ])
+        collectionChangedUsers.add(member.userId)
+      }
+      for (const collectionId of desired) {
+        const assignment = await db
+          .select({ collectionId: vaultCollectionMember.collectionId })
+          .from(vaultCollectionMember)
+          .where(
+            and(
+              eq(vaultCollectionMember.membershipId, identity.membershipId),
+              eq(vaultCollectionMember.collectionId, collectionId)
+            )
+          )
+          .get()
+        if (assignment) continue
+        if (ownedIds.has(collectionId)) {
+          await db.insert(vaultCollectionMember).values({
+            collectionId,
+            membershipId: identity.membershipId,
+            readOnly: false,
+            hidePasswords: false,
+          })
+          collectionChangedUsers.add(member.userId)
+          continue
+        }
+        await db.batch([
+          db.insert(vaultCollectionMember).values({
+            collectionId,
+            membershipId: identity.membershipId,
+            readOnly: false,
+            hidePasswords: false,
+          }),
+          db.insert(vaultDirectoryCollectionGrant).values({
+            id: crypto.randomUUID(),
+            collectionId,
+            membershipId: identity.membershipId,
+          }),
+        ])
+        collectionChangedUsers.add(member.userId)
+      }
+    }
   } finally {
     try {
       const afterRecipients = new Set(
@@ -280,10 +408,16 @@ export async function reconcileVaultDirectory(
       const changed =
         beforeRecipients.size !== afterRecipients.size ||
         [...beforeRecipients].some((id) => !afterRecipients.has(id))
-      if (changed) {
-        const recipients = [
-          ...new Set([...beforeRecipients, ...afterRecipients]),
-        ]
+      if (changed || collectionChangedUsers.size) {
+        const recipients = changed
+          ? [
+              ...new Set([
+                ...beforeRecipients,
+                ...afterRecipients,
+                ...collectionChangedUsers,
+              ]),
+            ]
+          : [...collectionChangedUsers]
         for (let index = 0; index < recipients.length; index += 20)
           await Promise.all(recipients.slice(index, index + 20).map(notifyUser))
       }

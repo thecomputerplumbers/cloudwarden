@@ -322,6 +322,27 @@ export const vaultCollectionMember = sqliteTable(
   ]
 )
 
+// Track only collection grants created by directory sync. Manual grants must
+// survive a group removal or a temporarily missing directory user.
+export const vaultDirectoryCollectionGrant = sqliteTable(
+  "vault_directory_collection_grant",
+  {
+    id: text("id").primaryKey(),
+    membershipId: text("membership_id")
+      .notNull()
+      .references(() => vaultMembership.id, { onDelete: "cascade" }),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => vaultCollection.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("vault_directory_collection_grant_unique").on(
+      table.membershipId,
+      table.collectionId
+    ),
+  ]
+)
+
 export const vaultOrgCipher = sqliteTable("vault_org_cipher", {
   id: text("id").primaryKey(),
   orgId: text("org_id")

@@ -114,3 +114,27 @@ test("rejects insecure or redirecting directory sources", async () => {
     /302/
   )
 })
+
+test("reads group IDs and rejects malformed group membership", async () => {
+  const users = await readVaultDirectory(source, "token", async () =>
+    page([{ ...user, groups: [{ value: "engineering" }] }])
+  )
+  assert.deepEqual(users[0].groups, ["engineering"])
+  await assert.rejects(
+    readVaultDirectory(source, "token", async () =>
+      page([{ ...user, groups: [{ display: "Engineering" }] }])
+    ),
+    /groups are invalid/
+  )
+  await assert.rejects(
+    readVaultDirectory(source, "token", async () =>
+      page([
+        {
+          ...user,
+          groups: [{ value: "engineering" }, { value: "engineering" }],
+        },
+      ])
+    ),
+    /groups are invalid/
+  )
+})

@@ -55,6 +55,9 @@ test("SCIM sync links only new members and revokes only directory owned access",
     const { reconcileVaultDirectory } = await vite.ssrLoadModule(
       "/worker/bitwarden-directory-sync.ts"
     )
+    const { setOrgMemberCollections } = await vite.ssrLoadModule(
+      "/worker/bitwarden-org.ts"
+    )
     const db = proxy.env.DB
     const user = async (id, email) =>
       db
@@ -144,6 +147,114 @@ test("SCIM sync links only new members and revokes only directory owned access",
       .prepare(`UPDATE vault_membership SET status = 2, key = ? WHERE id = ?`)
       .bind("wrapped", linked.membership_id)
       .run()
+    const mappedCollectionId = crypto.randomUUID()
+    const manualCollectionId = crypto.randomUUID()
+    for (const [id, name, external] of [
+      [mappedCollectionId, "Engineering", "engineering"],
+      [manualCollectionId, "Manual", null],
+    ])
+      await db
+        .prepare(
+          `INSERT INTO vault_collection (id,org_id,name,external_id,created_at,updated_at) VALUES (?,?,?,?,?,?)`
+        )
+        .bind(id, orgId, name, external, now, now)
+        .run()
+    await db
+      .prepare(
+        `INSERT INTO vault_collection_member (collection_id,membership_id,read_only,hide_passwords) VALUES (?,?,?,?)`
+      )
+      .bind(manualCollectionId, linked.membership_id, 1, 0)
+      .run()
+    const groupUser = {
+      ...scimUser,
+      groups: [{ value: "engineering", display: "Engineering" }],
+    }
+    const groupNotifications = []
+    const recordGroupNotification = async (userId) => {
+      groupNotifications.push(userId)
+    }
+    await reconcileVaultDirectory(
+      env,
+      snapshot([groupUser]),
+      recordGroupNotification
+    )
+    assert.deepEqual(groupNotifications, [targetId])
+    assert.deepEqual(
+      (
+        await db
+          .prepare(
+            `SELECT collection_id FROM vault_directory_collection_grant WHERE membership_id = ?`
+          )
+          .bind(linked.membership_id)
+          .all()
+      ).results.map((row) => row.collection_id),
+      [mappedCollectionId]
+    )
+    assert.deepEqual(
+      (
+        await db
+          .prepare(
+            `SELECT collection_id FROM vault_collection_member WHERE membership_id = ? ORDER BY collection_id`
+          )
+          .bind(linked.membership_id)
+          .all()
+      ).results.map((row) => row.collection_id),
+      [mappedCollectionId, manualCollectionId].sort()
+    )
+    groupNotifications.length = 0
+    await reconcileVaultDirectory(
+      env,
+      snapshot([
+        {
+          ...groupUser,
+          groups: [],
+        },
+      ]),
+      recordGroupNotification
+    )
+    assert.deepEqual(groupNotifications, [targetId])
+    assert.deepEqual(
+      (
+        await db
+          .prepare(
+            `SELECT collection_id FROM vault_collection_member WHERE membership_id = ?`
+          )
+          .bind(linked.membership_id)
+          .all()
+      ).results.map((row) => row.collection_id),
+      [manualCollectionId]
+    )
+    await reconcileVaultDirectory(env, snapshot([groupUser]))
+    assert.equal(
+      await setOrgMemberCollections(env, orgId, linked.membership_id, [
+        { id: mappedCollectionId, readOnly: true, hidePasswords: false },
+        { id: manualCollectionId, readOnly: true, hidePasswords: false },
+      ]),
+      true
+    )
+    await reconcileVaultDirectory(env, snapshot([{ ...groupUser, groups: [] }]))
+    assert.deepEqual(
+      (
+        await db
+          .prepare(
+            `SELECT collection_id FROM vault_collection_member WHERE membership_id = ? ORDER BY collection_id`
+          )
+          .bind(linked.membership_id)
+          .all()
+      ).results.map((row) => row.collection_id),
+      [mappedCollectionId, manualCollectionId].sort()
+    )
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_collection_grant WHERE membership_id = ?`
+          )
+          .bind(linked.membership_id)
+          .first()
+      ).n,
+      0
+    )
     await assert.rejects(
       reconcileVaultDirectory(
         env,

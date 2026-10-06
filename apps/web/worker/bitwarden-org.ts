@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/d1"
 import {
   vaultCollection,
   vaultCollectionMember,
+  vaultDirectoryCollectionGrant,
   vaultMembership,
   vaultOrgCipher,
   vaultOrgCipherCollection,
@@ -137,6 +138,9 @@ export async function setOrgMemberCollections(
       .update(vaultMembership)
       .set({ accessAll: false })
       .where(eq(vaultMembership.id, memberId)),
+    db
+      .delete(vaultDirectoryCollectionGrant)
+      .where(eq(vaultDirectoryCollectionGrant.membershipId, memberId)),
     db
       .delete(vaultCollectionMember)
       .where(eq(vaultCollectionMember.membershipId, memberId)),
