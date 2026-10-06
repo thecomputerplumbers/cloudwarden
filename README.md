@@ -1,5 +1,11 @@
 # Cloudwarden
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/thecomputerplumbers/cloudwarden)
+
+Cloudflare's deploy button requires a public repository and does not fully
+support monorepos. Cloudwarden is currently private and uses workspace packages;
+follow the [deployment procedure](docs/deployment.md) for a working deployment.
+
 Cloudwarden is based on the vinext and Cloudflare Workers monorepo starter generated from the shadcn `b0` preset:
 
 ```sh
