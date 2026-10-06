@@ -39,7 +39,11 @@ Attachment links
 expire after five minutes. Registration is disabled unless
 `SIGNUPS_ALLOWED=true` is configured. Registration emails a signed verification
 link by default and requires that link to finish; a legacy direct registration
-request is rejected. Set `SIGNUPS_VERIFY=false` only for local development with
+request is rejected. Set `SIGNUPS_ALLOWED_EMAILS` to a comma-separated list of
+exact addresses to limit public registration during owner setup; the check
+applies both when sending the link and when finishing registration. Signed
+organization invitations remain valid outside that list. Set
+`SIGNUPS_VERIFY=false` only for local development with
 simulated mail. Access
 tokens are signed JWTs that clients can decode, while refresh tokens are
 opaque random values. Both are stored as SHA-256 hashes in D1 and checked

@@ -51,6 +51,7 @@ test("signed invitation can register a stub while public registration is disable
       ...proxy.env,
       BETTER_AUTH_SECRET: "local-invitation-test-signing-secret-2026",
       SIGNUPS_ALLOWED: "false",
+      SIGNUPS_ALLOWED_EMAILS: "owner@example.test",
     }
     const email = "invitee@example.test"
     const user = await auth.createVaultStubUser(env, email, "Invitee")
@@ -103,6 +104,85 @@ test("signed invitation can register a stub while public registration is disable
     assert.equal(updated.emailVerified, true)
     assert.equal(await auth.verifyVaultPassword(updated, "client-secret"), true)
     assert.equal((await register(body)).status, 409)
+
+    const sent = []
+    const restricted = {
+      ...env,
+      SIGNUPS_ALLOWED: "true",
+      APP_URL: "https://vault.example.test",
+      EMAIL_FROM: "vault@example.test",
+      EMAIL: { send: async (message) => sent.push(message) },
+      APP_DATABASE: {
+        getByName: async () => ({
+          consumeRateLimit: async () => ({ allowed: true }),
+        }),
+      },
+    }
+    const requestRegistration = (path, data) =>
+      handleBitwarden(
+        new Request(`https://vault.example.test${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }),
+        restricted
+      )
+    assert.equal(
+      (
+        await requestRegistration(
+          "/identity/accounts/register/send-verification-email",
+          { email: "unlisted@example.test" }
+        )
+      ).status,
+      403
+    )
+    assert.equal(sent.length, 0)
+    const unlistedToken = await (
+      await vite.ssrLoadModule("/worker/bitwarden-register.ts")
+    ).issueRegistrationToken(restricted, "unlisted@example.test", null, true)
+    assert.equal(
+      (
+        await requestRegistration("/identity/accounts/register/finish", {
+          ...body,
+          email: "unlisted@example.test",
+          emailVerificationToken: unlistedToken,
+        })
+      ).status,
+      403
+    )
+    assert.equal(
+      (
+        await requestRegistration(
+          "/identity/accounts/register/send-verification-email",
+          { email: "OWNER@EXAMPLE.TEST" }
+        )
+      ).status,
+      204
+    )
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0].to, "owner@example.test")
+    const verificationUrl = sent[0].text.match(/https:\/\/\S+/)?.[0]
+    assert.ok(verificationUrl)
+    const ownerToken = new URLSearchParams(
+      new URL(verificationUrl).hash.split("?")[1]
+    ).get("token")
+    assert.ok(ownerToken)
+    assert.equal(
+      (
+        await requestRegistration("/identity/accounts/register/finish", {
+          ...body,
+          email: "owner@example.test",
+          name: "Owner",
+          emailVerificationToken: ownerToken,
+        })
+      ).status,
+      200
+    )
+    assert.equal(
+      (await auth.findVaultUser(restricted, "owner@example.test"))
+        .emailVerified,
+      true
+    )
   } finally {
     await vite?.close()
     await proxy?.dispose()

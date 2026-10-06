@@ -233,6 +233,15 @@ function registrationsAllowed(env: CloudflareEnv) {
   )
 }
 
+function registrationEmailAllowed(env: CloudflareEnv, email: string) {
+  const allowed = (env as CloudflareEnv & { SIGNUPS_ALLOWED_EMAILS?: string })
+    .SIGNUPS_ALLOWED_EMAILS
+  if (allowed === undefined) return true
+  return allowed
+    .split(",")
+    .some((candidate) => normalizeEmail(candidate) === normalizeEmail(email))
+}
+
 function registrationEmailVerificationRequired(env: CloudflareEnv) {
   return (
     (env as CloudflareEnv & { SIGNUPS_VERIFY?: string }).SIGNUPS_VERIFY !==
@@ -1014,6 +1023,8 @@ export async function handleBitwarden(
       (name && name.length > 50)
     )
       return failure("Invalid registration request")
+    if (!registrationEmailAllowed(env, email))
+      return failure("Registration is unavailable", 403)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     const limiter = await env.APP_DATABASE.getByName(
       "bitwarden-registration-rates"
@@ -1093,7 +1104,12 @@ export async function handleBitwarden(
             memberId: inviteMemberId,
           })
         : null
-    if (!registrationsAllowed(env) && !invitation)
+    if (
+      (!registrationsAllowed(env) ||
+        !email ||
+        !registrationEmailAllowed(env, email)) &&
+      !invitation
+    )
       return failure("Registration is disabled", 403)
     const finishing = path.endsWith("/finish")
     if (!finishing && registrationEmailVerificationRequired(env) && !invitation)
