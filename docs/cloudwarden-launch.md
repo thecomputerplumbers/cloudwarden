@@ -51,9 +51,15 @@ returned D1 ID in `apps/web/wrangler.jsonc`, then set `BETTER_AUTH_SECRET` with
 Worker](https://developers.cloudflare.com/workers/wrangler/commands/workers/#secret-put)
 when setting its first secret; that operation deploys a placeholder version.
 Then `pnpm run doctor staging` can inspect the secret inventory and
-`pnpm run deploy staging` can migrate and deploy the built application. A local
-preflight on 2026-10-06 found the GitHub repository, D1 ID, staging Worker, and
-Worker secret absent; it did not mutate remote state.
+`pnpm run deploy staging` can migrate and deploy the built application.
+
+A read-only preflight on 2026-10-06 confirmed access to Cloudflare account
+`865d0c927a18e87c0a0701b8d1f18ee9` and found Email Sending enabled for
+`thecomputerplumbers.com`. Actual mail delivery from the proposed address has
+not been tested. Neither proposed D1 database nor R2 bucket appeared in the
+account listings. The staging Worker and `BETTER_AUTH_SECRET` were absent, both
+proposed origins had no DNS answers, and the GitHub repository was not visible
+to the current credentials. No remote state was changed.
 
 References: [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/),
 [Durable Object SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
