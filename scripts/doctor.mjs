@@ -134,9 +134,12 @@ if (environment === "local") {
   } catch {
     /* Wrangler authentication failure. */
   }
+  const workerMissing = /Worker .* not found\./i.test(result.stderr)
   check(
     result.status === 0,
-    "Cloudflare authentication and Worker secret inventory"
+    workerMissing
+      ? `${environment} Worker not found (bootstrap it with wrangler secret put BETTER_AUTH_SECRET)`
+      : "Cloudflare authentication and Worker secret inventory"
   )
   const required = [
     "BETTER_AUTH_SECRET",

@@ -31,15 +31,27 @@ owner email address is still undecided; it is needed only for owner signup.
    and password reset, an attachment and file Send. Test a native client login
    and vault sync. Promote the same commit to production only after the staging
    checks pass. The web vault rejected local HTTP signup with "Insecure URL not
-   allowed"; a self-signed certificate was not used to bypass the browser
-   warning. These browser flows remain unverified until trusted staging HTTPS
-   is available.
+   allowed". A disposable account was created through isolated Chrome on
+   local HTTPS with a self-signed certificate; the listed full browser flows
+   remain unverified on trusted staging HTTPS.
 4. Prove recovery before relying on the service for real vault data. D1 Time
    Travel and SQLite Durable Object point-in-time recovery cover their
    respective stores. Run the [R2 snapshot procedure](recovery.md) on a quiet
    vault and store the result outside the Cloudflare account. Exercise restore
    on staging, including an attachment and encrypted vault record, and document
    the recovery point and operator steps.
+
+## First staging bootstrap
+
+For a first staging release, create its D1 database and R2 bucket, insert the
+returned D1 ID in `apps/web/wrangler.jsonc`, then set `BETTER_AUTH_SECRET` with
+`wrangler secret put BETTER_AUTH_SECRET --env staging`. [Wrangler creates the
+Worker](https://developers.cloudflare.com/workers/wrangler/commands/workers/#secret-put)
+when setting its first secret; that operation deploys a placeholder version.
+Then `pnpm doctor staging` can inspect the secret inventory and
+`pnpm deploy staging` can migrate and deploy the built application. A local
+preflight on 2026-10-06 found the GitHub repository, D1 ID, staging Worker, and
+Worker secret absent; it did not mutate remote state.
 
 References: [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/),
 [Durable Object SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
