@@ -7,6 +7,7 @@ import {
   sign,
 } from "node:crypto"
 import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { setTimeout as delay } from "node:timers/promises"
 
@@ -19,6 +20,38 @@ const origin = process.argv[2]
 const storage = process.argv[3]
 assert.ok(origin?.startsWith("http://localhost:"))
 assert.ok(storage?.startsWith("/tmp/starter-review."))
+
+function localR2ObjectExists(key) {
+  const result = spawnSync(
+    "pnpm",
+    [
+      "--filter",
+      "web",
+      "exec",
+      "wrangler",
+      "r2",
+      "object",
+      "get",
+      `cloudwarden-attachments-preview/${key}`,
+      "--local",
+      "--persist-to",
+      storage,
+      "--pipe",
+    ],
+    { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" }
+  )
+  if (result.status === 0) return true
+  assert.match(result.stderr, /The specified key does not exist/)
+  return false
+}
+
+async function awaitLocalR2Deletion(key) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (!localR2ObjectExists(key)) return
+    await delay(250)
+  }
+  assert.fail(`R2 cleanup did not remove ${key}`)
+}
 
 async function nextSocketMessage(socket) {
   return new Promise((resolve, reject) => {
@@ -2039,6 +2072,8 @@ assert.deepEqual(
   new Uint8Array(await (await fetch(memberAttachmentUrl)).arrayBuffer()),
   new Uint8Array([6, 5, 4])
 )
+const memberObjectKey = `org/${orgId}/${memberCreated.body.id}/${memberAttachment.body.attachmentId}`
+assert.equal(localR2ObjectExists(memberObjectKey), true)
 assert.equal(
   (
     await otherAuthorized(
@@ -2090,6 +2125,7 @@ assert.equal(
   404
 )
 assert.equal((await fetch(memberAttachmentUrl)).status, 404)
+await awaitLocalR2Deletion(memberObjectKey)
 assert.equal(
   (await otherAuthorized("/api/sync", undefined, "GET")).body.ciphers.some(
     (cipher) => cipher.id === memberCreated.body.id
@@ -3561,6 +3597,8 @@ const purgeAttachmentUrl = (
   )
 ).body.attachments[0].url
 assert.equal((await fetch(purgeAttachmentUrl)).status, 200)
+const purgeObjectKey = `${otherUserId}/${purgeCipher.body.id}/${purgeAttachment.body.attachmentId}`
+assert.equal(localR2ObjectExists(purgeObjectKey), true)
 const retainedSend = await currentAuthorized("/api/sends", {
   ...sendBody,
   name: "2.send-survives-purge",
@@ -3621,6 +3659,7 @@ assert.equal(
   200
 )
 assert.equal((await fetch(purgeAttachmentUrl)).status, 404)
+await awaitLocalR2Deletion(purgeObjectKey)
 assert.ok(
   Date.parse(
     (await currentAuthorized("/api/accounts/revision-date", undefined, "GET"))

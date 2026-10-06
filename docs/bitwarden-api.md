@@ -266,6 +266,9 @@ token rotation, encrypted item and folder sync, attachment upload/download,
 TOTP and WebAuthn enrollment and login, recovery, password changes, text and file Send access,
 account deletion, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
+The local smoke suite also checks the disposable R2 bucket directly to confirm
+that permanent cipher deletion and personal vault purge remove attachment
+objects after their Durable Object cleanup alarm runs.
 
 A disposable Bitwarden CLI 2026.2.0 account was exercised against the current
 Worker over local HTTPS. Password login, sync, encrypted item creation,
