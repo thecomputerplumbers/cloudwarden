@@ -20,7 +20,7 @@ export async function GET() {
       sql`select cipher_id, prepared, lease_until from vault_cipher_transfer limit 0`
     )
     await getDb().run(
-      sql`select api_key, api_key_hash, security_stamp from vault_session limit 0`
+      sql`select api_key, api_key_hash, security_stamp, device_name, created_at from vault_session limit 0`
     )
     await getDb().run(
       sql`select user_id, secret_hash, sealed_secret from vault_api_key limit 0`

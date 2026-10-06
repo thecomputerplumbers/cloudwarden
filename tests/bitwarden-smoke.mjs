@@ -243,6 +243,41 @@ assert.equal(sync.status, 200)
 assert.equal(sync.body.profile.email, email)
 assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
+const loginDeviceId = JSON.parse(
+  Buffer.from(tokens.access_token.split(".")[1], "base64url").toString()
+).device
+const devices = await authorized("/api/devices")
+assert.equal(devices.status, 200)
+assert.equal(devices.body.data.length, 1)
+assert.equal(devices.body.data[0].identifier, loginDeviceId)
+assert.equal(devices.body.data[0].name, "Smoke test")
+assert.equal(devices.body.data[0].type, 14)
+assert.equal(
+  (await authorized(`/api/devices/identifier/${loginDeviceId}`)).body.id,
+  loginDeviceId
+)
+assert.equal(
+  (
+    await call("/api/devices/knowndevice", {
+      headers: {
+        "X-Request-Email": Buffer.from(email).toString("base64url"),
+        "X-Device-Identifier": loginDeviceId,
+      },
+    })
+  ).body,
+  true
+)
+assert.equal(
+  (
+    await call("/api/devices/knowndevice", {
+      headers: {
+        "X-Request-Email": Buffer.from(email).toString("base64url"),
+        "X-Device-Identifier": crypto.randomUUID(),
+      },
+    })
+  ).body,
+  false
+)
 
 assert.equal(
   (
@@ -2030,6 +2065,17 @@ assert.equal(
     })
   ).status,
   401
+)
+assert.equal(
+  (
+    await call("/api/devices/knowndevice", {
+      headers: {
+        "X-Request-Email": Buffer.from(email).toString("base64url"),
+        "X-Device-Identifier": loginDeviceId,
+      },
+    })
+  ).body,
+  false
 )
 assert.equal(
   (

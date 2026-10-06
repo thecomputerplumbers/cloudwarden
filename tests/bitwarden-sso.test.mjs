@@ -221,8 +221,8 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
       "web",
       "14",
       {
-        issuer,
-        refreshToken: exchange.refreshToken,
+        sso: { issuer, refreshToken: exchange.refreshToken },
+        deviceName: "SSO test device",
       }
     )
     const stored = await proxy.env.DB.prepare(

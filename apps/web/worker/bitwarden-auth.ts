@@ -450,10 +450,14 @@ export async function issueVaultSession(
   deviceId: string,
   clientId: string,
   deviceType: string,
-  sso?: { issuer: string; refreshToken: string },
-  apiKey = false,
-  apiKeyHash: string | null = null
+  options: {
+    sso?: { issuer: string; refreshToken: string }
+    apiKey?: boolean
+    apiKeyHash?: string | null
+    deviceName?: string
+  } = {}
 ) {
+  const apiKey = options.apiKey ?? false
   const access = await accessToken(
     env,
     user,
@@ -471,17 +475,19 @@ export async function issueVaultSession(
       userId: user.id,
       deviceId,
       deviceType,
+      deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
+      createdAt: new Date(now),
       clientId,
       securityStamp: user.securityStamp,
       apiKey,
-      apiKeyHash,
+      apiKeyHash: options.apiKeyHash ?? null,
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(refresh),
-      ssoIssuer: sso?.issuer ?? null,
-      ssoRefreshToken: sso
+      ssoIssuer: options.sso?.issuer ?? null,
+      ssoRefreshToken: options.sso
         ? await sealVaultOidcRefresh(
             env.BETTER_AUTH_SECRET ?? "",
-            sso.refreshToken
+            options.sso.refreshToken
           )
         : null,
       accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
@@ -632,4 +638,75 @@ export async function authenticatedVaultUser(
     .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
     .get()
   return user && session.securityStamp === user.securityStamp ? user : null
+}
+
+export async function listVaultDeviceSessions(
+  env: CloudflareEnv,
+  userId: string,
+  securityStamp: string
+) {
+  const db = drizzle(env.DB)
+  const currentKey = await db
+    .select({ secretHash: vaultApiKey.secretHash })
+    .from(vaultApiKey)
+    .where(eq(vaultApiKey.userId, userId))
+    .get()
+  return db
+    .select({
+      deviceId: vaultSession.deviceId,
+      deviceName: vaultSession.deviceName,
+      deviceType: vaultSession.deviceType,
+      createdAt: vaultSession.createdAt,
+      refreshExpiresAt: vaultSession.refreshExpiresAt,
+    })
+    .from(vaultSession)
+    .where(
+      and(
+        eq(vaultSession.userId, userId),
+        eq(vaultSession.securityStamp, securityStamp),
+        gt(vaultSession.refreshExpiresAt, new Date()),
+        currentKey
+          ? or(
+              eq(vaultSession.apiKey, false),
+              eq(vaultSession.apiKeyHash, currentKey.secretHash)
+            )
+          : eq(vaultSession.apiKey, false)
+      )
+    )
+    .orderBy(vaultSession.createdAt)
+    .limit(1000)
+    .all()
+}
+
+export async function knownVaultDevice(
+  env: CloudflareEnv,
+  userId: string,
+  securityStamp: string,
+  deviceId: string
+) {
+  const db = drizzle(env.DB)
+  const currentKey = await db
+    .select({ secretHash: vaultApiKey.secretHash })
+    .from(vaultApiKey)
+    .where(eq(vaultApiKey.userId, userId))
+    .get()
+  return !!(await db
+    .select({ id: vaultSession.id })
+    .from(vaultSession)
+    .where(
+      and(
+        eq(vaultSession.userId, userId),
+        eq(vaultSession.deviceId, deviceId),
+        eq(vaultSession.securityStamp, securityStamp),
+        gt(vaultSession.refreshExpiresAt, new Date()),
+        currentKey
+          ? or(
+              eq(vaultSession.apiKey, false),
+              eq(vaultSession.apiKeyHash, currentKey.secretHash)
+            )
+          : eq(vaultSession.apiKey, false)
+      )
+    )
+    .limit(1)
+    .get())
 }

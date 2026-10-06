@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   sqliteTable,
   text,
@@ -43,6 +44,8 @@ export const vaultSession = sqliteTable(
       .references(() => vaultUser.id, { onDelete: "cascade" }),
     deviceId: text("device_id").notNull(),
     deviceType: text("device_type").notNull().default("unknown"),
+    deviceName: text("device_name").notNull().default("Unknown device"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }),
     clientId: text("client_id").notNull().default("unknown"),
     securityStamp: text("security_stamp"),
     apiKey: integer("api_key", { mode: "boolean" }).notNull().default(false),
@@ -63,6 +66,7 @@ export const vaultSession = sqliteTable(
     }).notNull(),
   },
   (table) => [
+    index("vault_session_user_device_idx").on(table.userId, table.deviceId),
     uniqueIndex("vault_session_access_unique").on(table.accessHash),
     uniqueIndex("vault_session_previous_access_unique").on(
       table.previousAccessHash

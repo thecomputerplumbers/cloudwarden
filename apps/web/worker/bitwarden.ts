@@ -9,6 +9,8 @@ import {
   findVaultUserById,
   initializeVaultPassword,
   issueVaultSession,
+  knownVaultDevice,
+  listVaultDeviceSessions,
   normalizeEmail,
   refreshVaultSession,
   resetVaultSecurityStamp,
@@ -521,6 +523,8 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/folders/") ||
     path === "/api/accounts" ||
     path.startsWith("/api/accounts/") ||
+    path === "/api/devices" ||
+    path.startsWith("/api/devices/") ||
     path === "/api/two-factor" ||
     path.startsWith("/api/two-factor/") ||
     path === "/api/sends" ||
@@ -783,6 +787,43 @@ export async function handleBitwarden(
       featureStates: {},
       object: "config",
     })
+  }
+
+  if (path === "/api/devices/knowndevice" && method === "GET") {
+    const encodedEmail = request.headers.get("X-Request-Email")
+    const deviceId = request.headers.get("X-Device-Identifier")
+    if (
+      !encodedEmail ||
+      !deviceId ||
+      deviceId.length > 200 ||
+      !/^[A-Za-z0-9_-]+={0,2}$/.test(encodedEmail)
+    )
+      return failure("Invalid device lookup")
+    let email: string
+    try {
+      email = new TextDecoder("utf-8", { fatal: true }).decode(
+        Uint8Array.from(
+          atob(encodedEmail.replaceAll("-", "+").replaceAll("_", "/")),
+          (character) => character.charCodeAt(0)
+        )
+      )
+    } catch {
+      return failure("Invalid device lookup")
+    }
+    if (email.length > 254) return failure("Invalid device lookup")
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    if (
+      !(await limiter.consumeRateLimit(`known-device:${ip}`, 60, 60_000))
+        .allowed
+    )
+      return failure("Too many device lookups", 429)
+    const owner = await findVaultUser(env, email)
+    return json(
+      owner
+        ? await knownVaultDevice(env, owner.id, owner.securityStamp, deviceId)
+        : false
+    )
   }
 
   if (path === "/api/alive" && method === "GET") return json(true)
@@ -1150,9 +1191,12 @@ export async function handleBitwarden(
             clientId,
             deviceType,
             {
-              issuer: (env as CloudflareEnv & { SSO_AUTHORITY: string })
-                .SSO_AUTHORITY,
-              refreshToken: sso.refreshToken,
+              sso: {
+                issuer: (env as CloudflareEnv & { SSO_AUTHORITY: string })
+                  .SSO_AUTHORITY,
+                refreshToken: sso.refreshToken,
+              },
+              deviceName: stringField(body, "device_name") ?? clientId,
             }
           )
         )
@@ -1228,9 +1272,11 @@ export async function handleBitwarden(
             deviceId,
             clientId,
             deviceType,
-            undefined,
-            true,
-            await tokenHash(clientSecret)
+            {
+              apiKey: true,
+              apiKeyHash: await tokenHash(clientSecret),
+              deviceName: stringField(body, "device_name") ?? "API client",
+            }
           )
         ),
         refresh_token: undefined,
@@ -1276,7 +1322,9 @@ export async function handleBitwarden(
     return json(
       tokenResponse(
         user,
-        await issueVaultSession(env, user, deviceId, clientId, deviceType)
+        await issueVaultSession(env, user, deviceId, clientId, deviceType, {
+          deviceName: stringField(body, "device_name") ?? clientId,
+        })
       )
     )
   }
@@ -1284,6 +1332,62 @@ export async function handleBitwarden(
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+
+  if (
+    (path === "/api/devices" || path.startsWith("/api/devices/identifier/")) &&
+    method === "GET"
+  ) {
+    const rows = await listVaultDeviceSessions(env, user.id, user.securityStamp)
+    const devices = new Map<
+      string,
+      {
+        id: string
+        name: string
+        type: number
+        identifier: string
+        creationDate: string
+        devicePendingAuthRequest: null
+        isTrusted: false
+        encryptedPublicKey: null
+        encryptedUserKey: null
+        object: "device"
+      }
+    >()
+    for (const row of rows) {
+      const previous = devices.get(row.deviceId)
+      const createdAt =
+        row.createdAt ??
+        new Date(row.refreshExpiresAt.getTime() - 30 * 24 * 60 * 60_000)
+      if (previous) {
+        if (createdAt.toISOString() < previous.creationDate)
+          previous.creationDate = createdAt.toISOString()
+        previous.name = row.deviceName
+        previous.type = Number(row.deviceType) || 0
+        continue
+      }
+      devices.set(row.deviceId, {
+        id: row.deviceId,
+        name: row.deviceName,
+        type: Number(row.deviceType) || 0,
+        identifier: row.deviceId,
+        creationDate: createdAt.toISOString(),
+        devicePendingAuthRequest: null,
+        isTrusted: false,
+        encryptedPublicKey: null,
+        encryptedUserKey: null,
+        object: "device",
+      })
+    }
+    if (path === "/api/devices")
+      return json({
+        data: [...devices.values()],
+        continuationToken: null,
+        object: "list",
+      })
+    const identifier = path.slice("/api/devices/identifier/".length)
+    const device = devices.get(identifier)
+    return device ? json(device) : failure("Device not found", 404)
+  }
 
   if (path === "/api/accounts/request-otp" && method === "POST") {
     const result = await requestProtectedOtp(env, user)

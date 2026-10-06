@@ -61,6 +61,11 @@ configured. `POST /api/accounts/security-stamp` requires the same
 reauthentication and revokes all account sessions. Access and refresh paths
 compare each session's stamp with the current account stamp, so an in-flight
 login issued before the change cannot restore access.
+`GET /api/devices` and `GET /api/devices/identifier/:id` list devices with
+active sessions; `GET /api/devices/knowndevice` checks the exact account and
+device identifier supplied in headers. This implementation does not retain a
+device registry after all its sessions are revoked or expire. Security-stamp
+reset revokes every listed device.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
