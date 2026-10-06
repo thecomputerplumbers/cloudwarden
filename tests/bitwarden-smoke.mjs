@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHmac } from "node:crypto"
 
 const origin = process.argv[2]
 assert.ok(origin?.startsWith("http://localhost:"))
@@ -44,7 +45,7 @@ const prelogin = await post("/identity/accounts/prelogin", { email })
 assert.equal(prelogin.status, 200)
 assert.equal(prelogin.body.kdfIterations, 600_000)
 
-const tokenRequest = (username, password) =>
+const tokenRequest = (username, password, secondFactor = {}) =>
   fetch(`${origin}/identity/connect/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -57,6 +58,7 @@ const tokenRequest = (username, password) =>
       deviceIdentifier: crypto.randomUUID(),
       deviceName: "Smoke test",
       deviceType: "14",
+      ...secondFactor,
     }),
   })
 
@@ -227,4 +229,112 @@ const otherSync = await call("/api/sync", {
 assert.deepEqual(otherSync.body.ciphers, [])
 assert.deepEqual(otherSync.body.folders, [])
 
-console.log("Bitwarden auth, vault lifecycle, sync, and isolation passed")
+const otherAuthorized = (path, body, method = "POST") =>
+  call(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${otherTokens.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  })
+
+function totp(secret, step) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+  let bits = 0
+  let value = 0
+  const bytes = []
+  for (const letter of secret) {
+    value = (value << 5) | alphabet.indexOf(letter)
+    bits += 5
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 255)
+      bits -= 8
+    }
+  }
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(step))
+  const digest = createHmac("sha1", Buffer.from(bytes)).update(counter).digest()
+  const offset = digest.at(-1) & 15
+  const truncated = digest.readUInt32BE(offset) & 0x7fffffff
+  return String(truncated % 1_000_000).padStart(6, "0")
+}
+
+assert.equal(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1), "287082")
+assert.equal(
+  (
+    await otherAuthorized("/api/two-factor/get-authenticator", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+const secondSession = await tokenRequest(otherEmail, "second-secret")
+assert.equal(secondSession.status, 200)
+const secondTokens = await secondSession.json()
+const enrollment = await otherAuthorized("/api/two-factor/get-authenticator", {
+  masterPasswordHash: "second-secret",
+})
+assert.equal(enrollment.status, 200)
+assert.match(enrollment.body.key, /^[A-Z2-7]{32}$/)
+const step = Math.floor(Date.now() / 30_000)
+const activated = await otherAuthorized("/api/two-factor/authenticator", {
+  masterPasswordHash: "second-secret",
+  key: enrollment.body.key,
+  token: totp(enrollment.body.key, step - 1),
+})
+assert.equal(activated.status, 200)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${secondTokens.access_token}` },
+    })
+  ).status,
+  401
+)
+assert.equal(
+  (await otherAuthorized("/api/two-factor", undefined, "GET")).body.data[0]
+    .type,
+  0
+)
+const recovery = await otherAuthorized("/api/two-factor/get-recover", {
+  masterPasswordHash: "second-secret",
+})
+assert.match(recovery.body.code, /^[A-Z2-7]{32}$/)
+const challenge = await tokenRequest(otherEmail, "second-secret")
+assert.equal(challenge.status, 400)
+assert.deepEqual((await challenge.json()).TwoFactorProviders, ["0"])
+assert.equal(
+  (
+    await tokenRequest(otherEmail, "second-secret", {
+      two_factor_provider: "0",
+      two_factor_token: "000000",
+    })
+  ).status,
+  400
+)
+const otpLogin = await tokenRequest(otherEmail, "second-secret", {
+  two_factor_provider: "0",
+  two_factor_token: totp(enrollment.body.key, step),
+})
+assert.equal(otpLogin.status, 200)
+assert.ok((await otpLogin.json()).access_token)
+assert.equal(
+  (
+    await tokenRequest(otherEmail, "second-secret", {
+      two_factor_provider: "0",
+      two_factor_token: totp(enrollment.body.key, step),
+    })
+  ).status,
+  400
+)
+const recovered = await tokenRequest(otherEmail, "second-secret", {
+  two_factor_provider: "8",
+  two_factor_token: recovery.body.code,
+})
+assert.equal(recovered.status, 200)
+assert.equal((await tokenRequest(otherEmail, "second-secret")).status, 200)
+
+console.log(
+  "Bitwarden auth, vault lifecycle, sync, two-factor, and isolation passed"
+)

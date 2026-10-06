@@ -54,3 +54,13 @@ export const vaultSession = sqliteTable(
     uniqueIndex("vault_session_refresh_unique").on(table.refreshHash),
   ]
 )
+
+export const vaultTotp = sqliteTable("vault_totp", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  secret: text("secret").notNull(),
+  lastUsedStep: integer("last_used_step").notNull().default(0),
+  recoveryCode: text("recovery_code").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})

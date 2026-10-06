@@ -9,6 +9,15 @@ import {
   type VaultUser,
 } from "./bitwarden-auth"
 import type { AppDatabase } from "./database"
+import {
+  disableTotp,
+  enableTotp,
+  getTotp,
+  matchingTotpStep,
+  newTotpSecret,
+  redeemTotpRecoveryCode,
+  verifyTotpLogin,
+} from "./bitwarden-totp"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -45,6 +54,16 @@ function numberField(body: Body, name: string) {
     : undefined
 }
 
+function integerField(body: Body, name: string) {
+  const value = field(body, name)
+  if (typeof value === "number" && Number.isInteger(value)) return value
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
 async function bodyOf(request: Request): Promise<Body | null> {
   const text = await request.text()
   if (text.length > 1_000_000) return null
@@ -67,7 +86,7 @@ function registrationsAllowed(env: CloudflareEnv) {
   )
 }
 
-function profile(user: VaultUser) {
+function profile(user: VaultUser, twoFactorEnabled = false) {
   const accountKeys =
     user.privateKey && user.publicKey
       ? {
@@ -90,7 +109,7 @@ function profile(user: VaultUser) {
     premium: true,
     premiumFromOrganization: false,
     culture: "en-US",
-    twoFactorEnabled: false,
+    twoFactorEnabled,
     key: user.key,
     privateKey: user.privateKey,
     accountKeys,
@@ -253,7 +272,9 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/ciphers/") ||
     path === "/api/folders" ||
     path.startsWith("/api/folders/") ||
-    path.startsWith("/api/accounts/")
+    path.startsWith("/api/accounts/") ||
+    path === "/api/two-factor" ||
+    path.startsWith("/api/two-factor/")
   )
 }
 
@@ -436,6 +457,36 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const user = await findVaultUser(env, username)
     if (!(await verifyVaultPassword(user, password)) || !user)
       return failure("Username or password is incorrect", 400)
+    const factor = await getTotp(env, user.id)
+    if (factor) {
+      const code = stringField(body, "two_factor_token")
+      const provider = integerField(body, "two_factor_provider") ?? 0
+      if (!code)
+        return json(
+          {
+            error: "invalid_grant",
+            error_description: "Two factor required.",
+            TwoFactorProviders: ["0"],
+            TwoFactorProviders2: { "0": null },
+            MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
+          },
+          400
+        )
+      const secondFactorAllowed = await limiter.consumeRateLimit(
+        `totp:${user.id}`,
+        15,
+        5 * 60_000
+      )
+      if (!secondFactorAllowed.allowed)
+        return failure("Too many two-factor attempts", 429)
+      const valid =
+        provider === 0
+          ? await verifyTotpLogin(env, factor, code)
+          : provider === 8
+            ? await redeemTotpRecoveryCode(env, user.id, code)
+            : false
+      if (!valid) return failure("Invalid two-factor code", 400)
+    }
     return json(
       tokenResponse(
         user,
@@ -448,8 +499,79 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
 
+  if (path === "/api/two-factor" && method === "GET")
+    return json({
+      data: (await getTotp(env, user.id))
+        ? [{ enabled: true, type: 0, object: "twoFactorProvider" }]
+        : [],
+      object: "list",
+      continuationToken: null,
+    })
+  if (path === "/api/two-factor/get-authenticator" && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    const factor = await getTotp(env, user.id)
+    return json({
+      enabled: !!factor,
+      key: factor?.secret ?? newTotpSecret(),
+      object: "twoFactorAuthenticator",
+    })
+  }
+  if (
+    path === "/api/two-factor/authenticator" &&
+    (method === "POST" || method === "PUT")
+  ) {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    const key = body && stringField(body, "key")
+    const code = body && String(field(body, "token") ?? "")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (!key || !code) return failure("Invalid authenticator fields")
+    const step = await matchingTotpStep(key.toUpperCase(), code, 0)
+    if (step === null) return failure("Invalid authenticator code")
+    if (!(await enableTotp(env, user.id, key.toUpperCase(), step, request)))
+      return failure("Invalid authenticator key")
+    return json({
+      enabled: true,
+      key: key.toUpperCase(),
+      object: "twoFactorAuthenticator",
+    })
+  }
+  if (path === "/api/two-factor/get-recover" && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    const factor = await getTotp(env, user.id)
+    return factor
+      ? json({ code: factor.recoveryCode, object: "twoFactorRecover" })
+      : failure("Two-factor authentication is disabled", 404)
+  }
+  if (
+    (path === "/api/two-factor/disable" ||
+      path === "/api/two-factor/authenticator") &&
+    (method === "POST" || method === "PUT" || method === "DELETE")
+  ) {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (body && integerField(body, "type") !== 0)
+      return failure("Invalid two-factor provider")
+    const factor = await getTotp(env, user.id)
+    if (!factor) return failure("Two-factor authentication is disabled", 404)
+    const key = body && stringField(body, "key")
+    if (path === "/api/two-factor/authenticator" && key !== factor.secret)
+      return failure("Invalid authenticator key", 403)
+    await disableTotp(env, user.id, request)
+    return json({ enabled: false, type: 0, object: "twoFactorProvider" })
+  }
+
   if (path === "/api/accounts/profile" && method === "GET")
-    return json(profile(user))
+    return json(profile(user, !!(await getTotp(env, user.id))))
   if (path === "/api/accounts/revision-date" && method === "GET")
     return json(
       new Date(
@@ -465,7 +587,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (path === "/api/sync" && method === "GET") {
     const data = await vault.listVault()
     return json({
-      profile: profile(user),
+      profile: profile(user, !!(await getTotp(env, user.id))),
       folders: data.folders.map(folderResponse),
       collections: [],
       policies: [],

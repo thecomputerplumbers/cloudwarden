@@ -9,7 +9,10 @@ receives a master password.
 Current routes cover server configuration, legacy account registration,
 prelogin, password login, rotating refresh tokens, profile, personal vault
 sync, personal ciphers, folders, and encrypted attachments stored in private
-R2. Attachment links expire after five minutes. Registration is disabled unless
+R2. It also supports authenticator app TOTP enrollment, login challenges,
+single-use recovery codes, and disabling the factor. TOTP codes cannot be
+replayed, and enrolling a factor revokes other sessions. Attachment links
+expire after five minutes. Registration is disabled unless
 `SIGNUPS_ALLOWED=true` is configured. Open registration currently has no email
 verification, so enable it only for a controlled local environment. Access
 tokens are signed JWTs that clients can decode, while refresh tokens are
@@ -20,15 +23,16 @@ hour and refresh tokens after 30 days. Issuing tokens requires the
 
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. The web vault, Sends,
-organizations and collections, two-factor authentication, account
-recovery, notifications, and import/export still need implementation. Browser,
+organizations and collections, other two-factor providers and remembered
+devices, account recovery, notifications, and import/export still need
+implementation. Browser,
 mobile, and desktop clients have not been tested, so this cannot yet replace
 Vaultwarden.
 
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
 token rotation, encrypted item and folder sync, attachment upload/download,
-and account isolation. Run
+TOTP enrollment and login, recovery, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 
 A disposable Bitwarden CLI 2026.2.0 account was also exercised against the
