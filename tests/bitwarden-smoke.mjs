@@ -194,6 +194,7 @@ const refreshed = await fetch(`${origin}/identity/connect/token`, {
   }),
 })
 assert.equal(refreshed.status, 200)
+const refreshedTokens = await refreshed.json()
 assert.equal(
   (
     await fetch(`${origin}/identity/connect/token`, {
@@ -238,6 +239,158 @@ const otherAuthorized = (path, body, method = "POST") =>
     },
     body: JSON.stringify(body),
   })
+
+const sendBody = {
+  type: 0,
+  name: "2.encrypted-send-name",
+  key: "2.encrypted-send-key",
+  text: { text: "2.encrypted-send-body", hidden: false },
+  deletionDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  disabled: false,
+  maxAccessCount: 1,
+}
+const send = await otherAuthorized("/api/sends", sendBody)
+assert.equal(send.status, 200)
+assert.equal(send.body.text.text, "2.encrypted-send-body")
+assert.equal(
+  (await otherAuthorized("/api/sends", undefined, "GET")).body.data.length,
+  1
+)
+assert.equal(
+  (
+    await call(`/api/sends/${send.body.id}`, {
+      headers: { Authorization: `Bearer ${refreshedTokens.access_token}` },
+    })
+  ).status,
+  404
+)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.sends.length,
+  1
+)
+
+const sendAccessRequest = (accessId, password) =>
+  fetch(`${origin}/identity/connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "send_access",
+      client_id: "web",
+      send_id: accessId,
+      ...(password ? { password_hash_b64: password } : {}),
+    }),
+  })
+const raceSend = await otherAuthorized("/api/sends", sendBody)
+assert.equal(raceSend.status, 200)
+const race = await Promise.all([
+  sendAccessRequest(raceSend.body.accessId),
+  sendAccessRequest(raceSend.body.accessId),
+])
+assert.deepEqual(race.map((response) => response.status).sort(), [200, 404])
+assert.equal(
+  (await otherAuthorized(`/api/sends/${raceSend.body.id}`, undefined, "GET"))
+    .body.accessCount,
+  1
+)
+const sendAccess = await sendAccessRequest(send.body.accessId)
+assert.equal(sendAccess.status, 200)
+const sendToken = (await sendAccess.json()).access_token
+assert.equal((await sendAccessRequest(send.body.accessId)).status, 404)
+const received = await call("/api/sends/access", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${sendToken}` },
+})
+assert.equal(received.status, 200)
+assert.equal(received.body.text.text, "2.encrypted-send-body")
+assert.equal(received.body.key, undefined)
+assert.equal(received.body.creatorIdentifier, otherEmail)
+assert.equal(
+  (
+    await call("/api/sends/access", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sendToken}` },
+    })
+  ).status,
+  200
+)
+
+const passwordSend = await otherAuthorized("/api/sends", {
+  ...sendBody,
+  password: "recipient-secret",
+  maxAccessCount: 2,
+})
+assert.equal(passwordSend.status, 200)
+const missingPassword = await sendAccessRequest(passwordSend.body.accessId)
+assert.equal(missingPassword.status, 400)
+assert.equal(
+  (await missingPassword.json()).send_access_error_type,
+  "password_hash_b64_required"
+)
+assert.equal(
+  (await sendAccessRequest(passwordSend.body.accessId, "wrong")).status,
+  404
+)
+const passwordAccess = await sendAccessRequest(
+  passwordSend.body.accessId,
+  "recipient-secret"
+)
+assert.equal(passwordAccess.status, 200)
+const passwordToken = (await passwordAccess.json()).access_token
+assert.equal(
+  (
+    await call(`/api/sends/access/${passwordSend.body.accessId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: "recipient-secret" }),
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await sendAccessRequest(passwordSend.body.accessId, "recipient-secret"))
+    .status,
+  404
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/sends/${passwordSend.body.id}`,
+      {
+        ...sendBody,
+        password: null,
+        disabled: true,
+        maxAccessCount: 2,
+      },
+      "PUT"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await call("/api/sends/access", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${passwordToken}` },
+    })
+  ).status,
+  404
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/sends/${passwordSend.body.id}/remove-password`,
+      undefined,
+      "PUT"
+    )
+  ).body.authType,
+  2
+)
+assert.equal(
+  (await otherAuthorized(`/api/sends/${send.body.id}`, undefined, "DELETE"))
+    .status,
+  200
+)
+assert.equal((await sendAccessRequest(send.body.accessId)).status, 404)
 
 function totp(secret, step) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
@@ -408,5 +561,5 @@ const finalProfile = await call("/api/accounts/profile", {
 assert.equal(finalProfile.body.privateKey, "2.new-private-key")
 
 console.log(
-  "Bitwarden auth, vault lifecycle, account changes, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, account changes, text Sends, two-factor, and isolation passed"
 )

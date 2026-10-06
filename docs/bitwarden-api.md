@@ -8,9 +8,11 @@ receives a master password.
 
 Current routes cover server configuration, legacy account registration,
 prelogin, password login, master password and PBKDF2 setting changes, rotating
-refresh tokens, profile and asymmetric key updates, personal vault
-sync, personal ciphers, folders, and encrypted attachments stored in private
-R2. It also supports authenticator app TOTP enrollment, login challenges,
+refresh tokens, profile and asymmetric key updates, personal vault sync,
+personal ciphers, folders, encrypted text Sends with public password and access
+limits, and encrypted attachments stored in private R2. Send content and access
+counters live in the owner's Durable Object; D1 maps public Send IDs to that
+object. It also supports authenticator app TOTP enrollment, login challenges,
 single-use recovery codes, and disabling the factor. TOTP codes cannot be
 replayed, and enrolling a factor revokes other sessions. Attachment links
 expire after five minutes. Registration is disabled unless
@@ -23,7 +25,7 @@ hour and refresh tokens after 30 days. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. The web vault, Sends,
+response fields beyond the ones listed above. The web vault, file Sends,
 organizations and collections, other two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,
@@ -33,7 +35,8 @@ Vaultwarden.
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
 token rotation, encrypted item and folder sync, attachment upload/download,
-TOTP enrollment and login, recovery, password changes, and account isolation. Run
+TOTP enrollment and login, recovery, password changes, text Send access, and
+account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 
 A disposable Bitwarden CLI 2026.2.0 account was also exercised against the

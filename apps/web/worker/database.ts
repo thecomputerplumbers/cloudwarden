@@ -6,6 +6,14 @@ import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 import migrations from "../drizzle/migrations.js"
 import * as schema from "./schema"
 
+function constantTimeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false
+  let different = 0
+  for (let i = 0; i < a.length; i++)
+    different |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return different === 0
+}
+
 /**
  * Single-object state.
  *
@@ -107,12 +115,177 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   async vaultRevision() {
     const ciphers = this.db.select().from(schema.vaultCipher).all()
     const folders = this.db.select().from(schema.vaultFolder).all()
+    const sends = this.db.select().from(schema.vaultSend).all()
     let latest = 0
     for (const cipher of ciphers)
       latest = Math.max(latest, cipher.updatedAt.getTime())
     for (const folder of folders)
       latest = Math.max(latest, folder.updatedAt.getTime())
+    for (const send of sends)
+      latest = Math.max(latest, send.updatedAt.getTime())
     return latest
+  }
+
+  async listVaultSends() {
+    return this.db.select().from(schema.vaultSend).all()
+  }
+
+  async getVaultSend(id: string) {
+    return (
+      this.db
+        .select()
+        .from(schema.vaultSend)
+        .where(eq(schema.vaultSend.id, id))
+        .get() ?? null
+    )
+  }
+
+  async getVaultSendPasswordSalt(id: string) {
+    return (
+      this.db
+        .select({ salt: schema.vaultSend.passwordSalt })
+        .from(schema.vaultSend)
+        .where(eq(schema.vaultSend.id, id))
+        .get()?.salt ?? null
+    )
+  }
+
+  async putVaultSend(
+    id: string,
+    input: {
+      payload: string
+      maxAccessCount: number | null
+      expirationAt: Date | null
+      deletionAt: Date
+      disabled: boolean
+      password: { hash: string; salt: string } | null | undefined
+    }
+  ) {
+    const existing = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    const now = new Date()
+    const values = {
+      payload: input.payload,
+      maxAccessCount: input.maxAccessCount,
+      expirationAt: input.expirationAt,
+      deletionAt: input.deletionAt,
+      disabled: input.disabled,
+      passwordHash:
+        input.password === undefined
+          ? (existing?.passwordHash ?? null)
+          : (input.password?.hash ?? null),
+      passwordSalt:
+        input.password === undefined
+          ? (existing?.passwordSalt ?? null)
+          : (input.password?.salt ?? null),
+      updatedAt: now,
+    }
+    if (existing)
+      return this.db
+        .update(schema.vaultSend)
+        .set(values)
+        .where(eq(schema.vaultSend.id, id))
+        .returning()
+        .get()
+    return this.db
+      .insert(schema.vaultSend)
+      .values({ id, ...values, createdAt: now })
+      .returning()
+      .get()
+  }
+
+  async removeVaultSendPassword(id: string) {
+    return (
+      this.db
+        .update(schema.vaultSend)
+        .set({ passwordHash: null, passwordSalt: null, updatedAt: new Date() })
+        .where(eq(schema.vaultSend.id, id))
+        .returning()
+        .get() ?? null
+    )
+  }
+
+  async deleteVaultSend(id: string) {
+    return this.db.transaction((tx) => {
+      tx.delete(schema.vaultSendToken)
+        .where(eq(schema.vaultSendToken.sendId, id))
+        .run()
+      return !!tx
+        .delete(schema.vaultSend)
+        .where(eq(schema.vaultSend.id, id))
+        .returning({ id: schema.vaultSend.id })
+        .get()
+    })
+  }
+
+  async issueVaultSendAccess(
+    id: string,
+    passwordHash: string | null,
+    tokenHash: string
+  ) {
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    if (!send || !this.vaultSendAccessible(send)) return "unavailable" as const
+    if (send.maxAccessCount !== null && send.accessCount >= send.maxAccessCount)
+      return "unavailable" as const
+    if (send.passwordHash) {
+      if (!passwordHash) return "password_required" as const
+      if (!constantTimeEqual(send.passwordHash, passwordHash))
+        return "password_invalid" as const
+    }
+    const now = new Date()
+    this.db.transaction((tx) => {
+      tx.update(schema.vaultSend)
+        .set({ accessCount: send.accessCount + 1, updatedAt: now })
+        .where(eq(schema.vaultSend.id, id))
+        .run()
+      tx.delete(schema.vaultSendToken)
+        .where(lt(schema.vaultSendToken.expiresAt, now))
+        .run()
+      tx.insert(schema.vaultSendToken)
+        .values({
+          hash: tokenHash,
+          sendId: id,
+          expiresAt: new Date(now.getTime() + 120_000),
+        })
+        .run()
+    })
+    return "ok" as const
+  }
+
+  async accessVaultSend(id: string, tokenHash: string) {
+    const token = this.db
+      .select()
+      .from(schema.vaultSendToken)
+      .where(eq(schema.vaultSendToken.hash, tokenHash))
+      .get()
+    if (
+      !token ||
+      token.sendId !== id ||
+      token.expiresAt.getTime() <= Date.now()
+    )
+      return null
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    return send && this.vaultSendAccessible(send) ? send : null
+  }
+
+  private vaultSendAccessible(send: typeof schema.vaultSend.$inferSelect) {
+    const now = Date.now()
+    return (
+      !send.disabled &&
+      send.deletionAt.getTime() > now &&
+      (send.expirationAt === null || send.expirationAt.getTime() > now)
+    )
   }
 
   async getVaultCipher(id: string) {

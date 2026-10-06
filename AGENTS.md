@@ -19,6 +19,10 @@ Object, selected only after validating the Bitwarden session. The Durable
 Object serializes each account's vault mutations, while attachment bytes live
 in private R2. Do not use the starter's Better Auth session to authorize these
 routes or let a caller choose a different account's Durable Object.
+Encrypted text Sends and their access counters also live in the owner's Durable
+Object. D1 holds only the public Send ID to owner mapping needed to find that
+object. A public Send request must resolve this mapping before reaching the
+object, and the object enforces expiry, password proof, and access limits.
 
 Drizzle 1.x RC drives both, with one config each:
 

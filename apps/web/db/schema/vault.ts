@@ -64,3 +64,12 @@ export const vaultTotp = sqliteTable("vault_totp", {
   recoveryCode: text("recovery_code").notNull(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 })
+
+// Public Send URLs resolve to the owner's Durable Object through this index.
+// The encrypted content and access counter remain in that object.
+export const vaultSendLocator = sqliteTable("vault_send_locator", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+})

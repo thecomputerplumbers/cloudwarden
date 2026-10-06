@@ -2,9 +2,11 @@ import {
   authenticatedVaultUser,
   createVaultUser,
   findVaultUser,
+  findVaultUserById,
   issueVaultSession,
   normalizeEmail,
   refreshVaultSession,
+  tokenHash,
   updateVaultKeys,
   updateVaultPassword,
   updateVaultProfile,
@@ -21,6 +23,18 @@ import {
   redeemTotpRecoveryCode,
   verifyTotpLogin,
 } from "./bitwarden-totp"
+import {
+  createSendLocator,
+  deleteSendLocator,
+  getSendLocator,
+  hashSendPassword,
+  newSendAccessToken,
+  newSendPasswordSalt,
+  parseTextSend,
+  sendAccessResponse,
+  sendIdFromAccessId,
+  sendResponse,
+} from "./bitwarden-send"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -277,14 +291,87 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/folders/") ||
     path.startsWith("/api/accounts/") ||
     path === "/api/two-factor" ||
-    path.startsWith("/api/two-factor/")
+    path.startsWith("/api/two-factor/") ||
+    path === "/api/sends" ||
+    path.startsWith("/api/sends/")
   )
+}
+
+async function issuePublicSendAccess(
+  env: CloudflareEnv,
+  request: Request,
+  accessId: string,
+  password: string | null
+) {
+  const id = sendIdFromAccessId(accessId)
+  if (!id) return { error: "unavailable" as const }
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+  const limiter = await env.APP_DATABASE.getByName("bitwarden-send-rates")
+  const allowed = await limiter.consumeRateLimit(`send:${ip}`, 30, 60_000)
+  if (!allowed.allowed) return { error: "limited" as const }
+  const locator = await getSendLocator(env, id)
+  if (!locator) return { error: "unavailable" as const }
+  const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
+  const salt = await vault.getVaultSendPasswordSalt(id)
+  const passwordHash =
+    password && salt ? await hashSendPassword(password, salt) : null
+  const access = await newSendAccessToken(id)
+  const result = await vault.issueVaultSendAccess(id, passwordHash, access.hash)
+  return result === "ok"
+    ? { token: access.token, userId: locator.userId }
+    : { error: result }
+}
+
+async function readPublicSend(env: CloudflareEnv, bearer: string) {
+  const [accessId] = bearer.split(".")
+  const id = accessId && sendIdFromAccessId(accessId)
+  if (!id) return null
+  const locator = await getSendLocator(env, id)
+  if (!locator) return null
+  const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
+  const send = await vault.accessVaultSend(id, await tokenHash(bearer))
+  const user = send && (await findVaultUserById(env, locator.userId))
+  return send && user ? sendAccessResponse(send, user.email) : null
 }
 
 export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const url = new URL(request.url)
   const path = url.pathname.toLowerCase()
   const method = request.method.toUpperCase()
+
+  if (path === "/api/sends/access" && method === "POST") {
+    const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
+      request.headers.get("Authorization") ?? ""
+    )?.[1]
+    const send = bearer && (await readPublicSend(env, bearer))
+    return send ? json(send) : failure("Send is unavailable", 404)
+  }
+  const legacySendAccess = /^\/api\/sends\/access\/([a-z0-9_-]{22})$/i.exec(
+    url.pathname
+  )
+  if (legacySendAccess && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "password")
+    const result = await issuePublicSendAccess(
+      env,
+      request,
+      legacySendAccess[1]!,
+      password ?? null
+    )
+    if ("error" in result)
+      return failure(
+        result.error === "password_required"
+          ? "Password required"
+          : "Send is unavailable",
+        result.error === "password_required"
+          ? 401
+          : result.error === "limited"
+            ? 429
+            : 404
+      )
+    const send = await readPublicSend(env, result.token)
+    return send ? json(send) : failure("Send is unavailable", 404)
+  }
 
   const downloadMatch =
     /^\/attachments\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/.exec(path)
@@ -444,6 +531,41 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
             scope: "api offline_access",
           })
         : json({ error: "invalid_grant" }, 400)
+    }
+    if (grant === "send_access") {
+      const accessId = stringField(body, "send_id")
+      if (!accessId) return failure("Send ID is required")
+      const result = await issuePublicSendAccess(
+        env,
+        request,
+        accessId,
+        stringField(body, "password_hash_b64") ?? null
+      )
+      if ("error" in result) {
+        if (result.error === "limited")
+          return failure("Too many Send attempts", 429)
+        const required = result.error === "password_required"
+        return json(
+          {
+            error: required ? "invalid_request" : "invalid_grant",
+            error_description: required
+              ? "Password required"
+              : "Send is unavailable",
+            send_access_error_type: required
+              ? "password_hash_b64_required"
+              : result.error === "password_invalid"
+                ? "password_hash_b64_invalid"
+                : "send_id_invalid",
+          },
+          required ? 400 : 404
+        )
+      }
+      return json({
+        access_token: result.token,
+        expires_in: 120,
+        token_type: "Bearer",
+        scope: "api.send.access",
+      })
     }
     if (grant !== "password") return failure("Unsupported grant type")
     const username = stringField(body, "username")
@@ -688,6 +810,58 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       globalEquivalentDomains: [],
       object: "domains",
     })
+  if (path === "/api/sends" && method === "GET")
+    return json(list((await vault.listVaultSends()).map(sendResponse)))
+  if (path === "/api/sends" && method === "POST") {
+    const body = await bodyOf(request)
+    const input = body && parseTextSend(body)
+    if (!input) return failure("Invalid Send")
+    const id = crypto.randomUUID()
+    const password = input.password
+      ? await (async () => {
+          const salt = newSendPasswordSalt()
+          return { salt, hash: await hashSendPassword(input.password!, salt) }
+        })()
+      : null
+    const send = await vault.putVaultSend(id, { ...input, password })
+    try {
+      await createSendLocator(env, id, user.id)
+    } catch {
+      await vault.deleteVaultSend(id)
+      return failure("Could not create Send", 503)
+    }
+    return json(sendResponse(send))
+  }
+  const sendMatch =
+    /^\/api\/sends\/([0-9a-f-]{36})(?:\/(remove-password))?$/.exec(path)
+  if (sendMatch) {
+    const id = sendMatch[1]!
+    const existing = await vault.getVaultSend(id)
+    if (!existing) return failure("Send not found", 404)
+    if (sendMatch[2] === "remove-password" && method === "PUT") {
+      const send = await vault.removeVaultSendPassword(id)
+      return json(sendResponse(send!))
+    }
+    if (!sendMatch[2] && method === "GET") return json(sendResponse(existing))
+    if (!sendMatch[2] && method === "DELETE") {
+      await vault.deleteVaultSend(id)
+      await deleteSendLocator(env, id)
+      return new Response(null, { status: 200 })
+    }
+    if (!sendMatch[2] && method === "PUT") {
+      const body = await bodyOf(request)
+      const input = body && parseTextSend(body)
+      if (!input) return failure("Invalid Send")
+      const password = input.password
+        ? await (async () => {
+            const salt = newSendPasswordSalt()
+            return { salt, hash: await hashSendPassword(input.password!, salt) }
+          })()
+        : undefined
+      const send = await vault.putVaultSend(id, { ...input, password })
+      return json(sendResponse(send))
+    }
+  }
   if (path === "/api/sync" && method === "GET") {
     const data = await vault.listVault()
     return json({
@@ -705,7 +879,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         globalEquivalentDomains: [],
         object: "domains",
       },
-      sends: [],
+      sends: (await vault.listVaultSends()).map(sendResponse),
       userDecryption: {
         masterPasswordUnlock: {
           kdf: {

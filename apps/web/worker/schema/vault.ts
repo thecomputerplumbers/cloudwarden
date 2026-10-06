@@ -34,3 +34,23 @@ export const vaultAttachmentToken = sqliteTable("vault_attachment_token", {
   attachmentId: text("attachment_id").notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
 })
+
+export const vaultSend = sqliteTable("vault_send", {
+  id: text("id").primaryKey(),
+  payload: text("payload").notNull(),
+  passwordHash: text("password_hash"),
+  passwordSalt: text("password_salt"),
+  accessCount: integer("access_count").notNull().default(0),
+  maxAccessCount: integer("max_access_count"),
+  expirationAt: integer("expiration_at", { mode: "timestamp_ms" }),
+  deletionAt: integer("deletion_at", { mode: "timestamp_ms" }).notNull(),
+  disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultSendToken = sqliteTable("vault_send_token", {
+  hash: text("hash").primaryKey(),
+  sendId: text("send_id").notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+})

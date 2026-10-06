@@ -161,6 +161,16 @@ export async function findVaultUser(env: CloudflareEnv, email: string) {
   )
 }
 
+export async function findVaultUserById(env: CloudflareEnv, id: string) {
+  return (
+    (await drizzle(env.DB)
+      .select()
+      .from(vaultUser)
+      .where(eq(vaultUser.id, id))
+      .get()) ?? null
+  )
+}
+
 export async function verifyVaultPassword(
   user: VaultUser | null,
   supplied: string
