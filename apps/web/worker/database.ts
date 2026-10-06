@@ -15,6 +15,8 @@ type VaultShare = {
   orgId: string
   collectionIds: string[]
   payload: string
+  userId: string
+  archivedDate: string | null
   attachments: {
     id: string
     fileName: string
@@ -300,7 +302,12 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async importVault(
     folders: { id: string | null; name: string }[],
-    ciphers: { payload: string; folderIndex: number | null }[]
+    ciphers: {
+      payload: string
+      folderIndex: number | null
+      archivedDate: string | null
+    }[],
+    userId: string
   ) {
     this.assertVaultActive()
     const now = new Date()
@@ -331,15 +338,24 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
         const payload = JSON.parse(cipher.payload) as Record<string, unknown>
         payload.folderId =
           cipher.folderIndex === null ? null : folderIds[cipher.folderIndex]!
+        const id = crypto.randomUUID()
         tx.insert(schema.vaultCipher)
           .values({
-            id: crypto.randomUUID(),
+            id,
             payload: JSON.stringify(payload),
             revision: 1,
             createdAt: now,
             updatedAt: now,
           })
           .run()
+        if (cipher.archivedDate)
+          tx.insert(schema.vaultCipherArchive)
+            .values({
+              cipherId: id,
+              userId,
+              archivedAt: new Date(cipher.archivedDate),
+            })
+            .run()
       }
     })
   }
@@ -711,6 +727,8 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       orgId: string
       collectionIds: string[]
       payload: string
+      userId: string
+      archivedDate: string | null
       attachmentKeys: Record<string, { fileName: string; key: string }>
       lastKnownRevisionDate?: string
     }
@@ -752,6 +770,8 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       orgId: input.orgId,
       collectionIds: input.collectionIds,
       payload: input.payload,
+      userId: input.userId,
+      archivedDate: input.archivedDate,
       attachments: sharedAttachments,
     }
     const stored = this.db
@@ -814,7 +834,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   async stageSharedCipher(
     id: string,
     payload: string,
-    attachments: VaultShare["attachments"]
+    attachments: VaultShare["attachments"],
+    userId: string,
+    archivedDate: string | null
   ) {
     this.assertVaultActive()
     if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
@@ -824,6 +846,17 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
         .values({ id, payload, revision: 1, createdAt: now, updatedAt: now })
         .onConflictDoNothing()
         .run()
+      if (archivedDate)
+        tx.insert(schema.vaultCipherArchive)
+          .values({ cipherId: id, userId, archivedAt: new Date(archivedDate) })
+          .onConflictDoUpdate({
+            target: [
+              schema.vaultCipherArchive.cipherId,
+              schema.vaultCipherArchive.userId,
+            ],
+            set: { archivedAt: new Date(archivedDate) },
+          })
+          .run()
       for (const attachment of attachments)
         tx.insert(schema.vaultAttachment)
           .values({
@@ -849,7 +882,10 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     })
   }
 
-  async stageOrgImport(ciphers: { id: string; payload: string }[]) {
+  async stageOrgImport(
+    ciphers: { id: string; payload: string; archivedDate?: string | null }[],
+    userId: string
+  ) {
     this.assertVaultActive()
     if (
       ciphers.length > 1000 ||
@@ -869,6 +905,16 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
           })
           .onConflictDoNothing()
           .run()
+      for (const cipher of ciphers)
+        if (cipher.archivedDate)
+          tx.insert(schema.vaultCipherArchive)
+            .values({
+              cipherId: cipher.id,
+              userId,
+              archivedAt: new Date(cipher.archivedDate),
+            })
+            .onConflictDoNothing()
+            .run()
     })
   }
 
@@ -890,54 +936,88 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     id: string,
     payload: string,
     expectedRevision?: number,
-    lastKnownRevisionDate?: string
+    lastKnownRevisionDate?: string,
+    archive?: { userId: string; archivedDate: string | null }
   ) {
     this.assertVaultActive()
     this.assertCipherNotSharing(id)
     if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
     const now = new Date()
-    const existing = this.db
-      .select()
-      .from(schema.vaultCipher)
-      .where(eq(schema.vaultCipher.id, id))
-      .get()
-    if (existing) {
-      if (lastKnownRevisionDate) {
-        const knownTime = Date.parse(lastKnownRevisionDate)
+    return this.db.transaction((tx) => {
+      const existing = tx
+        .select()
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, id))
+        .get()
+      if (existing) {
+        if (lastKnownRevisionDate) {
+          const knownTime = Date.parse(lastKnownRevisionDate)
+          if (
+            !Number.isFinite(knownTime) ||
+            existing.updatedAt.getTime() - knownTime > 1000
+          )
+            return { conflict: true as const, cipher: existing }
+        }
         if (
-          !Number.isFinite(knownTime) ||
-          existing.updatedAt.getTime() - knownTime > 1000
+          expectedRevision !== undefined &&
+          expectedRevision !== existing.revision
         )
           return { conflict: true as const, cipher: existing }
+      } else if (expectedRevision !== undefined) {
+        return { conflict: true as const, cipher: null }
       }
-      if (
-        expectedRevision !== undefined &&
-        expectedRevision !== existing.revision
-      )
-        return { conflict: true as const, cipher: existing }
-      const cipher = this.db
-        .update(schema.vaultCipher)
-        .set({ payload, revision: existing.revision + 1, updatedAt: now })
-        .where(
-          and(
-            eq(schema.vaultCipher.id, id),
-            eq(schema.vaultCipher.revision, existing.revision)
-          )
-        )
-        .returning()
-        .get()
-      return cipher
-        ? { conflict: false as const, cipher }
-        : { conflict: true as const, cipher: existing }
-    }
-    if (expectedRevision !== undefined)
-      return { conflict: true as const, cipher: null }
-    const cipher = this.db
-      .insert(schema.vaultCipher)
-      .values({ id, payload, revision: 1, createdAt: now, updatedAt: now })
-      .returning()
-      .get()
-    return { conflict: false as const, cipher }
+      const cipher = existing
+        ? tx
+            .update(schema.vaultCipher)
+            .set({ payload, revision: existing.revision + 1, updatedAt: now })
+            .where(
+              and(
+                eq(schema.vaultCipher.id, id),
+                eq(schema.vaultCipher.revision, existing.revision)
+              )
+            )
+            .returning()
+            .get()
+        : tx
+            .insert(schema.vaultCipher)
+            .values({
+              id,
+              payload,
+              revision: 1,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning()
+            .get()
+      if (!cipher) return { conflict: true as const, cipher: existing ?? null }
+      if (archive) {
+        if (archive.archivedDate)
+          tx.insert(schema.vaultCipherArchive)
+            .values({
+              cipherId: id,
+              userId: archive.userId,
+              archivedAt: new Date(archive.archivedDate),
+            })
+            .onConflictDoUpdate({
+              target: [
+                schema.vaultCipherArchive.cipherId,
+                schema.vaultCipherArchive.userId,
+              ],
+              set: { archivedAt: new Date(archive.archivedDate) },
+            })
+            .run()
+        else
+          tx.delete(schema.vaultCipherArchive)
+            .where(
+              and(
+                eq(schema.vaultCipherArchive.cipherId, id),
+                eq(schema.vaultCipherArchive.userId, archive.userId)
+              )
+            )
+            .run()
+      }
+      return { conflict: false as const, cipher }
+    })
   }
 
   async trashVaultCipher(id: string, expectedRevision?: number) {

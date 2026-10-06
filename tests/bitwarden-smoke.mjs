@@ -994,6 +994,21 @@ assert.equal((await apiLogin(rotatedApiKey.body.apiKey)).status, 400)
 assert.equal((await apiLogin(otpRotatedApiKey.body.apiKey)).status, 200)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
+const archivedDate = "2024-04-05T12:30:00.000Z"
+const createdArchived = await authorized("/api/ciphers", "POST", {
+  type: 2,
+  name: "2.archived-created",
+  archivedDate,
+})
+assert.equal(createdArchived.status, 200)
+assert.equal(createdArchived.body.archivedDate, archivedDate)
+const editedArchived = await authorized(
+  `/api/ciphers/${createdArchived.body.id}`,
+  "PUT",
+  { type: 2, name: "2.archived-created", archivedDate: null }
+)
+assert.equal(editedArchived.status, 200)
+assert.equal(editedArchived.body.archivedDate, null)
 const beforeImport = await authorized("/api/sync")
 assert.equal(
   (
@@ -1026,7 +1041,12 @@ assert.equal(
           name: "2.imported-login",
           login: { username: "2.imported-user" },
         },
-        { type: 2, name: "2.imported-note", secureNote: { type: 0 } },
+        {
+          type: 2,
+          name: "2.imported-note",
+          secureNote: { type: 0 },
+          archivedDate,
+        },
       ],
       folderRelationships: [{ key: 0, value: 0 }],
     })
@@ -1047,6 +1067,11 @@ assert.equal(
   imported.body.ciphers.find((cipher) => cipher.name === "2.imported-note")
     .folderId,
   null
+)
+assert.equal(
+  imported.body.ciphers.find((cipher) => cipher.name === "2.imported-note")
+    .archivedDate,
+  archivedDate
 )
 assert.equal(
   (
@@ -1115,10 +1140,15 @@ assert.equal(
     await authorized(`/api/ciphers/${cipherId}`, "PUT", {
       type: 1,
       name: "2.stale-name",
+      archivedDate,
       lastKnownRevisionDate: "2020-01-01T00:00:00.000Z",
     })
   ).status,
   409
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}`)).body.archivedDate,
+  null
 )
 assert.equal(
   (await authorized(`/api/folders/${createdFolder.body.id}`, "DELETE")).status,
@@ -1384,6 +1414,7 @@ const plainMoved = await authorized(
       name: "2.shared-plain-share",
       notes: "2.shared-plain-notes",
       organizationId: orgId,
+      archivedDate,
       lastKnownRevisionDate: plainBeforeShare.body.revisionDate,
     },
     collectionIds: [secondCollection.body.id],
@@ -1392,6 +1423,7 @@ const plainMoved = await authorized(
 assert.equal(plainMoved.status, 200)
 assert.equal(plainMoved.body.organizationId, orgId)
 assert.equal(plainMoved.body.notes, "2.shared-plain-notes")
+assert.equal(plainMoved.body.archivedDate, archivedDate)
 const bulkSources = await Promise.all(
   ["first", "second"].map((part) =>
     authorized("/api/ciphers", "POST", {
@@ -1444,6 +1476,18 @@ assert.equal(sharedCipher.status, 200)
 assert.equal(sharedCipher.body.organizationId, orgId)
 assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
 const sharedId = sharedCipher.body.id
+const sharedArchived = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+  ...sharedCipherBody,
+  archivedDate,
+})
+assert.equal(sharedArchived.status, 200)
+assert.equal(sharedArchived.body.archivedDate, archivedDate)
+const sharedUnarchived = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+  ...sharedCipherBody,
+  archivedDate: null,
+})
+assert.equal(sharedUnarchived.status, 200)
+assert.equal(sharedUnarchived.body.archivedDate, null)
 assert.equal(
   (
     await authorized("/api/ciphers/delete", "PUT", {
@@ -1772,6 +1816,11 @@ assert.deepEqual(
 assert.equal(
   memberSync.body.ciphers.some((cipher) => cipher.id === sharedId),
   true
+)
+assert.equal(
+  memberSync.body.ciphers.find((cipher) => cipher.id === plainMoved.body.id)
+    .archivedDate,
+  null
 )
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
@@ -3097,6 +3146,7 @@ assert.equal(
           type: 1,
           name: "2.imported-org-login",
           login: { username: "2.secret" },
+          archivedDate,
         },
         { type: 2, name: "2.imported-org-note", secureNote: { type: 0 } },
       ],
@@ -3126,6 +3176,7 @@ const importedOrgLogin = afterOrgImport.body.ciphers.find(
 )
 assert.equal(importedOrgLogin.organizationId, orgId)
 assert.equal(importedOrgLogin.folderId, null)
+assert.equal(importedOrgLogin.archivedDate, archivedDate)
 assert.deepEqual(importedOrgLogin.collectionIds, [importedOrgCollection.id])
 assert.deepEqual(
   afterOrgImport.body.ciphers.find((row) => row.name === "2.imported-org-note")

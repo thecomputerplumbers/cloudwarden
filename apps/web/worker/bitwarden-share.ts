@@ -19,6 +19,7 @@ export async function startVaultShare(
     orgId: string
     collectionIds: string[]
     payload: string
+    archivedDate: string | null
     attachmentKeys: Record<string, { fileName: string; key: string }>
     lastKnownRevisionDate?: string
   }
@@ -41,6 +42,8 @@ export async function startVaultShare(
     orgId: input.orgId,
     collectionIds: input.collectionIds,
     payload: input.payload,
+    userId: input.userId,
+    archivedDate: input.archivedDate,
     attachmentKeys: input.attachmentKeys,
     lastKnownRevisionDate: input.lastKnownRevisionDate,
   })
@@ -228,7 +231,9 @@ async function completeClaimedVaultShare(
     await destination.stageSharedCipher(
       cipherId,
       snapshot.payload,
-      snapshot.attachments
+      snapshot.attachments,
+      snapshot.userId ?? transfer.userId,
+      snapshot.archivedDate ?? null
     )
     if (!(await getOrgCipherLocator(env, cipherId)))
       await createOrgCipherLocator(

@@ -205,6 +205,14 @@ function stringField(body: Body, name: string) {
   return typeof value === "string" ? value : undefined
 }
 
+function archivedDateField(body: Body): string | null | false {
+  const value = field(body, "archivedDate")
+  if (value == null) return null
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value)))
+    return false
+  return new Date(value).toISOString()
+}
+
 async function validateProtectedAction(
   env: CloudflareEnv,
   user: VaultUser,
@@ -3236,7 +3244,15 @@ export async function handleBitwarden(
       const cipher = raw as Body
       const name = stringField(cipher, "name")
       const type = numberField(cipher, "type")
-      if (!name || name.length > 10_000 || !type || type < 1 || type > 5)
+      const archivedDate = archivedDateField(cipher)
+      if (
+        !name ||
+        name.length > 10_000 ||
+        !type ||
+        type < 1 ||
+        type > 5 ||
+        archivedDate === false
+      )
         return failure("Invalid organization import")
       const collectionIds = [...assigned[index]!]
       if (!collectionIds.length)
@@ -3249,7 +3265,12 @@ export async function handleBitwarden(
       })
       if (payload.length > 1_000_000)
         return failure("Invalid organization import")
-      ciphers.push({ id: crypto.randomUUID(), payload, collectionIds })
+      ciphers.push({
+        id: crypto.randomUUID(),
+        payload,
+        collectionIds,
+        archivedDate: archivedDate as string | null,
+      })
     }
     if (
       collections.filter((row) => !row.existing).length +
@@ -3313,7 +3334,11 @@ export async function handleBitwarden(
         return failure("Invalid vault import")
       folderIndices.set(key, value)
     }
-    const ciphers: { payload: string; folderIndex: number | null }[] = []
+    const ciphers: {
+      payload: string
+      folderIndex: number | null
+      archivedDate: string | null
+    }[] = []
     for (const [index, raw] of rawCiphers.entries()) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw))
         return failure("Invalid vault import")
@@ -3321,6 +3346,7 @@ export async function handleBitwarden(
       const name = stringField(cipher, "name")
       const type = numberField(cipher, "type")
       const orgId = field(cipher, "organizationId")
+      const archivedDate = archivedDateField(cipher)
       const payload = JSON.stringify(cipher)
       if (
         !name ||
@@ -3328,12 +3354,17 @@ export async function handleBitwarden(
         type < 1 ||
         type > 5 ||
         orgId != null ||
-        payload.length > 1_000_000
+        payload.length > 1_000_000 ||
+        archivedDate === false
       )
         return failure("Invalid vault import")
-      ciphers.push({ payload, folderIndex: folderIndices.get(index) ?? null })
+      ciphers.push({
+        payload,
+        folderIndex: folderIndices.get(index) ?? null,
+        archivedDate: archivedDate as string | null,
+      })
     }
-    await vault.importVault(folders, ciphers)
+    await vault.importVault(folders, ciphers, user.id)
     return new Response(null, { status: 200 })
   }
   if (
@@ -3343,6 +3374,8 @@ export async function handleBitwarden(
     const body = await bodyOf(request)
     if (!body || !stringField(body, "name") || !numberField(body, "type"))
       return failure("Invalid cipher")
+    const archivedDate = archivedDateField(body)
+    if (archivedDate === false) return failure("Invalid archive date")
     const orgId = stringField(body, "organizationId")
     if (orgId) {
       const member = await getVaultMembership(env, orgId, user.id)
@@ -3360,7 +3393,13 @@ export async function handleBitwarden(
       await createOrgCipherLocator(env, id, orgId, collectionIds)
       const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
       try {
-        const stored = await orgVault.putVaultCipher(id, JSON.stringify(body))
+        const stored = await orgVault.putVaultCipher(
+          id,
+          JSON.stringify(body),
+          undefined,
+          undefined,
+          { userId: user.id, archivedDate }
+        )
         return json(
           await cipherResponse(stored.cipher!, orgVault, user.id, origin, {
             id: orgId,
@@ -3376,7 +3415,13 @@ export async function handleBitwarden(
     if (folderId && !(await vault.getVaultFolder(folderId)))
       return failure("Folder not found", 404)
     const id = crypto.randomUUID()
-    const stored = await vault.putVaultCipher(id, JSON.stringify(body))
+    const stored = await vault.putVaultCipher(
+      id,
+      JSON.stringify(body),
+      undefined,
+      undefined,
+      { userId: user.id, archivedDate }
+    )
     return json(await cipherResponse(stored.cipher!, vault, user.id, origin))
   }
 
@@ -3458,6 +3503,8 @@ export async function handleBitwarden(
       return failure("Cipher sharing is forbidden", 403)
     if (!(await validOrgCollections(env, orgId, member, collectionIds)))
       return failure("Invalid collections")
+    const archivedDate = archivedDateField(data)
+    if (archivedDate === false) return failure("Invalid archive date")
     const existing = await getOrgCipherLocator(env, id)
     if (!existing) {
       const rawAttachments = field(data, "attachments2")
@@ -3489,6 +3536,7 @@ export async function handleBitwarden(
         orgId,
         collectionIds,
         payload: JSON.stringify(data),
+        archivedDate,
         attachmentKeys,
         lastKnownRevisionDate: stringField(data, "lastKnownRevisionDate"),
       })
@@ -3621,11 +3669,14 @@ export async function handleBitwarden(
           )
         const existing = await orgVault.getVaultCipher(locator.id)
         if (!existing) return failure("Cipher not found", 404)
+        const archivedDate = archivedDateField(body)
+        if (archivedDate === false) return failure("Invalid archive date")
         const stored = await orgVault.putVaultCipher(
           locator.id,
           JSON.stringify(body),
           undefined,
-          stringField(body, "lastKnownRevisionDate")
+          stringField(body, "lastKnownRevisionDate"),
+          { userId: user.id, archivedDate }
         )
         return stored.conflict
           ? failure("Cipher was changed concurrently", 409)
@@ -3989,11 +4040,14 @@ export async function handleBitwarden(
       const folderId = stringField(body, "folderId")
       if (folderId && !(await vault.getVaultFolder(folderId)))
         return failure("Folder not found", 404)
+      const archivedDate = archivedDateField(body)
+      if (archivedDate === false) return failure("Invalid archive date")
       const stored = await vault.putVaultCipher(
         id,
         JSON.stringify(body),
         undefined,
-        stringField(body, "lastKnownRevisionDate")
+        stringField(body, "lastKnownRevisionDate"),
+        { userId: user.id, archivedDate }
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)

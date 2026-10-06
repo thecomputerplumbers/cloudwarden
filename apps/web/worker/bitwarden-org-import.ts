@@ -24,7 +24,12 @@ export type OrgImportPlan = {
     externalId: string | null
     existing: boolean
   }[]
-  ciphers: { id: string; payload: string; collectionIds: string[] }[]
+  ciphers: {
+    id: string
+    payload: string
+    collectionIds: string[]
+    archivedDate?: string | null
+  }[]
 }
 
 export async function startOrgImport(
@@ -158,7 +163,7 @@ export async function completeOrgImport(env: CloudflareEnv, id: string) {
       }
     }
     const vault = await env.APP_DATABASE.getByName(`org:${row.orgId}`)
-    await vault.stageOrgImport(plan.ciphers)
+    await vault.stageOrgImport(plan.ciphers, row.userId)
     const createdAt = new Date()
     const statements = [
       ...plan.collections
