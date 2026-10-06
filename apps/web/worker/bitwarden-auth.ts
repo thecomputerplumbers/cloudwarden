@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/d1"
 import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
+import { pbkdf2Sync } from "node:crypto"
 
 import {
   vaultApiKey,
@@ -95,24 +96,7 @@ export async function tokenHash(token: string) {
 }
 
 export async function hashClientPassword(password: string, salt: string) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  )
-  const derived = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: encoder.encode(salt),
-      iterations: 120_000,
-    },
-    key,
-    256
-  )
-  return bytesToHex(new Uint8Array(derived))
+  return pbkdf2Sync(password, salt, 120_000, 32, "sha256").toString("hex")
 }
 
 function constantTimeEqual(a: string, b: string) {
