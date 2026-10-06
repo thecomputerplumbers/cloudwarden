@@ -71,6 +71,28 @@ export default {
         const beforeLocator = cipherId
           ? await getOrgCipherLocator(env, cipherId)
           : null
+        const batchIds =
+          user &&
+          request.method === "PUT" &&
+          (path === "/api/ciphers/delete" || path === "/api/ciphers/restore")
+            ? (
+                (await request
+                  .clone()
+                  .json()
+                  .catch(() => null)) as { ids?: unknown } | null
+              )?.ids
+            : null
+        const batchLocators =
+          Array.isArray(batchIds) && batchIds.length <= 100
+            ? await Promise.all(
+                batchIds
+                  .filter(
+                    (id): id is string =>
+                      typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id)
+                  )
+                  .map((id) => getOrgCipherLocator(env, id))
+              )
+            : []
         const orgIdFromPath =
           user &&
           path.match(/^\/api\/organizations\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]
@@ -107,6 +129,8 @@ export default {
             }
             if (beforeLocator)
               add(beforeLocator.orgId, beforeLocator.collectionIds)
+            for (const locator of batchLocators)
+              if (locator) add(locator.orgId, locator.collectionIds)
             if (cipherId) {
               const afterLocator = await getOrgCipherLocator(env, cipherId)
               if (afterLocator)

@@ -1444,6 +1444,39 @@ assert.equal(sharedCipher.status, 200)
 assert.equal(sharedCipher.body.organizationId, orgId)
 assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
 const sharedId = sharedCipher.body.id
+assert.equal(
+  (
+    await authorized("/api/ciphers/delete", "PUT", {
+      ids: [cipherId, crypto.randomUUID()],
+    })
+  ).status,
+  404
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate,
+  null
+)
+const bulkTrashed = await authorized("/api/ciphers/delete", "PUT", {
+  ids: [cipherId, sharedId],
+})
+assert.equal(bulkTrashed.status, 204)
+assert.ok((await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate)
+assert.ok((await authorized(`/api/ciphers/${sharedId}`)).body.deletedDate)
+const bulkRestored = await authorized("/api/ciphers/restore", "PUT", {
+  ids: [cipherId, sharedId],
+})
+assert.equal(bulkRestored.status, 200)
+assert.equal(bulkRestored.body.object, "list")
+assert.deepEqual(
+  bulkRestored.body.data.map((cipher) => cipher.id),
+  [cipherId, sharedId]
+)
+assert.ok(bulkRestored.body.data.every((cipher) => cipher.deletedDate === null))
+assert.equal(
+  (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "PUT"))
+    .status,
+  404
+)
 const sharedAttachmentInit = await authorized(
   `/api/ciphers/${sharedId}/attachment/v2`,
   "POST",
@@ -1713,6 +1746,11 @@ assert.equal(
   200
 )
 const memberSync = await otherAuthorized("/api/sync", undefined, "GET")
+assert.equal(
+  (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "PUT"))
+    .status,
+  403
+)
 assert.equal(
   (
     await otherAuthorized(

@@ -3864,6 +3864,84 @@ export async function handleBitwarden(
     await publishVaultNotification(env, { type: 5, userId: user.id })
     return json(singleId ? responses[0] : list(responses))
   }
+  if (
+    (path === "/api/ciphers/delete" || path === "/api/ciphers/restore") &&
+    method === "PUT"
+  ) {
+    const body = await bodyOf(request)
+    const ids = body && field(body, "ids")
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > 100 ||
+      ids.some(
+        (id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)
+      ) ||
+      new Set(ids).size !== ids.length
+    )
+      return failure("Invalid cipher IDs")
+    const selected = [] as {
+      id: string
+      targetVault: Awaited<
+        ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>
+      >
+      organization?: { id: string; collectionIds: string[] }
+    }[]
+    for (const id of ids as string[]) {
+      const locator = await getOrgCipherLocator(env, id)
+      if (locator) {
+        const member = await getVaultMembership(env, locator.orgId, user.id)
+        if (!member) return failure("Cipher not found", 404)
+        if (member.role > 1) return failure("Cipher editing is forbidden", 403)
+        const allowed = new Set(
+          (await listVaultCollections(env, locator.orgId, member)).map(
+            (row) => row.id
+          )
+        )
+        const visible = locator.collectionIds.filter((collectionId) =>
+          allowed.has(collectionId)
+        )
+        if (!visible.length) return failure("Cipher not found", 404)
+        const targetVault = await env.APP_DATABASE.getByName(
+          `org:${locator.orgId}`
+        )
+        if (!(await targetVault.getVaultCipher(id)))
+          return failure("Cipher not found", 404)
+        selected.push({
+          id,
+          targetVault,
+          organization: { id: locator.orgId, collectionIds: visible },
+        })
+      } else {
+        if (!(await vault.getVaultCipher(id)))
+          return failure("Cipher not found", 404)
+        selected.push({ id, targetVault: vault })
+      }
+    }
+    const restored = []
+    for (const target of selected) {
+      if (path === "/api/ciphers/delete") {
+        const result = await target.targetVault.trashVaultCipher(target.id)
+        if (!result.found || result.conflict)
+          return failure("Cipher was changed concurrently", 409)
+      } else {
+        const row = await target.targetVault.restoreVaultCipher(target.id)
+        if (!row) return failure("Cipher not found", 404)
+        restored.push(
+          await cipherResponse(
+            row,
+            target.targetVault,
+            user.id,
+            origin,
+            target.organization
+          )
+        )
+      }
+    }
+    return path === "/api/ciphers/delete"
+      ? new Response(null, { status: 204 })
+      : json(list(restored))
+  }
   const cipherMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore|\/partial)?$/.exec(
       path
