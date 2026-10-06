@@ -256,6 +256,54 @@ test("SCIM sync links only new members and revokes only directory owned access",
       ).status,
       3
     )
+    const newcomer = {
+      id: "c1850bc4-fe8c-42cd-97c4-88a61cfaa3a5",
+      userName: "newcomer@example.test",
+      displayName: "Newcomer",
+      active: true,
+    }
+    const sent = []
+    let failOnce = true
+    const mailEnv = {
+      ...env,
+      APP_URL: "https://vault.example.test",
+      EMAIL_FROM: "vault@example.test",
+      ORG_INVITATION_EMAILS_ENABLED: "true",
+      BETTER_AUTH_SECRET: "local-scim-invitation-signing-secret-2026",
+      EMAIL: {
+        send: async (message) => {
+          if (failOnce) {
+            failOnce = false
+            throw new Error("simulated mail failure")
+          }
+          sent.push(message)
+        },
+      },
+    }
+    await assert.rejects(
+      reconcileVaultDirectory(mailEnv, snapshot([newcomer])),
+      /simulated mail failure/
+    )
+    const identity = await db
+      .prepare(`SELECT * FROM vault_directory_identity WHERE external_id = ?`)
+      .bind(newcomer.id)
+      .first()
+    assert.ok(identity.membership_id)
+    assert.equal(identity.invitation_sent_at, null)
+    assert.equal(
+      (
+        await db
+          .prepare(`SELECT status FROM vault_membership WHERE id = ?`)
+          .bind(identity.membership_id)
+          .first()
+      ).status,
+      0
+    )
+    await reconcileVaultDirectory(mailEnv, snapshot([newcomer]))
+    assert.equal(sent.length, 1)
+    assert.match(sent[0].text, /accept-organization/)
+    await reconcileVaultDirectory(mailEnv, snapshot([newcomer]))
+    assert.equal(sent.length, 1)
   } finally {
     await vite?.close()
     await proxy?.dispose()

@@ -6,7 +6,13 @@ import {
   vaultMembership,
   vaultUser,
 } from "../db/schema/vault"
+import { createVaultStubUser } from "./bitwarden-auth"
 import { readVaultDirectory } from "./bitwarden-directory"
+import {
+  invitationMailEnabled,
+  invitationOrigin,
+  sendOrgInvite,
+} from "./bitwarden-invite"
 import { getVaultOrganization } from "./bitwarden-org"
 
 type DirectoryConfig = CloudflareEnv & {
@@ -29,8 +35,11 @@ export async function reconcileVaultDirectory(
   )
     return
   const orgId = config.SCIM_ORGANIZATION_ID
-  if (!(await getVaultOrganization(env, orgId)))
-    throw new Error("SCIM organization is unavailable")
+  const org = await getVaultOrganization(env, orgId)
+  if (!org) throw new Error("SCIM organization is unavailable")
+  const sendInvites =
+    config.SCIM_INVITATIONS_ENABLED === "true" && invitationMailEnabled(env)
+  if (sendInvites) invitationOrigin(env)
 
   // A failed or changing page must never revoke a membership.
   const users = await readVaultDirectory(
@@ -89,6 +98,7 @@ export async function reconcileVaultDirectory(
           name: user.name,
           active: user.active,
           membershipId: null,
+          invitationSentAt: null,
           createdAt: now,
           updatedAt: now,
         })
@@ -122,10 +132,11 @@ export async function reconcileVaultDirectory(
       if (!membership) {
         await db
           .update(vaultDirectoryIdentity)
-          .set({ membershipId: null })
+          .set({ membershipId: null, invitationSentAt: null })
           .where(eq(vaultDirectoryIdentity.id, identity.id))
           .run()
         identity.membershipId = null
+        identity.invitationSentAt = null
       } else if (
         membership?.membership.role === 2 &&
         (membership.account.email !== user.email ||
@@ -136,41 +147,74 @@ export async function reconcileVaultDirectory(
           .set({ status: 3 })
           .where(eq(vaultMembership.id, identity.membershipId))
           .run()
-        const replacement = await db
+        let replacement = await db
           .select({ id: vaultUser.id })
           .from(vaultUser)
           .where(eq(vaultUser.email, user.email))
           .get()
+        if (!replacement && sendInvites)
+          replacement = await createVaultStubUser(env, user.email, user.name)
         if (replacement && replacement.id !== membership.account.id) {
           await db
             .update(vaultDirectoryIdentity)
-            .set({ membershipId: null })
+            .set({ membershipId: null, invitationSentAt: null })
             .where(eq(vaultDirectoryIdentity.id, identity.id))
             .run()
           identity.membershipId = null
+          identity.invitationSentAt = null
         }
       } else if (
         membership?.membership.role === 2 &&
         membership.membership.status === 3
-      )
+      ) {
+        const status = membership.membership.key ? 2 : sendInvites ? 0 : 1
         await db
           .update(vaultMembership)
-          .set({ status: membership.membership.key ? 2 : 1 })
+          .set({ status })
           .where(eq(vaultMembership.id, membership.membership.id))
           .run()
+        membership.membership.status = status
+        if (status === 0) {
+          await db
+            .update(vaultDirectoryIdentity)
+            .set({ invitationSentAt: null })
+            .where(eq(vaultDirectoryIdentity.id, identity.id))
+            .run()
+          identity.invitationSentAt = null
+        }
+      }
+      if (
+        identity.membershipId &&
+        sendInvites &&
+        !identity.invitationSentAt &&
+        membership?.membership.status === 0
+      ) {
+        await sendOrgInvite(env, {
+          email: user.email,
+          orgId,
+          orgName: org.name,
+          memberId: identity.membershipId,
+          userId: membership.account.id,
+          existingUser: !!membership.account.privateKey,
+        })
+        await db
+          .update(vaultDirectoryIdentity)
+          .set({ invitationSentAt: new Date() })
+          .where(eq(vaultDirectoryIdentity.id, identity.id))
+          .run()
+      }
       if (identity.membershipId) continue
     }
     if (config.SCIM_INVITATIONS_ENABLED !== "true") continue
-    const account = await db
-      .select({
-        id: vaultUser.id,
-        publicKey: vaultUser.publicKey,
-        deletingAt: vaultUser.deletingAt,
-      })
+    let account = await db
+      .select()
       .from(vaultUser)
       .where(eq(vaultUser.email, user.email))
       .get()
-    if (!account?.publicKey || account.deletingAt) continue
+    if (!account && sendInvites)
+      account = await createVaultStubUser(env, user.email, user.name)
+    if (!account || account.deletingAt || (!sendInvites && !account.publicKey))
+      continue
     const existing = await db
       .select({ id: vaultMembership.id })
       .from(vaultMembership)
@@ -189,14 +233,29 @@ export async function reconcileVaultDirectory(
       userId: account.id,
       key: null,
       role: 2,
-      status: 1,
+      status: sendInvites ? 0 : 1,
       accessAll: false,
       createdAt: now,
     })
     const link = db
       .update(vaultDirectoryIdentity)
-      .set({ membershipId: memberId })
+      .set({ membershipId: memberId, invitationSentAt: null })
       .where(eq(vaultDirectoryIdentity.id, identity.id))
     await db.batch([insert, link])
+    if (sendInvites) {
+      await sendOrgInvite(env, {
+        email: user.email,
+        orgId,
+        orgName: org.name,
+        memberId,
+        userId: account.id,
+        existingUser: !!account.privateKey,
+      })
+      await db
+        .update(vaultDirectoryIdentity)
+        .set({ invitationSentAt: new Date() })
+        .where(eq(vaultDirectoryIdentity.id, identity.id))
+        .run()
+    }
   }
 }

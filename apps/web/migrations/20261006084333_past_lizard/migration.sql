@@ -1,0 +1,1 @@
+ALTER TABLE `vault_directory_identity` ADD `invitation_sent_at` integer;

@@ -172,6 +172,7 @@ export const vaultDirectoryIdentity = sqliteTable(
     membershipId: text("membership_id").references(() => vaultMembership.id, {
       onDelete: "set null",
     }),
+    invitationSentAt: integer("invitation_sent_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },

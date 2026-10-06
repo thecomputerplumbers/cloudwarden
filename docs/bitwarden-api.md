@@ -98,11 +98,12 @@ every page before changing memberships. It tracks directory identities in D1
 and revokes only memberships created by this sync when an identity disappears,
 is disabled, or changes email. It never revokes an owner. Set
 `SCIM_INVITATIONS_ENABLED=true` to create pending memberships for directory
-users who have already registered a vault account with a public key. Pending
-members still require owner confirmation with a client-wrapped organization
-key. Unregistered identities remain pending in D1 and are considered again on
-the next scheduled run after account creation. No invitation email is sent,
-and SCIM group-to-collection mapping is not implemented; new members start
+users. When `ORG_INVITATION_EMAILS_ENABLED=true` is also set, the sync creates
+account stubs for unregistered users, sends signed invitation links, and
+retries failed delivery. The recipient accepts before an owner confirms the
+client-wrapped organization key. With email sending disabled, only accounts
+that already have a public key become pending members, and those members are
+ready for owner confirmation. SCIM group-to-collection mapping is not yet implemented; new members start
 without collection access until an owner assigns collections. Configure the URL, token, and organization ID as
 Worker secrets in the intended environment. The token is sent only to the
 configured HTTPS source, with redirects disabled.
