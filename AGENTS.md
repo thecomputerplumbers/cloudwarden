@@ -12,6 +12,14 @@ Vinext implements the Next.js 16 API surface on Vite. Before changing runtime, r
 
 Anything you would write a `WHERE` against belongs in D1. Anything where two concurrent requests must not both read the old value belongs in the object. Better Auth _cannot_ use the Durable Object — it awaits every query from the request handler, and `durable-sqlite` is synchronous and unreachable from there.
 
+Cloudwarden's Bitwarden API adds a deliberate per-account exception. Its
+`vault_user` and `vault_session` tables live in D1; encrypted personal ciphers,
+folders, and attachment metadata live in the account's `AppDatabase` Durable
+Object, selected only after validating the Bitwarden session. The Durable
+Object serializes each account's vault mutations, while attachment bytes live
+in private R2. Do not use the starter's Better Auth session to authorize these
+routes or let a caller choose a different account's Durable Object.
+
 Drizzle 1.x RC drives both, with one config each:
 
 - `apps/web/drizzle.config.ts` → D1 modules in `db/schema/`, out to `migrations/`, applied with `wrangler d1 migrations apply`.

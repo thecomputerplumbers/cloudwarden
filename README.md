@@ -8,6 +8,11 @@ pnpm dlx shadcn@latest init --preset b0 --template next --monorepo --pointer
 
 The workspace uses vinext, React, Tailwind CSS, shadcn/ui, Turborepo, and TypeScript. It is ready for Cloudflare Workers deployment with a SQLite-backed Durable Object and Drizzle `1.0.0-rc.5-5935859`. The toolchain is managed by mise and tracks Node 26.x and pnpm 12.x.
 
+The Bitwarden-compatible server API is under development. Personal vault login,
+sync, ciphers, folders, and encrypted attachments work in local tests; the
+starter dashboard is not a web vault. See [API status](docs/bitwarden-api.md)
+for supported routes, verification, and remaining work.
+
 ## Get started
 
 ```sh

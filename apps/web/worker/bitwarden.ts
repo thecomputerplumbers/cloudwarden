@@ -292,7 +292,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (path === "/api/config" && method === "GET") {
     const origin = url.origin
     return json({
-      version: "2026.6.0",
+      version: "2026.2.0",
       server: { name: "Cloudwarden" },
       settings: { disableUserRegistration: !registrationsAllowed(env) },
       environment: {
@@ -312,7 +312,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (path === "/api/alive" && method === "GET") return json(true)
   if (path === "/api/now" && method === "GET")
     return json(new Date().toISOString())
-  if (path === "/api/version" && method === "GET") return json("2026.6.0")
+  if (path === "/api/version" && method === "GET") return json("2026.2.0")
 
   if (
     (path === "/identity/accounts/prelogin" ||
