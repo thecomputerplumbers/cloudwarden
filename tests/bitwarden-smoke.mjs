@@ -1436,10 +1436,12 @@ const otherAuthorized = (path, body, method = "POST") =>
     body: JSON.stringify(body),
   })
 
+// The web vault sends the encrypted form, which is longer than the plain name.
+const encryptedCollectionName = `2.${"i".repeat(24)}|${"c".repeat(44)}|${"m".repeat(44)}`
 const organization = await authorized("/api/organizations", "POST", {
   name: "Encrypted Team",
   billingEmail: email,
-  collectionName: "Default collection",
+  collectionName: encryptedCollectionName,
   key: "2.encrypted-organization-key",
   keys: {
     encryptedPrivateKey: "2.encrypted-organization-private-key",
@@ -1478,7 +1480,7 @@ const orgCollections = await authorized(
 )
 assert.equal(orgCollections.status, 200)
 assert.equal(orgCollections.body.data.length, 1)
-assert.equal(orgCollections.body.data[0].name, "Default collection")
+assert.equal(orgCollections.body.data[0].name, encryptedCollectionName)
 const secondCollection = await authorized(
   `/api/organizations/${orgId}/collections`,
   "POST",

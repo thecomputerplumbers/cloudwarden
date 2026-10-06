@@ -694,6 +694,9 @@ function folderResponse(row: { id: string; name: string; updatedAt: Date }) {
   }
 }
 
+// Collection names arrive encrypted, so 18 characters of text is already 116.
+const ENCRYPTED_NAME_LIMIT = 1000
+
 function list(data: unknown[]) {
   return { data, object: "list", continuationToken: null }
 }
@@ -2619,7 +2622,7 @@ export async function handleBitwarden(
       !name ||
       name.length > 100 ||
       !collectionName ||
-      collectionName.length > 100 ||
+      collectionName.length > ENCRYPTED_NAME_LIMIT ||
       !key ||
       key.length > 20_000 ||
       (billingEmail && billingEmail.length > 254) ||
@@ -3151,7 +3154,11 @@ export async function handleBitwarden(
       const body = await bodyOf(request)
       const name = body && stringField(body, "name")
       const externalId = body && stringField(body, "externalId")
-      if (!name || name.length > 100 || (externalId && externalId.length > 255))
+      if (
+        !name ||
+        name.length > ENCRYPTED_NAME_LIMIT ||
+        (externalId && externalId.length > 255)
+      )
         return failure("Invalid collection")
       const collection = await createVaultCollection(
         env,
@@ -3185,7 +3192,7 @@ export async function handleBitwarden(
         const externalId = body && stringField(body, "externalId")
         if (
           !name ||
-          name.length > 100 ||
+          name.length > ENCRYPTED_NAME_LIMIT ||
           (externalId && externalId.length > 255)
         )
           return failure("Invalid collection")
@@ -3452,7 +3459,7 @@ export async function handleBitwarden(
       const externalId = field(item, "externalId")
       if (
         !name ||
-        name.length > 100 ||
+        name.length > ENCRYPTED_NAME_LIMIT ||
         (suppliedId != null &&
           (typeof suppliedId !== "string" ||
             !/^[0-9a-f-]{36}$/i.test(suppliedId))) ||
