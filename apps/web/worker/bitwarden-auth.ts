@@ -136,6 +136,7 @@ export async function createVaultUser(
     kdfIterations: number
     kdfMemory?: number
     kdfParallelism?: number
+    emailVerified?: boolean
   }
 ) {
   const db = drizzle(env.DB)
@@ -155,6 +156,7 @@ export async function createVaultUser(
     kdfIterations: input.kdfIterations,
     kdfMemory: input.kdfMemory ?? null,
     kdfParallelism: input.kdfParallelism ?? null,
+    emailVerified: input.emailVerified ?? false,
     securityStamp: crypto.randomUUID(),
     createdAt: now,
     updatedAt: now,

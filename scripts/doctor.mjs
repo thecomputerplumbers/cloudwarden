@@ -86,6 +86,10 @@ if (environment === "local") {
     Boolean(config.vars?.EMAIL_FROM),
     "EMAIL_FROM (domain must also be verified in Cloudflare)"
   )
+  check(
+    config.vars?.SIGNUPS_VERIFY !== "false",
+    "Registration email verification enabled"
+  )
   const result = spawnSync(
     "pnpm",
     [

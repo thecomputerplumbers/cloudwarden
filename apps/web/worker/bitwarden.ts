@@ -1,3 +1,5 @@
+import { createMailer } from "@workspace/email"
+
 import {
   authenticatedVaultUser,
   beginVaultDeletion,
@@ -186,6 +188,13 @@ function registrationsAllowed(env: CloudflareEnv) {
   return (
     (env as CloudflareEnv & { SIGNUPS_ALLOWED?: string }).SIGNUPS_ALLOWED ===
     "true"
+  )
+}
+
+function registrationEmailVerificationRequired(env: CloudflareEnv) {
+  return (
+    (env as CloudflareEnv & { SIGNUPS_VERIFY?: string }).SIGNUPS_VERIFY !==
+    "false"
   )
 }
 
@@ -837,13 +846,47 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       60 * 60_000
     )
     if (!allowed.allowed) return failure("Too many registration attempts", 429)
+    const destinationAllowed = await limiter.consumeRateLimit(
+      `start-email:${normalizeEmail(email)}`,
+      5,
+      60 * 60_000
+    )
+    if (!destinationAllowed.allowed)
+      return failure("Too many registration attempts", 429)
     if (await findVaultUser(env, email))
       return failure("Registration unavailable", 409)
+    const verifyEmail = registrationEmailVerificationRequired(env)
     const token = await issueRegistrationToken(
       env,
       normalizeEmail(email),
-      name ?? null
+      name ?? null,
+      verifyEmail
     )
+    if (verifyEmail) {
+      if (!env.APP_URL || !env.EMAIL_FROM)
+        return failure("Registration email is unavailable", 503)
+      const origin = new URL(env.APP_URL).origin
+      const params = new URLSearchParams({
+        email: normalizeEmail(email),
+        token,
+      })
+      try {
+        await createMailer(
+          env.EMAIL,
+          env.EMAIL_FROM
+        )({
+          to: normalizeEmail(email),
+          subject: "Verify your Cloudwarden email",
+          message:
+            "Verify your email address to finish creating your Cloudwarden account.",
+          url: `${origin}/#/finish-signup/?${params}`,
+          label: "Verify email address",
+        })
+      } catch {
+        return failure("Registration email is unavailable", 503)
+      }
+      return new Response(null, { status: 204 })
+    }
     return request.headers.get("Accept")?.includes("application/json")
       ? json(token)
       : new Response(token, {
@@ -876,6 +919,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!registrationsAllowed(env) && !invitation)
       return failure("Registration is disabled", 403)
     const finishing = path.endsWith("/finish")
+    if (!finishing && registrationEmailVerificationRequired(env) && !invitation)
+      return failure("Email verification is required", 403)
     const verification =
       finishing && email
         ? await verifyRegistrationToken(
@@ -886,6 +931,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         : null
     if (finishing && !verification && !invitation)
       return failure("Invalid registration token", 403)
+    if (
+      finishing &&
+      registrationEmailVerificationRequired(env) &&
+      !verification?.verified &&
+      !invitation
+    )
+      return failure("Email verification is required", 403)
     const authentication = field(body, "masterPasswordAuthentication") as
       | Body
       | undefined
@@ -967,6 +1019,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
           publicKey: keys && stringField(keys, "publicKey"),
           kdf,
           kdfIterations: iterations,
+          emailVerified: !!invitation || (verification?.verified ?? false),
         })
       }
     } catch {

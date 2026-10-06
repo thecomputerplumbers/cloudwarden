@@ -32,8 +32,10 @@ codes are rate limited; recovery disables all active two-factor methods.
 TOTP codes cannot be replayed, and enrolling a factor revokes other sessions.
 Attachment links
 expire after five minutes. Registration is disabled unless
-`SIGNUPS_ALLOWED=true` is configured. Open registration currently has no email
-verification, so enable it only for a controlled local environment. Access
+`SIGNUPS_ALLOWED=true` is configured. Registration emails a signed verification
+link by default and requires that link to finish; a legacy direct registration
+request is rejected. Set `SIGNUPS_VERIFY=false` only for local development with
+simulated mail. Access
 tokens are signed JWTs that clients can decode, while refresh tokens are
 opaque random values. Both are stored as SHA-256 hashes in D1 and checked
 against the current session on every request. Access tokens expire after one

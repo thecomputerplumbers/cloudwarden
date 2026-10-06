@@ -27,7 +27,8 @@ async function key(env: CloudflareEnv) {
 export async function issueRegistrationToken(
   env: CloudflareEnv,
   email: string,
-  name: string | null
+  name: string | null,
+  verified: boolean
 ) {
   const payload = base64Url(
     encoder.encode(
@@ -35,6 +36,7 @@ export async function issueRegistrationToken(
         purpose: "cloudwarden-registration",
         email,
         name,
+        verified,
         expiresAt: Date.now() + 15 * 60_000,
       })
     )
@@ -73,10 +75,11 @@ export async function verifyRegistrationToken(
     const claims = payload as Record<string, unknown>
     return claims.purpose === "cloudwarden-registration" &&
       claims.email === email &&
+      typeof claims.verified === "boolean" &&
       typeof claims.expiresAt === "number" &&
       claims.expiresAt > Date.now() &&
       (claims.name === null || typeof claims.name === "string")
-      ? { name: claims.name as string | null }
+      ? { name: claims.name as string | null, verified: claims.verified }
       : null
   } catch {
     return null

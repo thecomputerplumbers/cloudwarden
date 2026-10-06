@@ -27,6 +27,32 @@ async function invitationMail(email, subject) {
   throw new Error(`Missing local invitation for ${email}`)
 }
 
+async function registrationTokenFor(email, name) {
+  const started = await post(
+    "/identity/accounts/register/send-verification-email",
+    {
+      email,
+      name,
+    }
+  )
+  assert.equal(started.status, 204)
+  const message = await invitationMail(email, "Verify your Cloudwarden email")
+  const link = message.match(/https?:\/\/\S+/)?.[0]
+  assert.ok(link)
+  const params = new URLSearchParams(new URL(link).hash.split("?")[1])
+  assert.equal(params.get("email"), email)
+  const token = params.get("token")
+  assert.ok(token)
+  return token
+}
+
+async function registerWithEmail(input) {
+  return post("/identity/accounts/register/finish", {
+    ...input,
+    emailVerificationToken: await registrationTokenFor(input.email, input.name),
+  })
+}
+
 const webVault = await fetch(origin)
 assert.equal(webVault.status, 200)
 const webVaultHtml = await webVault.text()
@@ -83,7 +109,19 @@ assert.equal(
 )
 
 const email = `vault-${crypto.randomUUID()}@example.test`
-const registration = await post("/identity/accounts/register", {
+assert.equal(
+  (
+    await post("/identity/accounts/register", {
+      email,
+      masterPasswordHash: "client-derived-secret",
+      key: "2.encrypted-user-key",
+      kdf: 0,
+      kdfIterations: 600_000,
+    })
+  ).status,
+  403
+)
+const registration = await registerWithEmail({
   email,
   name: "Vault Test",
   masterPasswordHash: "client-derived-secret",
@@ -98,17 +136,7 @@ const registration = await post("/identity/accounts/register", {
 assert.equal(registration.status, 200)
 
 const webEmail = `web-${crypto.randomUUID()}@example.test`
-const registrationStart = await fetch(
-  `${origin}/identity/accounts/register/send-verification-email`,
-  {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ email: webEmail, name: "Web Test" }),
-  }
-)
-assert.equal(registrationStart.status, 200)
-const registrationToken = await registrationStart.json()
-assert.equal(typeof registrationToken, "string")
+const registrationToken = await registrationTokenFor(webEmail, "Web Test")
 const finishBody = {
   email: webEmail,
   emailVerificationToken: registrationToken,
@@ -177,6 +205,12 @@ assert.equal(
   "2.encrypted-private-key"
 )
 assert.equal(tokens.access_token.split(".").length, 3)
+assert.equal(
+  JSON.parse(
+    Buffer.from(tokens.access_token.split(".")[1], "base64url").toString()
+  ).email_verified,
+  true
+)
 
 assert.equal((await call("/api/sync")).status, 401)
 let currentAccessToken = tokens.access_token
@@ -399,7 +433,7 @@ assert.equal(
 const otherEmail = `vault-${crypto.randomUUID()}@example.test`
 assert.equal(
   (
-    await post("/identity/accounts/register", {
+    await registerWithEmail({
       email: otherEmail,
       masterPasswordHash: "second-secret",
       key: "2.other-key",
@@ -778,7 +812,7 @@ assert.equal(
       orgInviteToken: `${pendingParams.get("token")}tampered`,
     })
   ).status,
-  409
+  403
 )
 assert.equal(
   (await post("/identity/accounts/register", invitedRegistration)).status,
@@ -1292,7 +1326,7 @@ assert.equal(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1), "287082")
 const emailFactorUser = `email-factor-${crypto.randomUUID()}@example.test`
 assert.equal(
   (
-    await post("/identity/accounts/register", {
+    await registerWithEmail({
       email: emailFactorUser,
       masterPasswordHash: "email-factor-secret",
       key: "2.email-factor-key",

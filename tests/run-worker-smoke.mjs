@@ -52,6 +52,8 @@ try {
       "--var",
       "SIGNUPS_ALLOWED:true",
       "--var",
+      "SIGNUPS_VERIFY:true",
+      "--var",
       "ORG_INVITATION_EMAILS_ENABLED:true",
       "--var",
       "EMAIL_2FA_ENABLED:true",
