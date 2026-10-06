@@ -38,6 +38,8 @@ export const vaultSession = sqliteTable(
       .notNull()
       .references(() => vaultUser.id, { onDelete: "cascade" }),
     deviceId: text("device_id").notNull(),
+    deviceType: text("device_type").notNull().default("unknown"),
+    clientId: text("client_id").notNull().default("unknown"),
     accessHash: text("access_hash").notNull(),
     refreshHash: text("refresh_hash").notNull(),
     accessExpiresAt: integer("access_expires_at", {

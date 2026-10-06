@@ -17,10 +17,60 @@ function bytesToHex(bytes: Uint8Array) {
 
 function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return base64Url(bytes)
+}
+
+function base64Url(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replaceAll("=", "")
+}
+
+async function accessToken(
+  env: CloudflareEnv,
+  user: VaultUser,
+  deviceId: string,
+  clientId: string,
+  deviceType: string
+) {
+  if (!env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32)
+    throw new Error("Token signing secret is not configured")
+  const now = Math.floor(Date.now() / 1000)
+  const header = base64Url(
+    encoder.encode(JSON.stringify({ alg: "HS256", typ: "JWT" }))
+  )
+  const payload = base64Url(
+    encoder.encode(
+      JSON.stringify({
+        nbf: now,
+        exp: now + ACCESS_LIFETIME_MS / 1000,
+        iss: "cloudwarden|login",
+        sub: user.id,
+        premium: true,
+        name: user.name,
+        email: user.email,
+        email_verified: false,
+        sstamp: user.securityStamp,
+        device: deviceId,
+        devicetype: deviceType,
+        client_id: clientId,
+        scope: ["api", "offline_access"],
+        amr: ["Application"],
+        jti: crypto.randomUUID(),
+      })
+    )
+  )
+  const input = `${header}.${payload}`
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(env.BETTER_AUTH_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  )
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(input))
+  return `${input}.${base64Url(new Uint8Array(signature))}`
 }
 
 export async function tokenHash(token: string) {
@@ -126,9 +176,11 @@ export async function verifyVaultPassword(
 export async function issueVaultSession(
   env: CloudflareEnv,
   user: VaultUser,
-  deviceId: string
+  deviceId: string,
+  clientId: string,
+  deviceType: string
 ) {
-  const access = randomToken()
+  const access = await accessToken(env, user, deviceId, clientId, deviceType)
   const refresh = randomToken()
   const now = Date.now()
   await drizzle(env.DB)
@@ -137,6 +189,8 @@ export async function issueVaultSession(
       id: crypto.randomUUID(),
       userId: user.id,
       deviceId,
+      deviceType,
+      clientId,
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(refresh),
       accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
@@ -155,7 +209,19 @@ export async function refreshVaultSession(env: CloudflareEnv, refresh: string) {
     .where(eq(vaultSession.refreshHash, oldHash))
     .get()
   if (!session || session.refreshExpiresAt.getTime() <= Date.now()) return null
-  const access = randomToken()
+  const user = await db
+    .select()
+    .from(vaultUser)
+    .where(eq(vaultUser.id, session.userId))
+    .get()
+  if (!user) return null
+  const access = await accessToken(
+    env,
+    user,
+    session.deviceId,
+    session.clientId,
+    session.deviceType
+  )
   const nextRefresh = randomToken()
   const now = Date.now()
   const updated = await db
@@ -178,7 +244,7 @@ export async function authenticatedVaultUser(
   env: CloudflareEnv,
   request: Request
 ) {
-  const match = /^Bearer ([-_A-Za-z0-9]+)$/i.exec(
+  const match = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
     request.headers.get("Authorization") ?? ""
   )
   if (!match) return null

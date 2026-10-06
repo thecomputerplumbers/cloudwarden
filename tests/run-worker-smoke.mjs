@@ -50,6 +50,8 @@ try {
       `APP_URL:${origin}`,
       "--var",
       "SIGNUPS_ALLOWED:true",
+      "--var",
+      "BETTER_AUTH_SECRET:local-smoke-only-signing-secret-2026",
       "--persist-to",
       storage,
     ],

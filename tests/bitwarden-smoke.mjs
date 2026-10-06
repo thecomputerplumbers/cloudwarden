@@ -31,6 +31,10 @@ const registration = await post("/identity/accounts/register", {
   name: "Vault Test",
   masterPasswordHash: "client-derived-secret",
   key: "2.encrypted-user-key",
+  keys: {
+    encryptedPrivateKey: "2.encrypted-private-key",
+    publicKey: "public-key",
+  },
   kdf: 0,
   kdfIterations: 600_000,
 })
@@ -50,9 +54,9 @@ const tokenRequest = (username, password) =>
       scope: "api offline_access",
       username,
       password,
-      device_identifier: crypto.randomUUID(),
-      device_name: "Smoke test",
-      device_type: "14",
+      deviceIdentifier: crypto.randomUUID(),
+      deviceName: "Smoke test",
+      deviceType: "14",
     }),
   })
 
@@ -62,6 +66,11 @@ assert.equal(login.status, 200)
 const tokens = await login.json()
 assert.ok(tokens.access_token)
 assert.ok(tokens.refresh_token)
+assert.equal(
+  tokens.AccountKeys.publicKeyEncryptionKeyPair.wrappedPrivateKey,
+  "2.encrypted-private-key"
+)
+assert.equal(tokens.access_token.split(".").length, 3)
 
 assert.equal((await call("/api/sync")).status, 401)
 const authorized = (path, method = "GET", body) =>
@@ -77,7 +86,7 @@ const authorized = (path, method = "GET", body) =>
 const createdFolder = await authorized("/api/folders", "POST", {
   name: "2.encrypted-folder-name",
 })
-assert.equal(createdFolder.status, 201)
+assert.equal(createdFolder.status, 200)
 
 const createdCipher = await authorized("/api/ciphers", "POST", {
   type: 1,
@@ -85,7 +94,7 @@ const createdCipher = await authorized("/api/ciphers", "POST", {
   folderId: createdFolder.body.id,
   login: { username: "2.encrypted-login" },
 })
-assert.equal(createdCipher.status, 201)
+assert.equal(createdCipher.status, 200)
 const cipherId = createdCipher.body.id
 
 const sync = await authorized("/api/sync")

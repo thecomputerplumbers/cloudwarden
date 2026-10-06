@@ -25,8 +25,10 @@ function failure(message: string, status = 400) {
 }
 
 function field(body: Body, name: string) {
+  const normalized = name.toLowerCase().replaceAll(/[^a-z0-9]/g, "")
   const key = Object.keys(body).find(
-    (candidate) => candidate.toLowerCase() === name.toLowerCase()
+    (candidate) =>
+      candidate.toLowerCase().replaceAll(/[^a-z0-9]/g, "") === normalized
   )
   return key ? body[key] : undefined
 }
@@ -66,6 +68,20 @@ function registrationsAllowed(env: CloudflareEnv) {
 }
 
 function profile(user: VaultUser) {
+  const accountKeys =
+    user.privateKey && user.publicKey
+      ? {
+          publicKeyEncryptionKeyPair: {
+            wrappedPrivateKey: user.privateKey,
+            publicKey: user.publicKey,
+            signedPublicKey: null,
+            object: "publicKeyEncryptionKeyPair",
+          },
+          securityState: null,
+          signatureKeyPair: null,
+          object: "privateKeys",
+        }
+      : null
   return {
     id: user.id,
     name: user.name,
@@ -77,6 +93,7 @@ function profile(user: VaultUser) {
     twoFactorEnabled: false,
     key: user.key,
     privateKey: user.privateKey,
+    accountKeys,
     securityStamp: user.securityStamp,
     organizations: [],
     providers: [],
@@ -93,6 +110,17 @@ function tokenResponse(
   user: VaultUser,
   tokens: { access: string; refresh: string; expiresIn: number }
 ) {
+  const accountKeys =
+    user.privateKey && user.publicKey
+      ? {
+          publicKeyEncryptionKeyPair: {
+            wrappedPrivateKey: user.privateKey,
+            publicKey: user.publicKey,
+            Object: "publicKeyEncryptionKeyPair",
+          },
+          Object: "privateKeys",
+        }
+      : null
   return {
     access_token: tokens.access,
     refresh_token: tokens.refresh,
@@ -101,6 +129,7 @@ function tokenResponse(
     scope: "api offline_access",
     Key: user.key,
     PrivateKey: user.privateKey,
+    AccountKeys: accountKeys,
     Kdf: user.kdf,
     KdfIterations: user.kdfIterations,
     KdfMemory: user.kdfMemory,
@@ -355,7 +384,9 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       return failure("Invalid registration fields")
     if (await findVaultUser(env, email))
       return failure("Registration unavailable", 409)
-    const keys = field(body, "keys") as Body | undefined
+    const keys = (field(body, "keys") ?? field(body, "userAsymmetricKeys")) as
+      | Body
+      | undefined
     try {
       await createVaultUser(env, {
         email,
@@ -394,6 +425,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const username = stringField(body, "username")
     const password = stringField(body, "password")
     const deviceId = stringField(body, "device_identifier")
+    const deviceType = stringField(body, "device_type") ?? "unknown"
+    const clientId = stringField(body, "client_id") ?? "unknown"
     if (!username || !password || !deviceId || deviceId.length > 200)
       return failure("Missing credentials")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
@@ -404,7 +437,10 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!(await verifyVaultPassword(user, password)) || !user)
       return failure("Username or password is incorrect", 400)
     return json(
-      tokenResponse(user, await issueVaultSession(env, user, deviceId))
+      tokenResponse(
+        user,
+        await issueVaultSession(env, user, deviceId, clientId, deviceType)
+      )
     )
   }
 
@@ -488,8 +524,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const id = crypto.randomUUID()
     const stored = await vault.putVaultCipher(id, JSON.stringify(body))
     return json(
-      await cipherResponse(stored.cipher!, vault, user.id, url.origin),
-      201
+      await cipherResponse(stored.cipher!, vault, user.id, url.origin)
     )
   }
 
@@ -663,7 +698,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const name = body && stringField(body, "name")
     if (!name) return failure("Invalid folder")
     const stored = await vault.putVaultFolder(crypto.randomUUID(), name)
-    return json(folderResponse(stored.folder!), 201)
+    return json(folderResponse(stored.folder!))
   }
   const folderMatch = /^\/api\/folders\/([0-9a-f-]{36})(?:\/delete)?$/.exec(
     path
