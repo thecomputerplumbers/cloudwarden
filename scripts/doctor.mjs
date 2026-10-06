@@ -156,5 +156,13 @@ if (environment === "local") {
       secrets.some((secret) => secret.name === name),
       name
     )
+  check(
+    !secrets.some((secret) => secret.name === "MAINTENANCE_MODE"),
+    "Maintenance mode cleared before release"
+  )
+  check(
+    !secrets.some((secret) => secret.name === "RECOVERY_TOKEN"),
+    "Temporary recovery credential removed before release"
+  )
 }
 process.exitCode = failures ? 1 : 0

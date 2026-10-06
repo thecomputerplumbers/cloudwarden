@@ -24,10 +24,16 @@ owner email address is still undecided; it is needed only for owner signup.
    repository, D1 databases, and R2 buckets, then replace the D1 placeholders.
 2. Set distinct `BETTER_AUTH_SECRET` Worker secrets and scoped deployment
    credentials for staging and production. Configure the required GitHub check.
-3. Deploy staging. Verify the health endpoint, Bitwarden configuration route,
-   web vault, email verification and password reset, and a native client login
+3. Deploy staging on a trusted HTTPS origin. Verify the health endpoint and
+   Bitwarden configuration route. In the bundled web vault, create a disposable
+   account and test encrypted item creation and reading, organization creation,
+   a collection and member, TOTP and WebAuthn enrollment, email verification
+   and password reset, an attachment and file Send. Test a native client login
    and vault sync. Promote the same commit to production only after the staging
-   checks pass.
+   checks pass. The web vault rejected local HTTP signup with "Insecure URL not
+   allowed"; a self-signed certificate was not used to bypass the browser
+   warning. These browser flows remain unverified until trusted staging HTTPS
+   is available.
 4. Prove recovery before relying on the service for real vault data. D1 Time
    Travel and SQLite Durable Object point-in-time recovery cover their
    respective stores. Run the [R2 snapshot procedure](recovery.md) on a quiet
