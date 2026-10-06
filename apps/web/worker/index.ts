@@ -24,6 +24,7 @@ import {
 } from "./bitwarden-org-import"
 import { pruneProtectedOtps } from "./bitwarden-protected-otp"
 import { pruneAuthRequests } from "./bitwarden-auth-request"
+import { handleVaultRecovery } from "./bitwarden-recovery"
 import {
   handleVaultNotification,
   organizationNotificationTargets,
@@ -34,6 +35,11 @@ import {
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     return observeRequest(request, async () => {
+      const path = new URL(request.url).pathname
+      if (path.startsWith("/__ops/"))
+        return path.startsWith("/__ops/recovery/")
+          ? handleVaultRecovery(request, env)
+          : new Response("Not found", { status: 404 })
       if (env.MAINTENANCE_MODE === "true")
         return Response.json(
           { error: "Vault temporarily unavailable", maintenance: true },
@@ -42,7 +48,6 @@ export default {
             headers: { "Cache-Control": "no-store", "Retry-After": "300" },
           }
         )
-      const path = new URL(request.url).pathname
       if (
         path === "/notifications/hub" ||
         path === "/notifications/anonymous-hub"

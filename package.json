@@ -16,6 +16,7 @@
     "test:worker": "pnpm build && node tests/run-worker-smoke.mjs",
     "project:init": "node scripts/init-project.mjs",
     "r2:snapshot": "node scripts/r2-snapshot.mjs",
+    "do:recovery": "node scripts/do-recovery.mjs",
     "doctor": "node scripts/doctor.mjs",
     "db:seed": "node scripts/local-data.mjs seed",
     "db:reset": "node scripts/local-data.mjs reset",

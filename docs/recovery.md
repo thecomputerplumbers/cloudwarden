@@ -50,10 +50,28 @@ pnpm --filter web exec wrangler secret delete MAINTENANCE_MODE --env staging
    `wrangler d1 time-travel info DB --timestamp=... --env staging` and review
    the rows it would restore. D1 Time Travel restoration overwrites the
    database in place, so obtain approval for that specific restore.
-3. Restore each affected account or organization Durable Object to a matching
-   point using its SQLite point-in-time bookmark. **The project does not yet
-   expose an operator path for this step**, so a full coordinated restore drill
-   remains open. Local Durable Objects cannot exercise Cloudflare's PITR log.
+3. Add a temporary `RECOVERY_TOKEN` Worker secret with at least 32 random
+   characters using `wrangler secret put RECOVERY_TOKEN --env staging`, and
+   provide the same value to the operator command through the
+   `RECOVERY_TOKEN` environment variable. This secret must be set separately
+   from `MAINTENANCE_MODE`. During maintenance, inspect a target Durable Object
+   recovery point before applying it:
+
+   ```sh
+   pnpm do:recovery staging inspect account 11111111-1111-1111-1111-111111111111 2026-10-06T00:00:00Z
+   pnpm do:recovery staging restore account 11111111-1111-1111-1111-111111111111 2026-10-06T00:00:00Z --apply
+   ```
+
+   Replace the example ID and timestamp with the real target. Use
+   `organization` for an organization Durable Object. The restore command
+   returns the target and undo bookmarks and requests a restart; save that
+   output privately, then inspect the recovered vault data before clearing
+   maintenance mode. Delete `RECOVERY_TOKEN` with
+   `wrangler secret delete RECOVERY_TOKEN --env staging` after the drill. This operator
+   path has access-control smoke coverage, but **Cloudflare's actual PITR
+   transition remains unverified on a hosted Worker**. Local Durable Objects
+   cannot exercise the PITR log.
+
 4. Copy the verified snapshot objects into the target R2 bucket using a scoped
    operator credential, then compare object count, keys, and sizes with the
    manifest. Test a Bitwarden client login, encrypted item sync, and attachment

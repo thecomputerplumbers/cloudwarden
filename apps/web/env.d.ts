@@ -11,6 +11,8 @@ interface AppSecrets {
   EMAIL_FROM?: string
   /** Temporarily reject requests and scheduled work during a coordinated backup or restore. */
   MAINTENANCE_MODE?: string
+  /** Temporary, high-entropy operator credential for Durable Object recovery. */
+  RECOVERY_TOKEN?: string
 
   /**
    * Signs session cookies. Generate with `openssl rand -base64 32`.

@@ -206,6 +206,25 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return { ok: true as const }
   }
 
+  async recoveryBookmarksAt(timestamp: number) {
+    if (!Number.isSafeInteger(timestamp) || timestamp > Date.now())
+      throw new Error("Invalid recovery timestamp")
+    return {
+      current: await this.ctx.storage.getCurrentBookmark(),
+      target: await this.ctx.storage.getBookmarkForTime(timestamp),
+    }
+  }
+
+  async scheduleRecoveryBookmark(bookmark: string) {
+    if (!/^[a-zA-Z0-9-]{16,128}$/.test(bookmark))
+      throw new Error("Invalid recovery bookmark")
+    return this.ctx.storage.onNextSessionRestoreBookmark(bookmark)
+  }
+
+  async restartForRecovery() {
+    this.ctx.abort("Cloudwarden point-in-time recovery")
+  }
+
   async getSetting(key: string) {
     return (
       this.db

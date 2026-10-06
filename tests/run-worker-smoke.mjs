@@ -114,10 +114,28 @@ try {
   const stopped = once(worker, "exit")
   process.kill(-worker.pid, "SIGTERM")
   await stopped
-  worker = spawn("pnpm", [...workerArgs, "--var", "MAINTENANCE_MODE:true"], {
-    stdio: ["ignore", log, log],
-    detached: true,
-  })
+  const recoveryToken = "local-recovery-test-token-only-2026"
+  // Wrangler routes requests through the configured custom hostname even in
+  // local dev. Match that origin only for the maintenance Worker test.
+  const built = JSON.parse(
+    readFileSync("apps/web/dist/server/wrangler.json", "utf8")
+  )
+  const maintenanceOrigin = `http://${new URL(built.vars.APP_URL).hostname}`
+  worker = spawn(
+    "pnpm",
+    [
+      ...workerArgs.map((argument) =>
+        argument === `APP_URL:${origin}`
+          ? `APP_URL:${maintenanceOrigin}`
+          : argument
+      ),
+      "--var",
+      "MAINTENANCE_MODE:true",
+      "--var",
+      `RECOVERY_TOKEN:${recoveryToken}`,
+    ],
+    { stdio: ["ignore", log, log], detached: true }
+  )
   let maintenance = false
   for (let attempt = 0; attempt < 100; attempt++) {
     if (worker.exitCode !== null)
@@ -142,7 +160,40 @@ try {
   })
   if (blockedWrite.status !== 503)
     throw new Error("Maintenance mode did not block vault writes")
+  const recoveryUrl = `${origin}/__ops/recovery/inspect`
+  const recoveryTarget = JSON.stringify({
+    kind: "account",
+    id: "11111111-1111-1111-1111-111111111111",
+    at: new Date().toISOString(),
+  })
+  const unauthenticated = await fetch(recoveryUrl, {
+    method: "POST",
+    body: recoveryTarget,
+  })
+  const wrongToken = await fetch(recoveryUrl, {
+    method: "POST",
+    headers: { Authorization: "Bearer wrong-token" },
+    body: recoveryTarget,
+  })
+  const invalidTarget = await fetch(recoveryUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${recoveryToken}` },
+    body: JSON.stringify({ kind: "wrong", id: "wrong", at: "wrong" }),
+  })
+  const missingTarget = await fetch(recoveryUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${recoveryToken}` },
+    body: recoveryTarget,
+  })
+  if (
+    unauthenticated.status !== 404 ||
+    wrongToken.status !== 404 ||
+    invalidTarget.status !== 400 ||
+    missingTarget.status !== 404
+  )
+    throw new Error("Recovery operator gate failed")
   console.log("Maintenance mode blocked vault reads and writes")
+  console.log("Recovery operator endpoint rejected unauthenticated requests")
   passed = true
 } finally {
   if (worker?.pid) {
