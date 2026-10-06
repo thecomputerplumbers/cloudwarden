@@ -32,6 +32,15 @@ export async function GET() {
       sql`select user_id, access_code_hash, expires_at from vault_auth_request limit 0`
     )
     await getDb().run(
+      sql`select user_id, recovery_code from vault_webauthn_factor limit 0`
+    )
+    await getDb().run(
+      sql`select user_id, credential_id, public_key from vault_webauthn_credential limit 0`
+    )
+    await getDb().run(
+      sql`select user_id, challenge, expires_at from vault_webauthn_challenge limit 0`
+    )
+    await getDb().run(
       sql`select user_id, device_id, device_type from vault_device limit 0`
     )
     await getDb().run(sql`select id, lease_until from vault_org_import limit 0`)
@@ -69,9 +78,17 @@ export async function GET() {
   const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(
     env.APP_URL ?? ""
   )
+  let r2 = { ok: false }
+  try {
+    await env.VAULT_ATTACHMENTS.head("__cloudwarden_healthcheck_missing__")
+    r2 = { ok: true }
+  } catch {
+    /* Missing or inaccessible attachment bucket. */
+  }
   const ok =
     d1.ok &&
     durableObject.ok &&
+    r2.ok &&
     (local ||
       (auth.secretConfigured &&
         auth.emailBound &&
@@ -79,7 +96,15 @@ export async function GET() {
         (!product.features.billing || billing.configured)))
 
   return Response.json(
-    { ok, buildId: env.BUILD_ID ?? "local", d1, durableObject, auth, billing },
+    {
+      ok,
+      buildId: env.BUILD_ID ?? "local",
+      d1,
+      durableObject,
+      r2,
+      auth,
+      billing,
+    },
     { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } }
   )
 }

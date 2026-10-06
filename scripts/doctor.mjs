@@ -29,6 +29,10 @@ check(
   config.send_email?.some((binding) => binding.name === "EMAIL"),
   "EMAIL binding"
 )
+check(
+  config.r2_buckets?.some((binding) => binding.binding === "VAULT_ATTACHMENTS"),
+  "VAULT_ATTACHMENTS binding"
+)
 if (environment === "local") {
   const file = resolve(root, "apps/web/.dev.vars")
   check(

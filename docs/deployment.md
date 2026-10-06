@@ -50,8 +50,9 @@ The command validates target configuration/secret inventory, code checks, and
 the isolated Wrangler Worker smoke test. It builds with the selected
 CLOUDFLARE_ENV and verifies the generated artifact's Worker and D1 identities.
 It then applies D1 migrations, deploys that exact built artifact, and checks
-the canonical HTTPS health endpoint for the expected commit marker and
-configured dependencies. It also checks the Bitwarden config route and bundled
+the canonical HTTPS health endpoint for the expected commit marker, D1 schema,
+Durable Object, attachment bucket, and configured dependencies. It also checks
+the Bitwarden config route and bundled
 web vault page. No production deploy occurs on a plain push.
 
 Use backward-compatible migrations: the old Worker can still serve requests
