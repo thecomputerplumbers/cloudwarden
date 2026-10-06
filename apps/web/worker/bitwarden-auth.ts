@@ -219,6 +219,33 @@ export async function updateVaultPassword(
   return true
 }
 
+export async function updateVaultProfile(
+  env: CloudflareEnv,
+  userId: string,
+  name: string
+) {
+  return drizzle(env.DB)
+    .update(vaultUser)
+    .set({ name, updatedAt: new Date() })
+    .where(eq(vaultUser.id, userId))
+    .returning()
+    .get()
+}
+
+export async function updateVaultKeys(
+  env: CloudflareEnv,
+  userId: string,
+  privateKey: string,
+  publicKey: string
+) {
+  return drizzle(env.DB)
+    .update(vaultUser)
+    .set({ privateKey, publicKey, updatedAt: new Date() })
+    .where(eq(vaultUser.id, userId))
+    .returning()
+    .get()
+}
+
 export async function issueVaultSession(
   env: CloudflareEnv,
   user: VaultUser,

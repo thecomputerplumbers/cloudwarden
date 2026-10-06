@@ -379,7 +379,34 @@ const changedProfile = await call("/api/accounts/profile", {
   headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
 })
 assert.equal(changedProfile.body.key, "2.new-user-key")
+const profileEdit = await call("/api/accounts/profile", {
+  method: "PUT",
+  headers: {
+    Authorization: `Bearer ${recoveredTokens.access_token}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "Updated Vault User" }),
+})
+assert.equal(profileEdit.status, 200)
+assert.equal(profileEdit.body.name, "Updated Vault User")
+const newKeys = await call("/api/accounts/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${recoveredTokens.access_token}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    encryptedPrivateKey: "2.new-private-key",
+    publicKey: "new-public-key",
+  }),
+})
+assert.equal(newKeys.status, 200)
+assert.equal(newKeys.body.privateKey, "2.new-private-key")
+const finalProfile = await call("/api/accounts/profile", {
+  headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
+})
+assert.equal(finalProfile.body.privateKey, "2.new-private-key")
 
 console.log(
-  "Bitwarden auth, vault lifecycle, password change, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, account changes, two-factor, and isolation passed"
 )

@@ -8,7 +8,7 @@ receives a master password.
 
 Current routes cover server configuration, legacy account registration,
 prelogin, password login, master password and PBKDF2 setting changes, rotating
-refresh tokens, profile, personal vault
+refresh tokens, profile and asymmetric key updates, personal vault
 sync, personal ciphers, folders, and encrypted attachments stored in private
 R2. It also supports authenticator app TOTP enrollment, login challenges,
 single-use recovery codes, and disabling the factor. TOTP codes cannot be

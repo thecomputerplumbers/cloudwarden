@@ -5,7 +5,9 @@ import {
   issueVaultSession,
   normalizeEmail,
   refreshVaultSession,
+  updateVaultKeys,
   updateVaultPassword,
+  updateVaultProfile,
   verifyVaultPassword,
   type VaultUser,
 } from "./bitwarden-auth"
@@ -650,6 +652,30 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
 
   if (path === "/api/accounts/profile" && method === "GET")
     return json(profile(user, !!(await getTotp(env, user.id))))
+  if (
+    path === "/api/accounts/profile" &&
+    (method === "POST" || method === "PUT")
+  ) {
+    const body = await bodyOf(request)
+    const name = body && stringField(body, "name")
+    if (!name || name.length > 50) return failure("Invalid profile name")
+    const updated = await updateVaultProfile(env, user.id, name)
+    return json(profile(updated, !!(await getTotp(env, user.id))))
+  }
+  if (path === "/api/accounts/keys" && method === "POST") {
+    const body = await bodyOf(request)
+    const privateKey = body && stringField(body, "encryptedPrivateKey")
+    const publicKey = body && stringField(body, "publicKey")
+    if (
+      !privateKey ||
+      privateKey.length > 20_000 ||
+      !publicKey ||
+      publicKey.length > 20_000
+    )
+      return failure("Invalid account keys")
+    await updateVaultKeys(env, user.id, privateKey, publicKey)
+    return json({ privateKey, publicKey, object: "keys" })
+  }
   if (path === "/api/accounts/revision-date" && method === "GET")
     return json(
       new Date(
