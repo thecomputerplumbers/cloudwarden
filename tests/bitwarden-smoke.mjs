@@ -3526,6 +3526,107 @@ const currentAuthorized = (path, body, method = "POST") =>
     },
     body: JSON.stringify(body),
   })
+const purgeFolder = await currentAuthorized("/api/folders", {
+  name: "2.purge-folder",
+})
+assert.equal(purgeFolder.status, 200)
+const purgeCipher = await currentAuthorized("/api/ciphers", {
+  type: 1,
+  name: "2.purge-cipher",
+  folderId: purgeFolder.body.id,
+})
+assert.equal(purgeCipher.status, 200)
+const purgeAttachment = await currentAuthorized(
+  `/api/ciphers/${purgeCipher.body.id}/attachment/v2`,
+  { fileName: "2.purge-file", fileSize: 3, key: "2.purge-key" }
+)
+assert.equal(purgeAttachment.status, 200)
+const purgeUpload = new FormData()
+purgeUpload.append("data", new File([new Uint8Array([3, 2, 1])], "purge.bin"))
+assert.equal(
+  (
+    await fetch(`${origin}/api${purgeAttachment.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
+      body: purgeUpload,
+    })
+  ).status,
+  204
+)
+const purgeAttachmentUrl = (
+  await currentAuthorized(
+    `/api/ciphers/${purgeCipher.body.id}`,
+    undefined,
+    "GET"
+  )
+).body.attachments[0].url
+assert.equal((await fetch(purgeAttachmentUrl)).status, 200)
+const retainedSend = await currentAuthorized("/api/sends", {
+  ...sendBody,
+  name: "2.send-survives-purge",
+})
+assert.equal(retainedSend.status, 200)
+const beforePurge = await currentAuthorized("/api/sync", undefined, "GET")
+const beforePurgeRevision = (
+  await currentAuthorized("/api/accounts/revision-date", undefined, "GET")
+).body
+assert.equal(
+  (
+    await currentAuthorized("/api/ciphers/purge", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await currentAuthorized("/api/ciphers/purge?organizationId=" + orgId, {
+      masterPasswordHash: "third-secret",
+    })
+  ).status,
+  501
+)
+assert.equal(
+  (
+    await currentAuthorized("/api/ciphers/purge", {
+      masterPasswordHash: "third-secret",
+    })
+  ).status,
+  200
+)
+const afterPurge = await currentAuthorized("/api/sync", undefined, "GET")
+assert.deepEqual(afterPurge.body.folders, [])
+assert.equal(
+  afterPurge.body.ciphers.some((row) => row.id === purgeCipher.body.id),
+  false
+)
+assert.deepEqual(
+  afterPurge.body.ciphers
+    .filter((row) => row.organizationId)
+    .map((row) => row.id)
+    .sort(),
+  beforePurge.body.ciphers
+    .filter((row) => row.organizationId)
+    .map((row) => row.id)
+    .sort()
+)
+assert.equal(
+  (
+    await currentAuthorized(
+      `/api/sends/${retainedSend.body.id}`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  200
+)
+assert.equal((await fetch(purgeAttachmentUrl)).status, 404)
+assert.ok(
+  Date.parse(
+    (await currentAuthorized("/api/accounts/revision-date", undefined, "GET"))
+      .body
+  ) > Date.parse(beforePurgeRevision)
+)
 const deletionCipher = await currentAuthorized("/api/ciphers", {
   type: 1,
   name: "2.to-be-deleted",

@@ -418,6 +418,13 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .get()
     if (preferenceRevision)
       latest = Math.max(latest, preferenceRevision.updatedAt.getTime())
+    const purgeRevision = this.db
+      .select({ updatedAt: schema.setting.updatedAt })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:purge-revision"))
+      .get()
+    if (purgeRevision)
+      latest = Math.max(latest, purgeRevision.updatedAt.getTime())
     return latest
   }
 
@@ -1233,12 +1240,65 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
         .from(schema.setting)
         .where(eq(schema.setting.key, pendingKey))
         .get()
-    ) {
-      const alarm = await this.ctx.storage.getAlarm()
-      if (alarm === null || alarm > Date.now() + 15_000)
-        await this.ctx.storage.setAlarm(Date.now() + 1000)
-    }
+    )
+      await this.scheduleCipherDeletionCleanup()
     return found
+  }
+
+  private async scheduleCipherDeletionCleanup() {
+    const alarm = await this.ctx.storage.getAlarm()
+    if (alarm === null || alarm > Date.now() + 15_000)
+      await this.ctx.storage.setAlarm(Date.now() + 1000)
+  }
+
+  async purgePersonalVault(userId: string) {
+    this.assertVaultActive()
+    if (!/^[0-9a-f-]{36}$/i.test(userId)) throw new Error("Invalid vault owner")
+    const now = new Date(Math.max(Date.now(), (await this.vaultRevision()) + 1))
+    const removed = this.db.transaction((tx) => {
+      this.assertVaultActive()
+      if (
+        tx
+          .select({ key: schema.setting.key })
+          .from(schema.setting)
+          .where(like(schema.setting.key, "vault:share:%"))
+          .limit(1)
+          .get()
+      )
+        return null
+      const ciphers = tx
+        .select({ id: schema.vaultCipher.id })
+        .from(schema.vaultCipher)
+        .all()
+      tx.delete(schema.vaultAttachmentToken).run()
+      tx.delete(schema.vaultAttachment).run()
+      tx.delete(schema.vaultCipherArchive).run()
+      tx.delete(schema.vaultCipher).run()
+      tx.delete(schema.vaultFolder).run()
+      tx.update(schema.vaultCipherPreference)
+        .set({ folderId: null, updatedAt: now })
+        .run()
+      tx.insert(schema.setting)
+        .values({ key: "vault:purge-revision", value: "1", updatedAt: now })
+        .onConflictDoUpdate({
+          target: schema.setting.key,
+          set: { updatedAt: now },
+        })
+        .run()
+      for (const cipher of ciphers)
+        tx.insert(schema.setting)
+          .values({
+            key: `vault:delete:cipher:${cipher.id}`,
+            value: `${userId}/${cipher.id}/`,
+            updatedAt: now,
+          })
+          .onConflictDoNothing()
+          .run()
+      return ciphers.length
+    })
+    if (removed === null) return { busy: true as const }
+    if (removed) await this.scheduleCipherDeletionCleanup()
+    return { busy: false as const, removed }
   }
 
   async restoreVaultCipher(id: string) {

@@ -3266,6 +3266,17 @@ export async function handleBitwarden(
     })
   }
 
+  if (path === "/api/ciphers/purge" && method === "POST") {
+    if (url.searchParams.has("organizationId"))
+      return failure("Organization vault purge is unavailable", 501)
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    const result = await vault.purgePersonalVault(user.id)
+    return result.busy
+      ? failure("Cipher transfer is in progress", 409)
+      : new Response(null, { status: 200 })
+  }
   if (path === "/api/ciphers" && method === "GET") {
     const data = await vault.listVault()
     return json(
