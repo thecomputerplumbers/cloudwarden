@@ -1845,10 +1845,92 @@ assert.equal(
   200
 )
 const memberSync = await otherAuthorized("/api/sync", undefined, "GET")
+const memberCipher = memberSync.body.ciphers.find(
+  (cipher) => cipher.id === sharedId
+)
+assert.equal(memberCipher.edit, true)
+assert.equal(memberCipher.viewPassword, true)
+assert.deepEqual(memberCipher.permissions, { delete: true, restore: true })
+assert.equal(memberSync.body.collections[0].readOnly, false)
+assert.equal(memberSync.body.collections[0].hidePasswords, false)
+const memberCreated = await otherAuthorized("/api/ciphers", {
+  type: 1,
+  name: "2.member-created-shared",
+  organizationId: orgId,
+  collectionIds: [secondCollection.body.id],
+  login: { username: "2.member-created-user" },
+})
+assert.equal(memberCreated.status, 200)
+const memberEdited = await otherAuthorized(
+  `/api/ciphers/${memberCreated.body.id}`,
+  {
+    type: 1,
+    name: "2.member-edited-shared",
+    organizationId: orgId,
+    collectionIds: [secondCollection.body.id],
+    login: { username: "2.member-created-user" },
+  },
+  "PUT"
+)
+assert.equal(memberEdited.status, 200)
+assert.equal(memberEdited.body.name, "2.member-edited-shared")
+const memberAttachment = await otherAuthorized(
+  `/api/ciphers/${memberCreated.body.id}/attachment/v2`,
+  { fileName: "2.member-file", fileSize: 3, key: "2.member-key" }
+)
+assert.equal(memberAttachment.status, 200)
+const memberUpload = new FormData()
+memberUpload.append("data", new File([new Uint8Array([6, 5, 4])], "member.bin"))
 assert.equal(
-  (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "PUT"))
-    .status,
-  403
+  (
+    await fetch(`${origin}/api${memberAttachment.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${otherTokens.access_token}` },
+      body: memberUpload,
+    })
+  ).status,
+  204
+)
+const memberAttachmentUrl = (
+  await otherAuthorized(
+    `/api/ciphers/${memberCreated.body.id}`,
+    undefined,
+    "GET"
+  )
+).body.attachments[0].url
+assert.deepEqual(
+  new Uint8Array(await (await fetch(memberAttachmentUrl)).arrayBuffer()),
+  new Uint8Array([6, 5, 4])
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${memberCreated.body.id}/collections_v2`,
+      { collectionIds: [secondCollection.body.id] },
+      "PUT"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      "/api/ciphers/delete",
+      { ids: [memberCreated.body.id] },
+      "PUT"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      "/api/ciphers/restore",
+      { ids: [memberCreated.body.id] },
+      "PUT"
+    )
+  ).status,
+  200
 )
 assert.equal(
   (
@@ -2024,7 +2106,7 @@ const groupInput = {
     {
       id: secondCollection.body.id,
       readOnly: true,
-      hidePasswords: false,
+      hidePasswords: true,
       manage: false,
     },
   ],
@@ -2052,10 +2134,100 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
 )
+const groupRestrictedCipher = await otherAuthorized(
+  `/api/ciphers/${sharedId}`,
+  undefined,
+  "GET"
+)
+assert.equal(groupRestrictedCipher.body.edit, false)
+assert.equal(groupRestrictedCipher.body.viewPassword, false)
+assert.deepEqual(groupRestrictedCipher.body.permissions, {
+  delete: false,
+  restore: false,
+})
+assert.equal(
+  (
+    await otherAuthorized("/api/ciphers", {
+      type: 1,
+      name: "2.group-read-only-denied",
+      organizationId: orgId,
+      collectionIds: [secondCollection.body.id],
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.collections[0]
+    .hidePasswords,
+  true
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [
+        { id: secondCollection.body.id, readOnly: false, hidePasswords: false },
+      ],
+    })
+  ).status,
+  200
+)
+const directOverride = await otherAuthorized(
+  `/api/ciphers/${sharedId}`,
+  undefined,
+  "GET"
+)
+assert.equal(directOverride.body.edit, true)
+assert.equal(directOverride.body.viewPassword, true)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .edit,
+  false
+)
 const groupAttachmentLink = (
   await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
 ).body.attachments[0].url
 assert.equal((await fetch(groupAttachmentLink)).status, 200)
+const managedGroup = {
+  ...groupInput,
+  collections: [{ ...groupInput.collections[0], manage: true }],
+}
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/groups/${groupId}`,
+      "PUT",
+      managedGroup
+    )
+  ).status,
+  200
+)
+const managedCipher = await otherAuthorized(
+  `/api/ciphers/${sharedId}`,
+  undefined,
+  "GET"
+)
+assert.equal(managedCipher.body.edit, true)
+assert.equal(managedCipher.body.viewPassword, false)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${sharedId}/collections_v2`,
+      { collectionIds: [secondCollection.body.id] },
+      "PUT"
+    )
+  ).status,
+  200
+)
 const groupRevoked = await authorized(
   `/api/organizations/${orgId}/groups/${groupId}`,
   "PUT",
@@ -2085,6 +2257,11 @@ assert.deepEqual(
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .edit,
+  false
 )
 assert.equal(
   (
@@ -2169,9 +2346,54 @@ assert.equal(
   200
 )
 assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .edit,
+  false
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .viewPassword,
+  true
+)
+assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, sharedCipherBody, "PUT"))
     .status,
   403
+)
+assert.equal(
+  (await otherAuthorized("/api/ciphers/delete", { ids: [sharedId] }, "PUT"))
+    .status,
+  403
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${sharedId}/collections_v2`,
+      { collectionIds: [secondCollection.body.id] },
+      "PUT"
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await otherAuthorized(`/api/ciphers/${sharedId}/attachment/v2`, {
+      fileName: "2.denied",
+      fileSize: 1,
+      key: "2.denied",
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${sharedId}/partial`,
+      { folderId: null, favorite: false },
+      "PUT"
+    )
+  ).status,
+  200
 )
 const removedMemberSocket = await notificationSocket(
   `/notifications/hub?access_token=${encodeURIComponent(otherTokens.access_token)}`

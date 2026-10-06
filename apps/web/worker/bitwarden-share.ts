@@ -9,6 +9,7 @@ import {
   getVaultMembership,
   getVaultOrganization,
   validOrgCollections,
+  writableVaultCollections,
 } from "./bitwarden-org"
 
 export async function startVaultShare(
@@ -201,9 +202,14 @@ async function completeClaimedVaultShare(
     )
     if (
       !member ||
-      member.role > 1 ||
       !(await getVaultOrganization(env, transfer.orgId)) ||
       !(await validOrgCollections(
+        env,
+        transfer.orgId,
+        member,
+        snapshot.collectionIds
+      )) ||
+      !(await writableVaultCollections(
         env,
         transfer.orgId,
         member,

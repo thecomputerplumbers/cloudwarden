@@ -67,6 +67,7 @@ import {
   startVaultSso,
 } from "./bitwarden-sso"
 import {
+  cipherCollectionRights,
   collectionResponse,
   beginOrgDeletion,
   acceptOrgMember,
@@ -87,6 +88,7 @@ import {
   listOrgMembers,
   orgMemberCollections,
   listVaultCollections,
+  listVaultCollectionRights,
   listVaultOrganizations,
   organizationResponse,
   profileOrganizationResponse,
@@ -94,6 +96,7 @@ import {
   setOrgCipherCollections,
   setOrgMemberCollections,
   validOrgCollections,
+  writableVaultCollections,
   updateVaultCollection,
   updateVaultOrganization,
 } from "./bitwarden-org"
@@ -558,7 +561,12 @@ async function cipherResponse(
   env: CloudflareEnv,
   userId: string,
   origin: string,
-  organization?: { id: string; collectionIds: string[] }
+  organization?: {
+    id: string
+    collectionIds: string[]
+    edit: boolean
+    viewPassword: boolean
+  }
 ) {
   const data = JSON.parse(row.payload) as Body
   const attachments = await vault.listVaultAttachments(row.id)
@@ -610,9 +618,12 @@ async function cipherResponse(
     archivedDate:
       (await vault.getVaultCipherArchivedAt(row.id, userId))?.toISOString() ??
       null,
-    edit: true,
-    viewPassword: true,
-    permissions: { delete: true, restore: true },
+    edit: organization?.edit ?? true,
+    viewPassword: organization?.viewPassword ?? true,
+    permissions: {
+      delete: organization?.edit ?? true,
+      restore: organization?.edit ?? true,
+    },
   }
 }
 
@@ -624,10 +635,10 @@ async function sharedCipherResponses(
   const organizations = await listVaultOrganizations(env, userId)
   const responses = await Promise.all(
     organizations.map(async ({ organization, membership }) => {
-      const allowed = new Set(
-        (await listVaultCollections(env, organization.id, membership)).map(
-          (row) => row.id
-        )
+      const rights = await listVaultCollectionRights(
+        env,
+        organization.id,
+        membership
       )
       const locators = await listOrgCipherLocators(env, organization.id)
       const orgVault = await env.APP_DATABASE.getByName(
@@ -635,15 +646,14 @@ async function sharedCipherResponses(
       )
       const ciphers = await Promise.all(
         locators.map(async (locator) => {
-          if (!locator || !locator.collectionIds.some((id) => allowed.has(id)))
-            return null
+          if (!locator) return null
+          const access = cipherCollectionRights(rights, locator.collectionIds)
+          if (!access) return null
           const row = await orgVault.getVaultCipher(locator.id)
           return row
             ? cipherResponse(row, orgVault, env, userId, origin, {
                 id: organization.id,
-                collectionIds: locator.collectionIds.filter((id) =>
-                  allowed.has(id)
-                ),
+                ...access,
               })
             : null
         })
@@ -653,6 +663,19 @@ async function sharedCipherResponses(
   )
   return responses.flat()
 }
+
+async function orgCipherView(
+  env: CloudflareEnv,
+  orgId: string,
+  member: NonNullable<Awaited<ReturnType<typeof getVaultMembership>>>,
+  collectionIds: string[]
+) {
+  const rights = await listVaultCollectionRights(env, orgId, member)
+  const access = cipherCollectionRights(rights, collectionIds)
+  return access ? { id: orgId, ...access } : null
+}
+
+type OrgCipherView = NonNullable<Awaited<ReturnType<typeof orgCipherView>>>
 
 function folderResponse(row: { id: string; name: string; updatedAt: Date }) {
   return {
@@ -2428,11 +2451,22 @@ export async function handleBitwarden(
     const organizations = await listVaultOrganizations(env, user.id)
     const collections = (
       await Promise.all(
-        organizations.map(async ({ organization, membership }) =>
-          (await listVaultCollections(env, organization.id, membership)).map(
-            (collection) => collectionResponse(collection, membership)
+        organizations.map(async ({ organization, membership }) => {
+          const rights = await listVaultCollectionRights(
+            env,
+            organization.id,
+            membership
           )
-        )
+          return (
+            await listVaultCollections(env, organization.id, membership)
+          ).map((collection) =>
+            collectionResponse(
+              collection,
+              membership,
+              rights.get(collection.id)!
+            )
+          )
+        })
       )
     ).flat()
     return json(list(collections))
@@ -2488,6 +2522,11 @@ export async function handleBitwarden(
     if (membership.role > 1 || !membership.accessAll)
       return failure("Organization export is forbidden", 403)
     const collections = await listVaultCollections(env, orgId, membership)
+    const collectionRights = await listVaultCollectionRights(
+      env,
+      orgId,
+      membership
+    )
     const locators = await listOrgCipherLocators(env, orgId)
     const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
     const ciphers = await Promise.all(
@@ -2498,13 +2537,19 @@ export async function handleBitwarden(
           ? cipherResponse(row, orgVault, env, user.id, origin, {
               id: orgId,
               collectionIds: locator.collectionIds,
+              edit: true,
+              viewPassword: true,
             })
           : null
       })
     )
     return json({
       collections: collections.map((collection) =>
-        collectionResponse(collection, membership)
+        collectionResponse(
+          collection,
+          membership,
+          collectionRights.get(collection.id)!
+        )
       ),
       ciphers: ciphers.filter((cipher) => cipher !== null),
     })
@@ -2939,14 +2984,21 @@ export async function handleBitwarden(
         ? json(organizationResponse(updated))
         : failure("Organization not found", 404)
     }
-    if (path.endsWith("/collections") && method === "GET")
+    if (path.endsWith("/collections") && method === "GET") {
+      const rights = await listVaultCollectionRights(env, orgId, membership)
       return json(
         list(
           (await listVaultCollections(env, orgId, membership)).map(
-            (collection) => collectionResponse(collection, membership)
+            (collection) =>
+              collectionResponse(
+                collection,
+                membership,
+                rights.get(collection.id)!
+              )
           )
         )
       )
+    }
     if (path.endsWith("/collections") && method === "POST") {
       if (membership.role !== 0 && membership.role !== 1)
         return failure("Collection management is forbidden", 403)
@@ -2961,18 +3013,24 @@ export async function handleBitwarden(
         name,
         externalId ?? null
       )
-      return json(collectionResponse(collection, membership))
+      return json(
+        collectionResponse(collection, membership, {
+          readOnly: false,
+          hidePasswords: false,
+          manage: true,
+        })
+      )
     }
     const collectionId = organizationMatch[2]
     if (collectionId) {
       const collection = await getVaultCollection(env, orgId, collectionId)
       if (!collection) return failure("Collection not found", 404)
-      const visible = (await listVaultCollections(env, orgId, membership)).some(
-        (row) => row.id === collectionId
-      )
-      if (!visible) return failure("Collection not found", 404)
+      const rights = (
+        await listVaultCollectionRights(env, orgId, membership)
+      ).get(collectionId)
+      if (!rights) return failure("Collection not found", 404)
       if (method === "GET")
-        return json(collectionResponse(collection, membership))
+        return json(collectionResponse(collection, membership, rights))
       if (membership.role !== 0 && membership.role !== 1)
         return failure("Collection management is forbidden", 403)
       if (method === "PUT" || method === "POST") {
@@ -2993,7 +3051,7 @@ export async function handleBitwarden(
           externalId ?? null
         )
         return updated
-          ? json(collectionResponse(updated, membership))
+          ? json(collectionResponse(updated, membership, rights))
           : failure("Collection not found", 404)
       }
       if (method === "DELETE") {
@@ -3127,11 +3185,22 @@ export async function handleBitwarden(
     const organizations = await listVaultOrganizations(env, user.id)
     const collections = (
       await Promise.all(
-        organizations.map(async ({ organization, membership }) =>
-          (await listVaultCollections(env, organization.id, membership)).map(
-            (collection) => collectionResponse(collection, membership)
+        organizations.map(async ({ organization, membership }) => {
+          const rights = await listVaultCollectionRights(
+            env,
+            organization.id,
+            membership
           )
-        )
+          return (
+            await listVaultCollections(env, organization.id, membership)
+          ).map((collection) =>
+            collectionResponse(
+              collection,
+              membership,
+              rights.get(collection.id)!
+            )
+          )
+        })
       )
     ).flat()
     return json({
@@ -3404,13 +3473,16 @@ export async function handleBitwarden(
     if (orgId) {
       const member = await getVaultMembership(env, orgId, user.id)
       if (!member) return failure("Organization not found", 404)
-      if (member.role > 1) return failure("Cipher creation is forbidden", 403)
       const collectionIds = collectionIdsField(body)
       if (
         !collectionIds ||
         !(await validOrgCollections(env, orgId, member, collectionIds))
       )
         return failure("Invalid collections")
+      if (!(await writableVaultCollections(env, orgId, member, collectionIds)))
+        return failure("Cipher creation is forbidden", 403)
+      const view = await orgCipherView(env, orgId, member, collectionIds)
+      if (!view) return failure("Invalid collections")
       const folderId = folderIdField(body)
       const favorite = favoriteField(body)
       if (folderId === false || favorite === null)
@@ -3438,10 +3510,14 @@ export async function handleBitwarden(
           )
             return failure("Folder changed concurrently", 409)
         return json(
-          await cipherResponse(stored.cipher!, orgVault, env, user.id, origin, {
-            id: orgId,
-            collectionIds,
-          })
+          await cipherResponse(
+            stored.cipher!,
+            orgVault,
+            env,
+            user.id,
+            origin,
+            view
+          )
         )
       } catch (error) {
         await deleteOrgCipherLocator(env, id)
@@ -3496,10 +3572,11 @@ export async function handleBitwarden(
       orgId = target
     }
     const member = await getVaultMembership(env, orgId!, user.id)
-    if (!member || member.role > 1)
-      return failure("Cipher sharing is forbidden", 403)
+    if (!member) return failure("Cipher sharing is forbidden", 403)
     if (!(await validOrgCollections(env, orgId!, member, collectionIds)))
       return failure("Invalid collections")
+    if (!(await writableVaultCollections(env, orgId!, member, collectionIds)))
+      return failure("Cipher sharing is forbidden", 403)
     for (const raw of rawCiphers) {
       const cipher = raw as Body
       const id = stringField(cipher, "id")!
@@ -3537,10 +3614,11 @@ export async function handleBitwarden(
     )
       return failure("Invalid shared cipher")
     const member = await getVaultMembership(env, orgId, user.id)
-    if (!member || member.role > 1)
-      return failure("Cipher sharing is forbidden", 403)
+    if (!member) return failure("Cipher sharing is forbidden", 403)
     if (!(await validOrgCollections(env, orgId, member, collectionIds)))
       return failure("Invalid collections")
+    if (!(await writableVaultCollections(env, orgId, member, collectionIds)))
+      return failure("Cipher sharing is forbidden", 403)
     const folderId = folderIdField(data)
     const favorite = favoriteField(data)
     if (folderId === false || favorite === null)
@@ -3601,6 +3679,8 @@ export async function handleBitwarden(
     }
     const locator = await getOrgCipherLocator(env, id)
     if (!locator) return failure("Cipher transfer will retry", 503)
+    const view = await orgCipherView(env, orgId, member, locator.collectionIds)
+    if (!view) return failure("Cipher not found", 404)
     const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
     const shared = await orgVault.getVaultCipher(id)
     if (shared && (folderId !== undefined || favorite !== undefined))
@@ -3613,12 +3693,7 @@ export async function handleBitwarden(
       )
         return failure("Folder changed concurrently", 409)
     return shared
-      ? json(
-          await cipherResponse(shared, orgVault, env, user.id, origin, {
-            id: orgId,
-            collectionIds: locator.collectionIds,
-          })
-        )
+      ? json(await cipherResponse(shared, orgVault, env, user.id, origin, view))
       : failure("Cipher transfer will retry", 503)
   }
 
@@ -3629,7 +3704,15 @@ export async function handleBitwarden(
     if (!locator) return failure("Cipher not found", 404)
     const member = await getVaultMembership(env, locator.orgId, user.id)
     if (!member) return failure("Cipher not found", 404)
-    if (member.role > 1) return failure("Collection editing is forbidden", 403)
+    const currentView = await orgCipherView(
+      env,
+      locator.orgId,
+      member,
+      locator.collectionIds
+    )
+    if (!currentView) return failure("Cipher not found", 404)
+    if (!currentView.manage && (!currentView.edit || !currentView.viewPassword))
+      return failure("Collection editing is forbidden", 403)
     const body = await bodyOf(request)
     const collectionIds = body && collectionIdsField(body)
     if (
@@ -3637,6 +3720,22 @@ export async function handleBitwarden(
       !(await validOrgCollections(env, locator.orgId, member, collectionIds))
     )
       return failure("Invalid collections")
+    if (
+      !(await writableVaultCollections(
+        env,
+        locator.orgId,
+        member,
+        collectionIds
+      ))
+    )
+      return failure("Collection editing is forbidden", 403)
+    const nextView = await orgCipherView(
+      env,
+      locator.orgId,
+      member,
+      collectionIds
+    )
+    if (!nextView) return failure("Collection editing is forbidden", 403)
     const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
     const cipher = await orgVault.getVaultCipher(locator.id)
     if (!cipher) return failure("Cipher not found", 404)
@@ -3647,10 +3746,7 @@ export async function handleBitwarden(
       env,
       user.id,
       origin,
-      {
-        id: locator.orgId,
-        collectionIds,
-      }
+      nextView
     )
     return json(
       collectionUpdateMatch[2]
@@ -3670,24 +3766,13 @@ export async function handleBitwarden(
     const locator = await getOrgCipherLocator(env, sharedCipherMatch[1]!)
     if (locator) {
       const member = await getVaultMembership(env, locator.orgId, user.id)
-      const available =
+      const view =
         member &&
-        new Set(
-          (await listVaultCollections(env, locator.orgId, member)).map(
-            (row) => row.id
-          )
-        )
-      const visible =
-        available && locator.collectionIds.filter((id) => available.has(id))
-      if (!visible?.length) return failure("Cipher not found", 404)
+        (await orgCipherView(env, locator.orgId, member, locator.collectionIds))
+      if (!view) return failure("Cipher not found", 404)
       const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
       const response = async (cipher: CipherRow) =>
-        json(
-          await cipherResponse(cipher, orgVault, env, user.id, origin, {
-            id: locator.orgId,
-            collectionIds: visible,
-          })
-        )
+        json(await cipherResponse(cipher, orgVault, env, user.id, origin, view))
       if (method === "GET") {
         const cipher = await orgVault.getVaultCipher(locator.id)
         return cipher ? response(cipher) : failure("Cipher not found", 404)
@@ -3715,8 +3800,7 @@ export async function handleBitwarden(
         const cipher = await orgVault.getVaultCipher(locator.id)
         return cipher ? response(cipher) : failure("Cipher not found", 404)
       }
-      if (!member || member.role > 1)
-        return failure("Cipher editing is forbidden", 403)
+      if (!view.edit) return failure("Cipher editing is forbidden", 403)
       if (path.endsWith("/restore") && method === "PUT") {
         const restored = await orgVault.restoreVaultCipher(locator.id)
         return restored ? response(restored) : failure("Cipher not found", 404)
@@ -3792,27 +3876,16 @@ export async function handleBitwarden(
     const locator = await getOrgCipherLocator(env, cipherId)
     const member =
       locator && (await getVaultMembership(env, locator.orgId, user.id))
-    const available =
-      member &&
-      new Set(
-        (await listVaultCollections(env, locator!.orgId, member)).map(
-          (row) => row.id
-        )
-      )
-    const visible =
+    const organization =
       locator &&
-      available &&
-      locator.collectionIds.filter((id) => available.has(id))
-    if (locator && !visible?.length) return failure("Cipher not found", 404)
+      member &&
+      (await orgCipherView(env, locator.orgId, member, locator.collectionIds))
+    if (locator && !organization) return failure("Cipher not found", 404)
     const attachmentVault = locator
       ? await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
       : vault
-    const organization =
-      locator && visible
-        ? { id: locator.orgId, collectionIds: visible }
-        : undefined
     const objectPrefix = locator ? `org/${locator.orgId}` : user.id
-    const canEdit = !locator || (member && member.role <= 1)
+    const canEdit = !locator || !!organization?.edit
     const cipher = await attachmentVault.getVaultCipher(cipherId)
     if (!cipher || cipher.deletedAt) return failure("Cipher not found", 404)
     const response = async () =>
@@ -3823,7 +3896,7 @@ export async function handleBitwarden(
           env,
           user.id,
           origin,
-          organization
+          organization ?? undefined
         )
       )
     if (attachmentId === "v2" && method === "POST") {
@@ -3860,7 +3933,7 @@ export async function handleBitwarden(
           env,
           user.id,
           origin,
-          organization
+          organization ?? undefined
         ),
       })
     }
@@ -3961,22 +4034,20 @@ export async function handleBitwarden(
       targetVault: Awaited<
         ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>
       >
-      organization?: { id: string; collectionIds: string[] }
+      organization?: OrgCipherView
     }[]
     for (const id of ids as string[]) {
       const locator = await getOrgCipherLocator(env, id)
       if (locator) {
         const member = await getVaultMembership(env, locator.orgId, user.id)
         if (!member) return failure("Cipher not found", 404)
-        const allowed = new Set(
-          (await listVaultCollections(env, locator.orgId, member)).map(
-            (row) => row.id
-          )
+        const organization = await orgCipherView(
+          env,
+          locator.orgId,
+          member,
+          locator.collectionIds
         )
-        const visible = locator.collectionIds.filter((collectionId) =>
-          allowed.has(collectionId)
-        )
-        if (!visible.length) return failure("Cipher not found", 404)
+        if (!organization) return failure("Cipher not found", 404)
         const targetVault = await env.APP_DATABASE.getByName(
           `org:${locator.orgId}`
         )
@@ -3985,7 +4056,7 @@ export async function handleBitwarden(
         selected.push({
           id,
           targetVault,
-          organization: { id: locator.orgId, collectionIds: visible },
+          organization,
         })
       } else {
         const cipher = await vault.getVaultCipher(id)
@@ -4090,23 +4161,22 @@ export async function handleBitwarden(
       targetVault: Awaited<
         ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>
       >
-      organization?: { id: string; collectionIds: string[] }
+      organization?: OrgCipherView
     }[]
     for (const id of ids as string[]) {
       const locator = await getOrgCipherLocator(env, id)
       if (locator) {
         const member = await getVaultMembership(env, locator.orgId, user.id)
         if (!member) return failure("Cipher not found", 404)
-        if (member.role > 1) return failure("Cipher editing is forbidden", 403)
-        const allowed = new Set(
-          (await listVaultCollections(env, locator.orgId, member)).map(
-            (row) => row.id
-          )
+        const organization = await orgCipherView(
+          env,
+          locator.orgId,
+          member,
+          locator.collectionIds
         )
-        const visible = locator.collectionIds.filter((collectionId) =>
-          allowed.has(collectionId)
-        )
-        if (!visible.length) return failure("Cipher not found", 404)
+        if (!organization) return failure("Cipher not found", 404)
+        if (!organization.edit)
+          return failure("Cipher editing is forbidden", 403)
         const targetVault = await env.APP_DATABASE.getByName(
           `org:${locator.orgId}`
         )
@@ -4115,7 +4185,7 @@ export async function handleBitwarden(
         selected.push({
           id,
           targetVault,
-          organization: { id: locator.orgId, collectionIds: visible },
+          organization,
         })
       } else {
         if (!(await vault.getVaultCipher(id)))

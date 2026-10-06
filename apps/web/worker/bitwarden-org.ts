@@ -461,7 +461,7 @@ export async function listVaultCollections(
   membership: Membership
 ) {
   const db = drizzle(env.DB)
-  if (membership.accessAll)
+  if (membership.accessAll || membership.role <= 1)
     return db
       .select()
       .from(vaultCollection)
@@ -521,6 +521,145 @@ export async function listVaultCollections(
       [...rows, ...groupRows].map((row) => [row.collection.id, row.collection])
     ).values(),
   ]
+}
+
+export type VaultCollectionRights = {
+  readOnly: boolean
+  hidePasswords: boolean
+  manage: boolean
+}
+
+export async function listVaultCollectionRights(
+  env: CloudflareEnv,
+  orgId: string,
+  membership: Membership
+) {
+  const rights = new Map<string, VaultCollectionRights>()
+  if (membership.orgId !== orgId || membership.status !== 2) return rights
+  const collections = await listVaultCollections(env, orgId, membership)
+  const db = drizzle(env.DB)
+  const groups = await db
+    .select({ id: vaultGroup.id, accessAll: vaultGroup.accessAll })
+    .from(vaultGroupMember)
+    .innerJoin(vaultGroup, eq(vaultGroup.id, vaultGroupMember.groupId))
+    .where(
+      and(
+        eq(vaultGroupMember.membershipId, membership.id),
+        eq(vaultGroup.orgId, orgId)
+      )
+    )
+    .all()
+  if (
+    membership.role <= 1 ||
+    membership.accessAll ||
+    groups.some((group) => group.accessAll)
+  ) {
+    for (const collection of collections)
+      rights.set(collection.id, {
+        readOnly: false,
+        hidePasswords: false,
+        manage: true,
+      })
+    return rights
+  }
+  const direct = await db
+    .select({
+      id: vaultCollectionMember.collectionId,
+      readOnly: vaultCollectionMember.readOnly,
+      hidePasswords: vaultCollectionMember.hidePasswords,
+    })
+    .from(vaultCollectionMember)
+    .innerJoin(
+      vaultCollection,
+      eq(vaultCollection.id, vaultCollectionMember.collectionId)
+    )
+    .where(
+      and(
+        eq(vaultCollectionMember.membershipId, membership.id),
+        eq(vaultCollection.orgId, orgId)
+      )
+    )
+    .all()
+  const directById = new Map(direct.map((entry) => [entry.id, entry]))
+  const groupRows = groups.length
+    ? await db
+        .select({
+          id: vaultGroupCollection.collectionId,
+          readOnly: vaultGroupCollection.readOnly,
+          hidePasswords: vaultGroupCollection.hidePasswords,
+          manage: vaultGroupCollection.manage,
+        })
+        .from(vaultGroupCollection)
+        .innerJoin(
+          vaultCollection,
+          eq(vaultCollection.id, vaultGroupCollection.collectionId)
+        )
+        .where(
+          and(
+            eq(vaultCollection.orgId, orgId),
+            inArray(
+              vaultGroupCollection.groupId,
+              groups.map((group) => group.id)
+            )
+          )
+        )
+        .all()
+    : []
+  const groupById = new Map<string, VaultCollectionRights>()
+  for (const entry of groupRows) {
+    const previous = groupById.get(entry.id)
+    groupById.set(entry.id, {
+      readOnly: (previous?.readOnly ?? true) && entry.readOnly,
+      hidePasswords: (previous?.hidePasswords ?? true) && entry.hidePasswords,
+      manage: (previous?.manage ?? false) || entry.manage,
+    })
+  }
+  for (const collection of collections) {
+    const directGrant = directById.get(collection.id)
+    if (directGrant)
+      rights.set(collection.id, {
+        readOnly: directGrant.readOnly,
+        hidePasswords: directGrant.hidePasswords,
+        manage: false,
+      })
+    else {
+      const groupGrant = groupById.get(collection.id)
+      if (groupGrant) rights.set(collection.id, groupGrant)
+    }
+  }
+  return rights
+}
+
+export function cipherCollectionRights(
+  rights: Map<string, VaultCollectionRights>,
+  collectionIds: string[]
+) {
+  const visible = collectionIds.filter((id) => rights.has(id))
+  if (!visible.length) return null
+  const grants = visible.map((id) => rights.get(id)!)
+  const readOnly = grants.every((grant) => grant.readOnly)
+  const hidePasswords = grants.every((grant) => grant.hidePasswords)
+  const manage = grants.some((grant) => grant.manage)
+  return {
+    collectionIds: visible,
+    edit: !readOnly || manage,
+    viewPassword: !hidePasswords,
+    manage,
+  }
+}
+
+export async function writableVaultCollections(
+  env: CloudflareEnv,
+  orgId: string,
+  membership: Membership,
+  collectionIds: string[]
+) {
+  if (!collectionIds.length || collectionIds.length > 50) return false
+  const rights = await listVaultCollectionRights(env, orgId, membership)
+  return collectionIds.every((id) => {
+    const grant = rights.get(id)
+    return grant && (!grant.readOnly || grant.manage)
+  })
 }
 
 export async function createVaultCollection(
@@ -687,7 +826,11 @@ export function profileOrganizationResponse(
   }
 }
 
-export function collectionResponse(collection: Collection, member: Membership) {
+export function collectionResponse(
+  collection: Collection,
+  member: Membership,
+  rights: VaultCollectionRights
+) {
   return {
     id: collection.id,
     organizationId: collection.orgId,
@@ -695,9 +838,9 @@ export function collectionResponse(collection: Collection, member: Membership) {
     externalId: collection.externalId,
     type: 0,
     defaultUserCollectionEmail: null,
-    readOnly: !member.accessAll,
-    hidePasswords: false,
-    manage: member.role === 0,
+    readOnly: rights.readOnly,
+    hidePasswords: rights.hidePasswords,
+    manage: member.role <= 1 && rights.manage,
     object: "collectionDetails",
   }
 }

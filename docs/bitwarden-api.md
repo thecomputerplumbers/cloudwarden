@@ -144,8 +144,13 @@ recheck confirmed membership; only owners and admins can create collections.
 Shared cipher IDs and collection assignments live in D1; encrypted cipher data
 resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
-and edit shared ciphers. Each user's personal Durable Object stores folder and
-favorite preferences for shared ciphers. Shared partial updates and batch
+and edit shared ciphers; confirmed members can do so in collections with write
+grants. Direct grants take precedence over group grants for the same collection.
+Cipher and collection responses expose the member's read-only and hidden-password
+flags, and mutation routes enforce write grants. Collection reassignment also
+requires an editable cipher with visible passwords or a management grant. Each
+user's personal Durable Object stores folder and favorite preferences for
+shared ciphers. Shared partial updates and batch
 folder moves change only that user's preferences; deleting a personal folder
 clears its shared cipher assignments. Shared attachments use private R2 objects
 under an organization prefix; download links recheck the requester's current collection
