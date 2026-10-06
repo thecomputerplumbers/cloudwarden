@@ -6,3 +6,4 @@
  */
 
 export * from "./app"
+export * from "./vault"

@@ -1,0 +1,54 @@
+import {
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core"
+
+// Bitwarden credentials are separate from the starter's browser sessions. The
+// client supplies a derived master-password hash; the server stores only a
+// second, salted hash of that value.
+export const vaultUser = sqliteTable(
+  "vault_user",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    name: text("name").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    passwordSalt: text("password_salt").notNull(),
+    key: text("key").notNull(),
+    privateKey: text("private_key"),
+    publicKey: text("public_key"),
+    kdf: integer("kdf").notNull(),
+    kdfIterations: integer("kdf_iterations").notNull(),
+    kdfMemory: integer("kdf_memory"),
+    kdfParallelism: integer("kdf_parallelism"),
+    securityStamp: text("security_stamp").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [uniqueIndex("vault_user_email_unique").on(table.email)]
+)
+
+export const vaultSession = sqliteTable(
+  "vault_session",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    deviceId: text("device_id").notNull(),
+    accessHash: text("access_hash").notNull(),
+    refreshHash: text("refresh_hash").notNull(),
+    accessExpiresAt: integer("access_expires_at", {
+      mode: "timestamp_ms",
+    }).notNull(),
+    refreshExpiresAt: integer("refresh_expires_at", {
+      mode: "timestamp_ms",
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_session_access_unique").on(table.accessHash),
+    uniqueIndex("vault_session_refresh_unique").on(table.refreshHash),
+  ]
+)
