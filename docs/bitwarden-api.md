@@ -77,8 +77,12 @@ access, and organization deletion removes those objects. Owners and admins can
 change a shared cipher's collection assignments; the new mapping takes effect
 for reads and attachment links immediately. Attachment tokens are bound to the
 requesting user in the Durable Object; changing the user ID in a download URL
-cannot transfer access. Moving personal ciphers into an
-organization is not yet supported.
+cannot transfer access. `POST` and `PUT /api/ciphers/:id/share` move an existing
+personal cipher into an organization collection. The client supplies an
+organization-encrypted cipher and rewrapped attachment keys. A D1 transfer
+record and a frozen source cipher let the scheduled handler resume an
+interrupted R2 copy or source cleanup. Organization and account deletion first
+settle pending transfers.
 Organization metadata and public-key reads, owner edits, and global collection
 listing are available for client administration screens.
 Owners and admins can rename collections and delete empty ones. Only an owner

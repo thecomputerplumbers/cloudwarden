@@ -98,6 +98,7 @@ import {
   sendEmailLogin,
   verifyEmailLogin,
 } from "./bitwarden-email"
+import { completeVaultShare, startVaultShare } from "./bitwarden-share"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -2246,6 +2247,92 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(
       await cipherResponse(stored.cipher!, vault, user.id, url.origin)
     )
+  }
+
+  const shareMatch = /^\/api\/ciphers\/([0-9a-f-]{36})\/share$/.exec(path)
+  if (shareMatch && (method === "POST" || method === "PUT")) {
+    const id = shareMatch[1]!
+    const body = await bodyOf(request)
+    const cipher = body && field(body, "cipher")
+    const collectionIds = body && collectionIdsField(body)
+    if (!cipher || typeof cipher !== "object" || Array.isArray(cipher))
+      return failure("Invalid shared cipher")
+    const data = cipher as Body
+    const orgId = stringField(data, "organizationId")
+    if (
+      !orgId ||
+      !stringField(data, "name") ||
+      !numberField(data, "type") ||
+      field(data, "folderId") ||
+      !collectionIds
+    )
+      return failure("Invalid shared cipher")
+    const member = await getVaultMembership(env, orgId, user.id)
+    if (!member || member.role > 1)
+      return failure("Cipher sharing is forbidden", 403)
+    if (!(await validOrgCollections(env, orgId, member, collectionIds)))
+      return failure("Invalid collections")
+    const existing = await getOrgCipherLocator(env, id)
+    if (!existing) {
+      const rawAttachments = field(data, "attachments2")
+      if (
+        rawAttachments != null &&
+        (typeof rawAttachments !== "object" || Array.isArray(rawAttachments))
+      )
+        return failure("Invalid attachment keys")
+      const attachmentKeys: Record<string, { fileName: string; key: string }> =
+        {}
+      for (const [attachmentId, raw] of Object.entries(
+        (rawAttachments ?? {}) as Body
+      )) {
+        if (
+          !/^[0-9a-f-]{36}$/i.test(attachmentId) ||
+          !raw ||
+          typeof raw !== "object" ||
+          Array.isArray(raw)
+        )
+          return failure("Invalid attachment keys")
+        const fileName = stringField(raw as Body, "fileName")
+        const key = stringField(raw as Body, "key")
+        if (!fileName || !key) return failure("Invalid attachment keys")
+        attachmentKeys[attachmentId] = { fileName, key }
+      }
+      const prepared = await startVaultShare(env, {
+        cipherId: id,
+        userId: user.id,
+        orgId,
+        collectionIds,
+        payload: JSON.stringify(data),
+        attachmentKeys,
+        lastKnownRevisionDate: stringField(data, "lastKnownRevisionDate"),
+      })
+      if (prepared === "missing") return failure("Cipher not found", 404)
+      if (prepared === "conflict")
+        return failure("Cipher was changed concurrently", 409)
+      if (prepared === "invalid") return failure("Invalid shared cipher")
+      if (prepared === "busy")
+        return failure("Cipher transfer is in progress", 409)
+      try {
+        if (!(await completeVaultShare(env, id)))
+          return failure("Cipher transfer could not complete", 409)
+      } catch {
+        return failure("Cipher transfer will retry", 503)
+      }
+    } else if (existing.orgId !== orgId) {
+      return failure("Organization mismatch", 409)
+    }
+    const locator = await getOrgCipherLocator(env, id)
+    if (!locator) return failure("Cipher transfer will retry", 503)
+    const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
+    const shared = await orgVault.getVaultCipher(id)
+    return shared
+      ? json(
+          await cipherResponse(shared, orgVault, user.id, url.origin, {
+            id: orgId,
+            collectionIds: locator.collectionIds,
+          })
+        )
+      : failure("Cipher transfer will retry", 503)
   }
 
   const collectionUpdateMatch =

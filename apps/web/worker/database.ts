@@ -1,10 +1,22 @@
 import { DurableObject } from "cloudflare:workers"
-import { and, eq, lt } from "drizzle-orm"
+import { and, eq, like, lt } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/durable-sqlite"
 import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 
 import migrations from "../drizzle/migrations.js"
 import * as schema from "./schema"
+
+type VaultShare = {
+  orgId: string
+  collectionIds: string[]
+  payload: string
+  attachments: {
+    id: string
+    fileName: string
+    key: string
+    size: number
+  }[]
+}
 
 function constantTimeEqual(a: string, b: string) {
   if (a.length !== b.length) return false
@@ -119,6 +131,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultSend).run()
       tx.delete(schema.vaultCipher).run()
       tx.delete(schema.vaultFolder).run()
+      tx.delete(schema.setting)
+        .where(like(schema.setting.key, "vault:share:%"))
+        .run()
     })
   }
 
@@ -465,6 +480,159 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     )
   }
 
+  private vaultShareKey(id: string) {
+    return `vault:share:${id}`
+  }
+
+  private assertCipherNotSharing(id: string) {
+    if (
+      this.db
+        .select({ key: schema.setting.key })
+        .from(schema.setting)
+        .where(eq(schema.setting.key, this.vaultShareKey(id)))
+        .get()
+    )
+      throw new Error("Cipher transfer is in progress")
+  }
+
+  async prepareVaultShare(
+    id: string,
+    input: {
+      orgId: string
+      collectionIds: string[]
+      payload: string
+      attachmentKeys: Record<string, { fileName: string; key: string }>
+      lastKnownRevisionDate?: string
+    }
+  ) {
+    this.assertVaultActive()
+    if (input.payload.length > 1_000_000) return "invalid" as const
+    const source = this.db
+      .select()
+      .from(schema.vaultCipher)
+      .where(eq(schema.vaultCipher.id, id))
+      .get()
+    if (!source || source.deletedAt) return "missing" as const
+    if (
+      input.lastKnownRevisionDate &&
+      (Number.isNaN(Date.parse(input.lastKnownRevisionDate)) ||
+        source.updatedAt.getTime() - Date.parse(input.lastKnownRevisionDate) >
+          1000)
+    )
+      return "conflict" as const
+    const attachments = this.db
+      .select()
+      .from(schema.vaultAttachment)
+      .where(eq(schema.vaultAttachment.cipherId, id))
+      .all()
+    if (attachments.some((attachment) => !attachment.uploaded))
+      return "busy" as const
+    const sharedAttachments: VaultShare["attachments"] = []
+    for (const attachment of attachments) {
+      const rotated = input.attachmentKeys[attachment.id]
+      if (!rotated?.fileName || !rotated.key) return "invalid" as const
+      sharedAttachments.push({
+        id: attachment.id,
+        fileName: rotated.fileName,
+        key: rotated.key,
+        size: attachment.size,
+      })
+    }
+    const snapshot: VaultShare = {
+      orgId: input.orgId,
+      collectionIds: input.collectionIds,
+      payload: input.payload,
+      attachments: sharedAttachments,
+    }
+    const stored = this.db
+      .insert(schema.setting)
+      .values({
+        key: this.vaultShareKey(id),
+        value: JSON.stringify(snapshot),
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ key: schema.setting.key })
+      .get()
+    return stored ? ("prepared" as const) : ("busy" as const)
+  }
+
+  async getVaultShare(id: string): Promise<VaultShare | null> {
+    const stored = this.db
+      .select({ value: schema.setting.value })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, this.vaultShareKey(id)))
+      .get()
+    return stored ? (JSON.parse(stored.value) as VaultShare) : null
+  }
+
+  async finishVaultShare(id: string) {
+    this.assertVaultActive()
+    this.db.transaction((tx) => {
+      const share = tx
+        .select({ key: schema.setting.key })
+        .from(schema.setting)
+        .where(eq(schema.setting.key, this.vaultShareKey(id)))
+        .get()
+      if (!share) throw new Error("Cipher transfer is unavailable")
+      const attachments = tx
+        .select({ id: schema.vaultAttachment.id })
+        .from(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.cipherId, id))
+        .all()
+      for (const attachment of attachments)
+        tx.delete(schema.vaultAttachmentToken)
+          .where(eq(schema.vaultAttachmentToken.attachmentId, attachment.id))
+          .run()
+      tx.delete(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.cipherId, id))
+        .run()
+      tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
+    })
+  }
+
+  async clearVaultShare(id: string) {
+    this.db
+      .delete(schema.setting)
+      .where(eq(schema.setting.key, this.vaultShareKey(id)))
+      .run()
+  }
+
+  async stageSharedCipher(
+    id: string,
+    payload: string,
+    attachments: VaultShare["attachments"]
+  ) {
+    this.assertVaultActive()
+    if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
+    const now = new Date()
+    this.db.transaction((tx) => {
+      tx.insert(schema.vaultCipher)
+        .values({ id, payload, revision: 1, createdAt: now, updatedAt: now })
+        .onConflictDoNothing()
+        .run()
+      for (const attachment of attachments)
+        tx.insert(schema.vaultAttachment)
+          .values({
+            ...attachment,
+            cipherId: id,
+            uploaded: true,
+            createdAt: now,
+          })
+          .onConflictDoNothing()
+          .run()
+    })
+  }
+
+  async removeUnpublishedSharedCipher(id: string) {
+    this.db.transaction((tx) => {
+      tx.delete(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.cipherId, id))
+        .run()
+      tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
+    })
+  }
+
   async putVaultCipher(
     id: string,
     payload: string,
@@ -472,6 +640,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     lastKnownRevisionDate?: string
   ) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(id)
     if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
     const now = new Date()
     const existing = this.db
@@ -520,6 +689,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async trashVaultCipher(id: string, expectedRevision?: number) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(id)
     const existing = this.db
       .select()
       .from(schema.vaultCipher)
@@ -548,6 +718,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async restoreVaultCipher(id: string) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(id)
     const existing = this.db
       .select()
       .from(schema.vaultCipher)
@@ -621,6 +792,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async deleteVaultFolder(id: string) {
     this.assertVaultActive()
+    for (const cipher of this.db.select().from(schema.vaultCipher).all()) {
+      const payload = JSON.parse(cipher.payload) as Record<string, unknown>
+      const folderKey = Object.keys(payload).find(
+        (key) => key.toLowerCase() === "folderid"
+      )
+      if (folderKey && payload[folderKey] === id)
+        this.assertCipherNotSharing(cipher.id)
+    }
     const deleted = !!this.db
       .delete(schema.vaultFolder)
       .where(eq(schema.vaultFolder.id, id))
@@ -656,6 +835,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     size: number
   }) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(input.cipherId)
     if (
       !input.fileName ||
       input.fileName.length > 10_000 ||
@@ -705,6 +885,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async completeVaultAttachment(id: string, cipherId: string) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(cipherId)
     return !!this.db
       .update(schema.vaultAttachment)
       .set({ uploaded: true })
@@ -721,6 +902,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async deleteVaultAttachment(id: string, cipherId: string) {
     this.assertVaultActive()
+    this.assertCipherNotSharing(cipherId)
     this.db
       .delete(schema.vaultAttachmentToken)
       .where(eq(schema.vaultAttachmentToken.attachmentId, id))

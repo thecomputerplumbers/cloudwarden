@@ -12,6 +12,7 @@ import { cleanupVaultDeletion } from "./bitwarden-delete"
 import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
 import { pruneVaultSsoFlows } from "./bitwarden-sso"
 import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
+import { completeVaultShare, pendingVaultShares } from "./bitwarden-share"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -46,6 +47,13 @@ export default {
       await reconcileVaultDirectory(env)
     } catch {
       console.error("SCIM directory sync will retry")
+    }
+    for (const transfer of await pendingVaultShares(env)) {
+      try {
+        await completeVaultShare(env, transfer.cipherId)
+      } catch {
+        console.error("Cipher transfer will retry")
+      }
     }
     for (const organization of await deletingOrganizations(env)) {
       try {

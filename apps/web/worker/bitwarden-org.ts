@@ -8,8 +8,10 @@ import {
   vaultOrgCipher,
   vaultOrgCipherCollection,
   vaultOrganization,
+  vaultCipherTransfer,
   vaultUser,
 } from "../db/schema/vault"
+import { settleVaultShares } from "./bitwarden-share"
 
 export type Organization = typeof vaultOrganization.$inferSelect
 export type Membership = typeof vaultMembership.$inferSelect
@@ -45,6 +47,7 @@ export async function deletingOrganizations(env: CloudflareEnv) {
 }
 
 export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
+  if (!(await settleVaultShares(env, { orgId }))) return false
   const vault = await env.APP_DATABASE.getByName(`org:${orgId}`)
   await vault.clearPersonalVault()
   let empty = false
@@ -62,16 +65,17 @@ export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
     )
   }
   if (!empty) return false
-  await drizzle(env.DB)
+  return !!(await drizzle(env.DB)
     .delete(vaultOrganization)
     .where(
       and(
         eq(vaultOrganization.id, orgId),
-        isNotNull(vaultOrganization.deletingAt)
+        isNotNull(vaultOrganization.deletingAt),
+        sql`not exists (select 1 from ${vaultCipherTransfer} pending where pending.org_id = ${orgId})`
       )
     )
-    .run()
-  return true
+    .returning({ id: vaultOrganization.id })
+    .get())
 }
 
 export async function listOrgMembers(env: CloudflareEnv, orgId: string) {

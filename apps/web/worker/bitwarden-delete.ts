@@ -1,9 +1,11 @@
 import { finishVaultDeletion } from "./bitwarden-auth"
+import { settleVaultShares } from "./bitwarden-share"
 
 // Idempotent across Worker restarts. The D1 deletion marker blocks new sessions,
 // and the Durable Object fence prevents an in-flight request from restoring
 // vault rows after they have been cleared.
 export async function cleanupVaultDeletion(env: CloudflareEnv, userId: string) {
+  if (!(await settleVaultShares(env, { userId }))) return false
   const vault = await env.APP_DATABASE.getByName(`vault:${userId}`)
   await vault.clearPersonalVault()
 
@@ -22,6 +24,5 @@ export async function cleanupVaultDeletion(env: CloudflareEnv, userId: string) {
     if (!empty) return false
   }
 
-  await finishVaultDeletion(env, userId)
-  return true
+  return finishVaultDeletion(env, userId)
 }

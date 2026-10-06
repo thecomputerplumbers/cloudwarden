@@ -1,7 +1,12 @@
 import { drizzle } from "drizzle-orm/d1"
 import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 
-import { vaultMembership, vaultSession, vaultUser } from "../db/schema/vault"
+import {
+  vaultCipherTransfer,
+  vaultMembership,
+  vaultSession,
+  vaultUser,
+} from "../db/schema/vault"
 import {
   discoverVaultOidc,
   openVaultOidcRefresh,
@@ -294,10 +299,17 @@ export async function deletingVaultUsers(env: CloudflareEnv) {
 }
 
 export async function finishVaultDeletion(env: CloudflareEnv, id: string) {
-  await drizzle(env.DB)
+  return !!(await drizzle(env.DB)
     .delete(vaultUser)
-    .where(and(eq(vaultUser.id, id), isNotNull(vaultUser.deletingAt)))
-    .run()
+    .where(
+      and(
+        eq(vaultUser.id, id),
+        isNotNull(vaultUser.deletingAt),
+        sql`not exists (select 1 from ${vaultCipherTransfer} pending where pending.user_id = ${id})`
+      )
+    )
+    .returning({ id: vaultUser.id })
+    .get())
 }
 
 export async function verifyVaultPassword(

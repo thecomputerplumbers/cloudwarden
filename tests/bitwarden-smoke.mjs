@@ -494,6 +494,113 @@ assert.equal(
 )
 assert.equal(orgSync.body.collections.length, 2)
 assert.equal((await authorized("/api/collections")).body.data.length, 2)
+const personalToShare = await authorized("/api/ciphers", "POST", {
+  type: 1,
+  name: "2.personal-before-share",
+  login: { username: "2.personal-login" },
+})
+assert.equal(personalToShare.status, 200)
+const transferId = personalToShare.body.id
+const transferAttachment = await authorized(
+  `/api/ciphers/${transferId}/attachment/v2`,
+  "POST",
+  { fileName: "2.personal-file", fileSize: 3, key: "2.personal-file-key" }
+)
+assert.equal(transferAttachment.status, 200)
+const transferUpload = new FormData()
+transferUpload.append("data", new File([new Uint8Array([3, 2, 1])], "move.bin"))
+assert.equal(
+  (
+    await fetch(`${origin}/api${transferAttachment.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${currentAccessToken}` },
+      body: transferUpload,
+    })
+  ).status,
+  204
+)
+const personalAttachmentLink = (await authorized(`/api/ciphers/${transferId}`))
+  .body.attachments[0].url
+const shareInput = {
+  cipher: {
+    type: 1,
+    name: "2.moved-shared-name",
+    organizationId: orgId,
+    login: { username: "2.moved-shared-login" },
+    lastKnownRevisionDate: personalToShare.body.revisionDate,
+    attachments2: {
+      [transferAttachment.body.attachmentId]: {
+        fileName: "2.shared-attachment-name",
+        key: "2.shared-attachment-key",
+      },
+    },
+  },
+  collectionIds: [secondCollection.body.id],
+}
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${transferId}/share`, "POST", {
+      ...shareInput,
+      cipher: { ...shareInput.cipher, attachments2: {} },
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${transferId}/share`, "POST", {
+      ...shareInput,
+      collectionIds: [crypto.randomUUID()],
+    })
+  ).status,
+  400
+)
+assert.equal((await authorized(`/api/ciphers/${transferId}`)).status, 200)
+const moved = await authorized(
+  `/api/ciphers/${transferId}/share`,
+  "POST",
+  shareInput
+)
+assert.equal(moved.status, 200)
+assert.equal(moved.body.organizationId, orgId)
+assert.equal(moved.body.name, "2.moved-shared-name")
+assert.equal(moved.body.attachments[0].key, "2.shared-attachment-key")
+assert.deepEqual(
+  new Uint8Array(
+    await (await fetch(moved.body.attachments[0].url)).arrayBuffer()
+  ),
+  new Uint8Array([3, 2, 1])
+)
+assert.equal((await fetch(personalAttachmentLink)).status, 404)
+assert.equal(
+  (await authorized("/api/sync")).body.ciphers.filter(
+    (cipher) => cipher.id === transferId
+  ).length,
+  1
+)
+const plainBeforeShare = await authorized("/api/ciphers", "POST", {
+  type: 2,
+  name: "2.personal-plain-share",
+  notes: "2.personal-plain-notes",
+})
+assert.equal(plainBeforeShare.status, 200)
+const plainMoved = await authorized(
+  `/api/ciphers/${plainBeforeShare.body.id}/share`,
+  "PUT",
+  {
+    cipher: {
+      type: 2,
+      name: "2.shared-plain-share",
+      notes: "2.shared-plain-notes",
+      organizationId: orgId,
+      lastKnownRevisionDate: plainBeforeShare.body.revisionDate,
+    },
+    collectionIds: [secondCollection.body.id],
+  }
+)
+assert.equal(plainMoved.status, 200)
+assert.equal(plainMoved.body.organizationId, orgId)
+assert.equal(plainMoved.body.notes, "2.shared-plain-notes")
 const sharedCipherBody = {
   type: 1,
   name: "2.encrypted-shared-name",

@@ -273,3 +273,16 @@ export const vaultOrgCipherCollection = sqliteTable(
     ),
   ]
 )
+
+// A cross-object share is retried by the scheduled handler until its R2 copy,
+// organization locator, and personal vault cleanup have all completed.
+export const vaultCipherTransfer = sqliteTable("vault_cipher_transfer", {
+  cipherId: text("cipher_id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
