@@ -163,6 +163,12 @@ test("signed invitation can register a stub while public registration is disable
     assert.equal(sent[0].to, "owner@example.test")
     const verificationUrl = sent[0].text.match(/https:\/\/\S+/)?.[0]
     assert.ok(verificationUrl)
+    assert.equal(
+      new URLSearchParams(new URL(verificationUrl).hash.split("?")[1]).get(
+        "fromEmail"
+      ),
+      "true"
+    )
     const ownerToken = new URLSearchParams(
       new URL(verificationUrl).hash.split("?")[1]
     ).get("token")

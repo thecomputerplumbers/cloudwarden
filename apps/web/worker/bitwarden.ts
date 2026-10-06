@@ -1311,6 +1311,7 @@ export async function handleBitwarden(
       const params = new URLSearchParams({
         email: normalizeEmail(email),
         token,
+        fromEmail: "true",
       })
       try {
         await createMailer(
