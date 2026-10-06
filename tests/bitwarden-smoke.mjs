@@ -757,12 +757,19 @@ assert.equal(
   (await otherAuthorized("/api/ciphers", sharedCipherBody)).status,
   404
 )
+const beforeSharedEditRevision = (
+  await authorized("/api/accounts/revision-date")
+).body
 const editedShared = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
   ...sharedCipherBody,
   name: "2.edited-shared-name",
 })
 assert.equal(editedShared.status, 200)
 assert.equal(editedShared.body.name, "2.edited-shared-name")
+assert.ok(
+  Date.parse((await authorized("/api/accounts/revision-date")).body) >
+    Date.parse(beforeSharedEditRevision)
+)
 assert.equal(
   (await authorized(`/api/ciphers/${sharedId}`, "DELETE")).status,
   204

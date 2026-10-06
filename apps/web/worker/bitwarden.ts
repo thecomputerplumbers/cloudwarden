@@ -1547,12 +1547,30 @@ export async function handleBitwarden(
     await updateVaultKeys(env, user.id, privateKey, publicKey)
     return json({ privateKey, publicKey, object: "keys" })
   }
-  if (path === "/api/accounts/revision-date" && method === "GET")
+  if (path === "/api/accounts/revision-date" && method === "GET") {
+    const organizations = await listVaultOrganizations(env, user.id)
+    const sharedRevisions = await Promise.all(
+      organizations.map(async ({ organization, membership }) => {
+        const orgVault = await env.APP_DATABASE.getByName(
+          `org:${organization.id}`
+        )
+        return Math.max(
+          organization.updatedAt.getTime(),
+          membership.createdAt.getTime(),
+          await orgVault.vaultRevision()
+        )
+      })
+    )
     return json(
       new Date(
-        Math.max(user.updatedAt.getTime(), await vault.vaultRevision())
+        Math.max(
+          user.updatedAt.getTime(),
+          await vault.vaultRevision(),
+          ...sharedRevisions
+        )
       ).toISOString()
     )
+  }
   if (path === "/api/settings/domains" && method === "GET")
     return json({
       equivalentDomains: [],

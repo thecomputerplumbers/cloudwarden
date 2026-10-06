@@ -164,6 +164,10 @@ Generated download links use the canonical `APP_URL` origin. An earlier CLI run
 also covered item editing, folders, trash, and restore. These checks do not
 cover every client or API route.
 
+The account revision endpoint includes organization Durable Object revisions,
+so edits to shared ciphers trigger a client sync even when the personal vault
+has not changed.
+
 The bundled Vaultwarden web vault 2026.7.0 was exercised in isolated Chrome
 against a disposable HTTPS Wrangler Worker. Account creation, automatic sign-in,
 loading the vault, creating an encrypted login item, and viewing it succeeded.
