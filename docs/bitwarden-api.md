@@ -25,6 +25,13 @@ against the current session on every request. Access tokens expire after one
 hour and refresh tokens after 30 days. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
+Authenticated account deletion requires the master-password hash. It marks the
+account as deleting in D1, which immediately blocks login and existing sessions,
+then clears the account's Durable Object and removes attachment and Send objects
+from R2. D1 removes the account last. A five-minute scheduled handler retries
+interrupted cleanup. The vault object retains a deletion fence so an in-flight
+request cannot repopulate it after cleanup.
+
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. The web vault,
 organizations and collections, other two-factor providers and remembered
@@ -36,8 +43,8 @@ Vaultwarden.
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
 token rotation, encrypted item and folder sync, attachment upload/download,
-TOTP enrollment and login, recovery, password changes, text and file Send access, and
-account isolation. Run
+TOTP enrollment and login, recovery, password changes, text and file Send access,
+account deletion, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 
 A disposable Bitwarden CLI 2026.2.0 account was also exercised against the

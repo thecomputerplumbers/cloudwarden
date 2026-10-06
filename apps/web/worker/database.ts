@@ -97,10 +97,36 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return { key, value, updatedAt }
   }
 
+  private assertVaultActive() {
+    const deleted = this.db
+      .select({ key: schema.setting.key })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:deleted"))
+      .get()
+    if (deleted) throw new Error("Vault has been deleted")
+  }
+
+  async clearPersonalVault() {
+    this.db.transaction((tx) => {
+      tx.insert(schema.setting)
+        .values({ key: "vault:deleted", value: "true", updatedAt: new Date() })
+        .onConflictDoNothing()
+        .run()
+      tx.delete(schema.vaultAttachmentToken).run()
+      tx.delete(schema.vaultAttachment).run()
+      tx.delete(schema.vaultSendDownloadToken).run()
+      tx.delete(schema.vaultSendToken).run()
+      tx.delete(schema.vaultSend).run()
+      tx.delete(schema.vaultCipher).run()
+      tx.delete(schema.vaultFolder).run()
+    })
+  }
+
   // The caller selects this object by the authenticated user's ID. All vault
   // mutations below are synchronous SQLite operations with no intervening
   // await, so a read/check/write cannot interleave with another request.
   async listVault() {
+    this.assertVaultActive()
     return {
       ciphers: this.db.select().from(schema.vaultCipher).all(),
       folders: this.db.select().from(schema.vaultFolder).all(),
@@ -113,6 +139,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async vaultRevision() {
+    this.assertVaultActive()
     const ciphers = this.db.select().from(schema.vaultCipher).all()
     const folders = this.db.select().from(schema.vaultFolder).all()
     const sends = this.db.select().from(schema.vaultSend).all()
@@ -127,10 +154,12 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async listVaultSends() {
+    this.assertVaultActive()
     return this.db.select().from(schema.vaultSend).all()
   }
 
   async getVaultSend(id: string) {
+    this.assertVaultActive()
     return (
       this.db
         .select()
@@ -141,6 +170,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async getVaultSendPasswordSalt(id: string) {
+    this.assertVaultActive()
     return (
       this.db
         .select({ salt: schema.vaultSend.passwordSalt })
@@ -162,6 +192,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       uploaded?: boolean
     }
   ) {
+    this.assertVaultActive()
     const existing = this.db
       .select()
       .from(schema.vaultSend)
@@ -200,6 +231,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async removeVaultSendPassword(id: string) {
+    this.assertVaultActive()
     return (
       this.db
         .update(schema.vaultSend)
@@ -211,6 +243,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async deleteVaultSend(id: string) {
+    this.assertVaultActive()
     return this.db.transaction((tx) => {
       tx.delete(schema.vaultSendToken)
         .where(eq(schema.vaultSendToken.sendId, id))
@@ -231,6 +264,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     passwordHash: string | null,
     tokenHash: string
   ) {
+    this.assertVaultActive()
     const send = this.db
       .select()
       .from(schema.vaultSend)
@@ -266,6 +300,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async accessVaultSend(id: string, tokenHash: string) {
+    this.assertVaultActive()
     const token = this.db
       .select()
       .from(schema.vaultSendToken)
@@ -291,6 +326,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     size: number,
     name: string
   ) {
+    this.assertVaultActive()
     const send = this.db
       .select()
       .from(schema.vaultSend)
@@ -317,6 +353,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async issueVaultSendDownload(id: string, fileId: string, hash: string) {
+    this.assertVaultActive()
     const send = this.db
       .select()
       .from(schema.vaultSend)
@@ -341,6 +378,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async validateVaultSendDownload(id: string, fileId: string, hash: string) {
+    this.assertVaultActive()
     const token = this.db
       .select()
       .from(schema.vaultSendDownloadToken)
@@ -371,6 +409,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async getVaultCipher(id: string) {
+    this.assertVaultActive()
     return (
       this.db
         .select()
@@ -386,6 +425,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     expectedRevision?: number,
     lastKnownRevisionDate?: string
   ) {
+    this.assertVaultActive()
     if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
     const now = new Date()
     const existing = this.db
@@ -433,6 +473,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async trashVaultCipher(id: string, expectedRevision?: number) {
+    this.assertVaultActive()
     const existing = this.db
       .select()
       .from(schema.vaultCipher)
@@ -460,6 +501,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async restoreVaultCipher(id: string) {
+    this.assertVaultActive()
     const existing = this.db
       .select()
       .from(schema.vaultCipher)
@@ -481,6 +523,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async getVaultFolder(id: string) {
+    this.assertVaultActive()
     return (
       this.db
         .select()
@@ -491,6 +534,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async putVaultFolder(id: string, name: string, expectedRevision?: number) {
+    this.assertVaultActive()
     if (!id || !name || name.length > 10_000) throw new Error("Invalid folder")
     const now = new Date()
     const existing = this.db
@@ -530,6 +574,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async deleteVaultFolder(id: string) {
+    this.assertVaultActive()
     const deleted = !!this.db
       .delete(schema.vaultFolder)
       .where(eq(schema.vaultFolder.id, id))
@@ -564,6 +609,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     key: string | null
     size: number
   }) {
+    this.assertVaultActive()
     if (
       !input.fileName ||
       input.fileName.length > 10_000 ||
@@ -582,6 +628,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async getVaultAttachment(id: string, cipherId: string) {
+    this.assertVaultActive()
     return (
       this.db
         .select()
@@ -597,6 +644,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async listVaultAttachments(cipherId: string) {
+    this.assertVaultActive()
     return this.db
       .select()
       .from(schema.vaultAttachment)
@@ -610,6 +658,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async completeVaultAttachment(id: string, cipherId: string) {
+    this.assertVaultActive()
     return !!this.db
       .update(schema.vaultAttachment)
       .set({ uploaded: true })
@@ -625,6 +674,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async deleteVaultAttachment(id: string, cipherId: string) {
+    this.assertVaultActive()
     this.db
       .delete(schema.vaultAttachmentToken)
       .where(eq(schema.vaultAttachmentToken.attachmentId, id))
@@ -642,6 +692,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async issueVaultAttachmentToken(id: string, cipherId: string) {
+    this.assertVaultActive()
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return null
     const bytes = crypto.getRandomValues(new Uint8Array(32))
@@ -676,6 +727,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     cipherId: string,
     token: string
   ) {
+    this.assertVaultActive()
     if (!/^[-_A-Za-z0-9]{43}$/.test(token)) return false
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return false

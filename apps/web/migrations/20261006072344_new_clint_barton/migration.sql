@@ -1,0 +1,1 @@
+ALTER TABLE `vault_user` ADD `deleting_at` integer;

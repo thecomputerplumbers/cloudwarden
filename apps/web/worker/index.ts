@@ -7,6 +7,8 @@ export { AppDatabase } from "./database"
 import { auth } from "../lib/auth"
 import { handleMcp } from "../mcp/handler"
 import { handleBitwarden, isBitwardenPath } from "./bitwarden"
+import { deletingVaultUsers } from "./bitwarden-auth"
+import { cleanupVaultDeletion } from "./bitwarden-delete"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -30,5 +32,14 @@ export default {
       if (path.startsWith("/.well-known/")) return auth.handler(request)
       return vinextWorker.fetch(request, env, ctx)
     })
+  },
+  async scheduled(_controller: ScheduledController, env: CloudflareEnv) {
+    for (const user of await deletingVaultUsers(env)) {
+      try {
+        await cleanupVaultDeletion(env, user.id)
+      } catch {
+        console.error("Vault deletion cleanup will retry")
+      }
+    }
   },
 } satisfies ExportedHandler<CloudflareEnv>

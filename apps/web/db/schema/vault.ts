@@ -26,6 +26,7 @@ export const vaultUser = sqliteTable(
     securityStamp: text("security_stamp").notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+    deletingAt: integer("deleting_at", { mode: "timestamp_ms" }),
   },
   (table) => [uniqueIndex("vault_user_email_unique").on(table.email)]
 )

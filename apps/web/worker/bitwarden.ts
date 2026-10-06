@@ -1,5 +1,6 @@
 import {
   authenticatedVaultUser,
+  beginVaultDeletion,
   createVaultUser,
   findVaultUser,
   findVaultUserById,
@@ -36,6 +37,7 @@ import {
   sendIdFromAccessId,
   sendResponse,
 } from "./bitwarden-send"
+import { cleanupVaultDeletion } from "./bitwarden-delete"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -49,6 +51,20 @@ function json(value: unknown, status = 200) {
 
 function failure(message: string, status = 400) {
   return json({ error: message, error_description: message }, status)
+}
+
+async function keepCompletedUpload(
+  env: CloudflareEnv,
+  key: string,
+  complete: () => Promise<boolean>
+) {
+  try {
+    if (await complete()) return true
+  } catch {
+    // The account may have entered deletion after the R2 write.
+  }
+  await env.VAULT_ATTACHMENTS.delete(key)
+  return false
 }
 
 function field(body: Body, name: string) {
@@ -290,6 +306,7 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/ciphers/") ||
     path === "/api/folders" ||
     path.startsWith("/api/folders/") ||
+    path === "/api/accounts" ||
     path.startsWith("/api/accounts/") ||
     path === "/api/two-factor" ||
     path.startsWith("/api/two-factor/") ||
@@ -312,6 +329,8 @@ async function issuePublicSendAccess(
   if (!allowed.allowed) return { error: "limited" as const }
   const locator = await getSendLocator(env, id)
   if (!locator) return { error: "unavailable" as const }
+  if (!(await findVaultUserById(env, locator.userId)))
+    return { error: "unavailable" as const }
   const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
   const salt = await vault.getVaultSendPasswordSalt(id)
   const passwordHash =
@@ -376,6 +395,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!token) return failure("Send file not found", 404)
     const locator = await getSendLocator(env, id)
     if (!locator) return failure("Send file not found", 404)
+    if (!(await findVaultUserById(env, locator.userId)))
+      return failure("Send file not found", 404)
     const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
     if (
       !(await vault.validateVaultSendDownload(
@@ -475,6 +496,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (downloadMatch && method === "GET") {
     const [userId, token] = (url.searchParams.get("token") ?? "").split(".")
     if (!userId || !token || !/^[0-9a-f-]{36}$/.test(userId))
+      return failure("Attachment not found", 404)
+    if (!(await findVaultUserById(env, userId)))
       return failure("Attachment not found", 404)
     const vault = await env.APP_DATABASE.getByName(`vault:${userId}`)
     const authorized = await vault.validateVaultAttachmentToken(
@@ -722,6 +745,24 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
 
   if (
+    (path === "/api/accounts/delete" && method === "POST") ||
+    (path === "/api/accounts" && method === "DELETE")
+  ) {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (!(await beginVaultDeletion(env, user.id, user.passwordHash)))
+      return failure("Account deletion already started", 409)
+    try {
+      const complete = await cleanupVaultDeletion(env, user.id)
+      return new Response(null, { status: complete ? 200 : 202 })
+    } catch {
+      return new Response(null, { status: 202 })
+    }
+  }
+
+  if (
     (path === "/api/accounts/password" || path === "/api/accounts/kdf") &&
     method === "POST"
   ) {
@@ -960,21 +1001,23 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         file?: { id?: string; size?: number; fileName?: string }
       }
     ).file
-    if (!file || file.id !== fileId) return failure("Send file not found", 404)
+    if (!file || file.id !== fileId || !file.fileName)
+      return failure("Send file not found", 404)
+    const fileName = file.fileName
     const form = await request.formData()
     const data = form.get("data")
     if (
       !(data instanceof File) ||
       data.size !== file.size ||
-      (data.name !== file.fileName && !file.fileName?.endsWith(data.name))
+      (data.name !== fileName && !fileName.endsWith(data.name))
     )
       return failure("Send file does not match")
-    await env.VAULT_ATTACHMENTS.put(
-      `sends/${user.id}/${id}/${fileId}`,
-      data.stream()
-    )
+    const objectKey = `sends/${user.id}/${id}/${fileId}`
+    await env.VAULT_ATTACHMENTS.put(objectKey, data.stream())
     if (
-      !(await vault.completeVaultSendFile(id, fileId, data.size, file.fileName))
+      !(await keepCompletedUpload(env, objectKey, () =>
+        vault.completeVaultSendFile(id, fileId, data.size, fileName)
+      ))
     )
       return failure("Send upload failed", 503)
     return new Response(null, { status: 204 })
@@ -1132,11 +1175,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         key: typeof key === "string" ? key : null,
         size: data.size,
       })
-      await env.VAULT_ATTACHMENTS.put(
-        `${user.id}/${cipherId}/${id}`,
-        data.stream()
+      const objectKey = `${user.id}/${cipherId}/${id}`
+      await env.VAULT_ATTACHMENTS.put(objectKey, data.stream())
+      if (
+        !(await keepCompletedUpload(env, objectKey, () =>
+          vault.completeVaultAttachment(id, cipherId)
+        ))
       )
-      if (!(await vault.completeVaultAttachment(id, cipherId)))
         return failure("Attachment upload failed", 503)
       return json(await cipherResponse(cipher, vault, user.id, url.origin))
     }
@@ -1150,11 +1195,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         const data = form.get("data")
         if (!(data instanceof File) || data.size !== attachment.size)
           return failure("Attachment size mismatch")
-        await env.VAULT_ATTACHMENTS.put(
-          `${user.id}/${cipherId}/${attachmentId}`,
-          data.stream()
+        const objectKey = `${user.id}/${cipherId}/${attachmentId}`
+        await env.VAULT_ATTACHMENTS.put(objectKey, data.stream())
+        if (
+          !(await keepCompletedUpload(env, objectKey, () =>
+            vault.completeVaultAttachment(attachmentId, cipherId)
+          ))
         )
-        if (!(await vault.completeVaultAttachment(attachmentId, cipherId)))
           return failure("Attachment upload failed", 503)
         return new Response(null, { status: 204 })
       }

@@ -1,5 +1,5 @@
 import { drizzle } from "drizzle-orm/d1"
-import { and, eq, ne } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, ne } from "drizzle-orm"
 
 import { vaultSession, vaultUser } from "../db/schema/vault"
 
@@ -156,7 +156,12 @@ export async function findVaultUser(env: CloudflareEnv, email: string) {
     (await drizzle(env.DB)
       .select()
       .from(vaultUser)
-      .where(eq(vaultUser.email, normalizeEmail(email)))
+      .where(
+        and(
+          eq(vaultUser.email, normalizeEmail(email)),
+          isNull(vaultUser.deletingAt)
+        )
+      )
       .get()) ?? null
   )
 }
@@ -166,9 +171,44 @@ export async function findVaultUserById(env: CloudflareEnv, id: string) {
     (await drizzle(env.DB)
       .select()
       .from(vaultUser)
-      .where(eq(vaultUser.id, id))
+      .where(and(eq(vaultUser.id, id), isNull(vaultUser.deletingAt)))
       .get()) ?? null
   )
+}
+
+export async function beginVaultDeletion(
+  env: CloudflareEnv,
+  id: string,
+  expectedPasswordHash: string
+) {
+  return !!(await drizzle(env.DB)
+    .update(vaultUser)
+    .set({ deletingAt: new Date() })
+    .where(
+      and(
+        eq(vaultUser.id, id),
+        eq(vaultUser.passwordHash, expectedPasswordHash),
+        isNull(vaultUser.deletingAt)
+      )
+    )
+    .returning({ id: vaultUser.id })
+    .get())
+}
+
+export async function deletingVaultUsers(env: CloudflareEnv) {
+  return drizzle(env.DB)
+    .select({ id: vaultUser.id })
+    .from(vaultUser)
+    .where(isNotNull(vaultUser.deletingAt))
+    .limit(10)
+    .all()
+}
+
+export async function finishVaultDeletion(env: CloudflareEnv, id: string) {
+  await drizzle(env.DB)
+    .delete(vaultUser)
+    .where(and(eq(vaultUser.id, id), isNotNull(vaultUser.deletingAt)))
+    .run()
 }
 
 export async function verifyVaultPassword(
@@ -295,7 +335,7 @@ export async function refreshVaultSession(env: CloudflareEnv, refresh: string) {
   const user = await db
     .select()
     .from(vaultUser)
-    .where(eq(vaultUser.id, session.userId))
+    .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
     .get()
   if (!user) return null
   const access = await accessToken(
@@ -342,7 +382,9 @@ export async function authenticatedVaultUser(
     (await db
       .select()
       .from(vaultUser)
-      .where(eq(vaultUser.id, session.userId))
+      .where(
+        and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt))
+      )
       .get()) ?? null
   )
 }

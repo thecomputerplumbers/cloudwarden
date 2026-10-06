@@ -23,6 +23,10 @@ Encrypted text Sends and their access counters also live in the owner's Durable
 Object. D1 holds only the public Send ID to owner mapping needed to find that
 object. A public Send request must resolve this mapping before reaching the
 object, and the object enforces expiry, password proof, and access limits.
+Account deletion starts with a D1 `deletingAt` marker, then fences and clears
+the account Durable Object, removes R2 keys under both account prefixes, and
+finally deletes the D1 account. The scheduled handler retries incomplete
+cleanup. Keep authenticated and public reads from using deleting accounts.
 
 Drizzle 1.x RC drives both, with one config each:
 

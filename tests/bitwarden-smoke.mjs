@@ -651,6 +651,113 @@ const finalProfile = await call("/api/accounts/profile", {
 })
 assert.equal(finalProfile.body.privateKey, "2.new-private-key")
 
+const currentAuthorized = (path, body, method = "POST") =>
+  call(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${recoveredTokens.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  })
+const deletionCipher = await currentAuthorized("/api/ciphers", {
+  type: 1,
+  name: "2.to-be-deleted",
+})
+assert.equal(deletionCipher.status, 200)
+const deletionAttachment = await currentAuthorized(
+  `/api/ciphers/${deletionCipher.body.id}/attachment/v2`,
+  { fileName: "2.delete-file", fileSize: 3, key: "2.delete-key" }
+)
+assert.equal(deletionAttachment.status, 200)
+const deletionUpload = new FormData()
+deletionUpload.append(
+  "data",
+  new File([new Uint8Array([9, 8, 7])], "cipher.bin")
+)
+assert.equal(
+  (
+    await fetch(`${origin}/api${deletionAttachment.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
+      body: deletionUpload,
+    })
+  ).status,
+  204
+)
+const deletionCipherDetails = await currentAuthorized(
+  `/api/ciphers/${deletionCipher.body.id}`,
+  undefined,
+  "GET"
+)
+const attachmentUrl = deletionCipherDetails.body.attachments[0].url
+assert.equal((await fetch(attachmentUrl)).status, 200)
+
+const deletionFileSend = await currentAuthorized("/api/sends/file/v2", {
+  ...sendBody,
+  type: 1,
+  text: null,
+  file: { fileName: "2.delete-send-file" },
+  fileLength: 3,
+})
+assert.equal(deletionFileSend.status, 200)
+const deletionSendUpload = new FormData()
+deletionSendUpload.append(
+  "data",
+  new File([new Uint8Array([4, 3, 2])], "2.delete-send-file")
+)
+assert.equal(
+  (
+    await fetch(`${origin}/api${deletionFileSend.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
+      body: deletionSendUpload,
+    })
+  ).status,
+  204
+)
+const deletionSendGrant = await sendAccessRequest(
+  deletionFileSend.body.sendResponse.accessId
+)
+assert.equal(deletionSendGrant.status, 200)
+const deletionSendToken = (await deletionSendGrant.json()).access_token
+const deletionFileLink = await call(
+  `/api/sends/access/file/${deletionFileSend.body.sendResponse.file.id}`,
+  {
+    method: "POST",
+    headers: { Authorization: `Bearer ${deletionSendToken}` },
+  }
+)
+assert.equal(deletionFileLink.status, 200)
+assert.equal((await fetch(deletionFileLink.body.url)).status, 200)
+assert.equal(
+  (
+    await currentAuthorized("/api/accounts/delete", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await currentAuthorized("/api/accounts/delete", {
+      masterPasswordHash: "third-secret",
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await currentAuthorized("/api/accounts/profile", undefined, "GET")).status,
+  401
+)
+assert.equal((await tokenRequest(otherEmail, "third-secret")).status, 400)
+assert.equal((await fetch(attachmentUrl)).status, 404)
+assert.equal((await fetch(deletionFileLink.body.url)).status, 404)
+assert.equal(
+  (await sendAccessRequest(deletionFileSend.body.sendResponse.accessId)).status,
+  404
+)
+
 console.log(
-  "Bitwarden auth, vault lifecycle, account changes, Sends, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, account changes and deletion, Sends, two-factor, and isolation passed"
 )
