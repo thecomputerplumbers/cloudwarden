@@ -310,5 +310,5 @@ Account creation, automatic sign-in, loading the vault, creating an encrypted
 login item, and viewing it succeeded. This local proxy did not forward WebSocket
 upgrades, so the run did not verify realtime notifications or device approval.
 The upstream bundle also links
-to `/css/vaultwarden.css` without shipping that stylesheet; the main styles
-load and the tested screens rendered.
+to `/css/vaultwarden.css` without shipping that stylesheet, so the build writes
+one that hides the duplicate SSO email input and the unsupported passkey login.

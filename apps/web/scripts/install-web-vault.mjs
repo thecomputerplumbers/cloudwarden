@@ -73,6 +73,20 @@ try {
     join(assets, "web-vault-source.txt"),
     `Vaultwarden web vault v${version}\nSource: https://github.com/dani-garcia/bw_web_builds/tree/v${version}\nLicense: GPL-3.0\nArchive SHA-256: ${checksum}\n`
   )
+  // The bundle links /css/vaultwarden.css, which Vaultwarden renders at
+  // runtime to hide the variants its patches add. Without it the login form
+  // shows both email inputs stacked over "Remember email".
+  await mkdir(join(assets, "css"), { recursive: true })
+  await writeFile(
+    join(assets, "css", "vaultwarden.css"),
+    `.vw-hide,
+.vw-email-sso,
+.vw-passkey-login,
+app-user-layout app-password-settings app-webauthn-login-settings {
+  display: none !important;
+}
+`
+  )
   console.log(
     `Installed Vaultwarden web vault v${version} into production assets`
   )
