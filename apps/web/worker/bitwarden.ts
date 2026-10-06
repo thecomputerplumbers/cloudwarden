@@ -101,6 +101,7 @@ import {
   verifyEmailLogin,
 } from "./bitwarden-email"
 import { completeVaultShare, startVaultShare } from "./bitwarden-share"
+import { personalApiKey, userForPersonalApiKey } from "./bitwarden-api-key"
 import {
   completeOrgImport,
   startOrgImport,
@@ -1173,6 +1174,50 @@ export async function handleBitwarden(
         scope: "api.send.access",
       })
     }
+    if (grant === "client_credentials") {
+      const clientId = stringField(body, "client_id")
+      const clientSecret = stringField(body, "client_secret")
+      const deviceId = stringField(body, "device_identifier")
+      const deviceType = stringField(body, "device_type") ?? "unknown"
+      if (
+        stringField(body, "scope") !== "api" ||
+        !clientId?.startsWith("user.") ||
+        !/^[0-9a-f-]{36}$/i.test(clientId.slice(5)) ||
+        !clientSecret ||
+        !deviceId ||
+        deviceId.length > 200
+      )
+        return json({ error: "invalid_grant" }, 400)
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      if (
+        !(await limiter.consumeRateLimit(`api-login:${ip}`, 20, 60_000)).allowed
+      )
+        return failure("Too many login attempts", 429)
+      const apiUser = await userForPersonalApiKey(
+        env,
+        clientId.slice(5),
+        clientSecret
+      )
+      if (!apiUser) return json({ error: "invalid_grant" }, 400)
+      return json({
+        ...tokenResponse(
+          apiUser,
+          await issueVaultSession(
+            env,
+            apiUser,
+            deviceId,
+            clientId,
+            deviceType,
+            undefined,
+            true,
+            await tokenHash(clientSecret)
+          )
+        ),
+        refresh_token: undefined,
+        scope: "api",
+      })
+    }
     if (grant !== "password") return failure("Unsupported grant type")
     const username = stringField(body, "username")
     const password = stringField(body, "password")
@@ -1220,6 +1265,45 @@ export async function handleBitwarden(
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+
+  if (
+    (path === "/api/accounts/api-key" ||
+      path === "/api/accounts/rotate-api-key") &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    const otp = body && stringField(body, "otp")
+    if (!body || !!password === !!otp)
+      return failure("Reauthentication required", 403)
+    let authorized = password
+      ? await verifyVaultPassword(user, password)
+      : false
+    if (otp) {
+      const factors = await enabledTwoFactors(env, user.id)
+      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      if (
+        !(await limiter.consumeRateLimit(`api-key:${user.id}`, 10, 5 * 60_000))
+          .allowed
+      )
+        return failure("Too many reauthentication attempts", 429)
+      authorized = !!(
+        (factors.totp && (await verifyTotpLogin(env, factors.totp, otp))) ||
+        (factors.email && (await verifyEmailLogin(env, user.id, otp)))
+      )
+    }
+    if (!authorized) return failure("Invalid reauthentication", 403)
+    const apiKey = await personalApiKey(
+      env,
+      user.id,
+      path === "/api/accounts/rotate-api-key"
+    )
+    return json({
+      apiKey,
+      revisionDate: user.updatedAt.toISOString(),
+      object: "apiKey",
+    })
+  }
 
   if (path === "/api/accounts/set-password" && method === "POST") {
     const body = await bodyOf(request)

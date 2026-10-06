@@ -243,6 +243,72 @@ assert.equal(sync.status, 200)
 assert.equal(sync.body.profile.email, email)
 assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
+
+assert.equal(
+  (
+    await authorized("/api/accounts/api-key", "POST", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+const apiKey = await authorized("/api/accounts/api-key", "POST", {
+  masterPasswordHash: "client-derived-secret",
+})
+assert.equal(apiKey.status, 200)
+assert.match(apiKey.body.apiKey, /^[A-Za-z0-9]{30}$/)
+assert.equal(
+  (
+    await authorized("/api/accounts/api-key", "POST", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).body.apiKey,
+  apiKey.body.apiKey
+)
+const apiLogin = (secret) =>
+  fetch(`${origin}/identity/connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: `user.${sync.body.profile.id}`,
+      client_secret: secret,
+      scope: "api",
+      device_identifier: crypto.randomUUID(),
+      device_type: "14",
+    }),
+  })
+assert.equal((await apiLogin("wrong")).status, 400)
+const apiSession = await apiLogin(apiKey.body.apiKey)
+assert.equal(apiSession.status, 200)
+const apiTokens = await apiSession.json()
+assert.equal(apiTokens.scope, "api")
+assert.equal(apiTokens.refresh_token, undefined)
+assert.equal(
+  (
+    await post(
+      "/api/ciphers",
+      { type: 2, name: "2.api-key-note" },
+      apiTokens.access_token
+    )
+  ).status,
+  200
+)
+const rotatedApiKey = await authorized("/api/accounts/rotate-api-key", "POST", {
+  masterPasswordHash: "client-derived-secret",
+})
+assert.equal(rotatedApiKey.status, 200)
+assert.notEqual(rotatedApiKey.body.apiKey, apiKey.body.apiKey)
+assert.equal((await apiLogin(apiKey.body.apiKey)).status, 400)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${apiTokens.access_token}` },
+    })
+  ).status,
+  401
+)
+assert.equal((await apiLogin(rotatedApiKey.body.apiKey)).status, 200)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
 const beforeImport = await authorized("/api/sync")

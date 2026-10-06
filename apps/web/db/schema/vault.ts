@@ -44,6 +44,8 @@ export const vaultSession = sqliteTable(
     deviceId: text("device_id").notNull(),
     deviceType: text("device_type").notNull().default("unknown"),
     clientId: text("client_id").notNull().default("unknown"),
+    apiKey: integer("api_key", { mode: "boolean" }).notNull().default(false),
+    apiKeyHash: text("api_key_hash"),
     accessHash: text("access_hash").notNull(),
     previousAccessHash: text("previous_access_hash"),
     previousAccessExpiresAt: integer("previous_access_expires_at", {
@@ -67,6 +69,15 @@ export const vaultSession = sqliteTable(
     uniqueIndex("vault_session_refresh_unique").on(table.refreshHash),
   ]
 )
+
+export const vaultApiKey = sqliteTable("vault_api_key", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  secretHash: text("secret_hash").notNull(),
+  sealedSecret: text("sealed_secret").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
 
 export const vaultSsoFlow = sqliteTable("vault_sso_flow", {
   id: text("id").primaryKey(),

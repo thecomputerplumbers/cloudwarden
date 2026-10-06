@@ -2,6 +2,7 @@ import { drizzle } from "drizzle-orm/d1"
 import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 
 import {
+  vaultApiKey,
   vaultCipherTransfer,
   vaultOrgImport,
   vaultMembership,
@@ -45,7 +46,8 @@ async function accessToken(
   user: VaultUser,
   deviceId: string,
   clientId: string,
-  deviceType: string
+  deviceType: string,
+  apiKey = false
 ) {
   if (!env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32)
     throw new Error("Token signing secret is not configured")
@@ -68,7 +70,7 @@ async function accessToken(
         device: deviceId,
         devicetype: deviceType,
         client_id: clientId,
-        scope: ["api", "offline_access"],
+        scope: apiKey ? ["api"] : ["api", "offline_access"],
         amr: ["Application"],
         jti: crypto.randomUUID(),
       })
@@ -407,9 +409,18 @@ export async function issueVaultSession(
   deviceId: string,
   clientId: string,
   deviceType: string,
-  sso?: { issuer: string; refreshToken: string }
+  sso?: { issuer: string; refreshToken: string },
+  apiKey = false,
+  apiKeyHash: string | null = null
 ) {
-  const access = await accessToken(env, user, deviceId, clientId, deviceType)
+  const access = await accessToken(
+    env,
+    user,
+    deviceId,
+    clientId,
+    deviceType,
+    apiKey
+  )
   const refresh = randomToken()
   const now = Date.now()
   await drizzle(env.DB)
@@ -420,6 +431,8 @@ export async function issueVaultSession(
       deviceId,
       deviceType,
       clientId,
+      apiKey,
+      apiKeyHash,
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(refresh),
       ssoIssuer: sso?.issuer ?? null,
@@ -448,7 +461,12 @@ export async function refreshVaultSession(
     .from(vaultSession)
     .where(eq(vaultSession.refreshHash, oldHash))
     .get()
-  if (!session || session.refreshExpiresAt.getTime() <= Date.now()) return null
+  if (
+    !session ||
+    session.apiKey ||
+    session.refreshExpiresAt.getTime() <= Date.now()
+  )
+    return null
   const user = await db
     .select()
     .from(vaultUser)
@@ -556,6 +574,15 @@ export async function authenticatedVaultUser(
     )
     .get()
   if (!session) return null
+  if (session.apiKey) {
+    if (!session.apiKeyHash) return null
+    const current = await db
+      .select({ secretHash: vaultApiKey.secretHash })
+      .from(vaultApiKey)
+      .where(eq(vaultApiKey.userId, session.userId))
+      .get()
+    if (current?.secretHash !== session.apiKeyHash) return null
+  }
   return (
     (await db
       .select()

@@ -44,6 +44,16 @@ token remains valid for at most 30 seconds so in-flight browser requests can
 finish; the previous refresh token cannot be reused. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
+`POST /api/accounts/api-key` returns a personal API key after master-password
+reauthentication; `POST /api/accounts/rotate-api-key` replaces it. The key is
+encrypted at rest in D1 and checked by hash. A client can log in with
+`grant_type=client_credentials`, `client_id=user.<account UUID>`, `scope=api`,
+and the key as `client_secret`. These sessions have no refresh token. Rotation
+revokes existing API-key sessions, including a concurrent login that presents
+the old key. The API-key endpoints also accept an active authenticator or email
+two-factor code in `otp`; they do not yet implement Vaultwarden's separate
+protected-action OTP flow for accounts without a master password.
+
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
 are reused when they belong to the account. Browser CSV import and unencrypted
