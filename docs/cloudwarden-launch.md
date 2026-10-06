@@ -20,11 +20,12 @@ button, which is why its resources carry the `cloudwarden-prod` name. The
 button's generated copy of this repository has been removed; this repository is
 the only source, and `apps/web/wrangler.jsonc` names the live resources.
 Registration on production is controlled by `SIGNUPS_ALLOWED`,
-`SIGNUPS_ALLOWED_EMAILS` and `SIGNUPS_VERIFY`. They are deliberately not
-committed: the allow-list is private and registration is closed when
-`SIGNUPS_ALLOWED` is absent. The first `pnpm run deploy production` from this
-repository replaces the button's variables, so set those three as Worker
-secrets immediately afterwards (`wrangler secret put <NAME>` in `apps/web`).
+`SIGNUPS_ALLOWED_EMAILS` and `SIGNUPS_VERIFY`. They are Worker secrets on
+`cloudwarden-prod`, not committed variables: the allow-list stays private and
+the values survive every deploy. Registration is closed if `SIGNUPS_ALLOWED`
+is ever absent. Change one with `wrangler secret put <NAME>` in `apps/web`.
+Production is released with `pnpm run deploy production`; a plain push does
+not deploy.
 
 `vault.thecomputerplumbers.com` has been attached to the `cloudwarden-prod`
 Worker since 2026-10-06. It previously served a separate Vaultwarden Container
