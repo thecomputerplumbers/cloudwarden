@@ -266,6 +266,28 @@ const secondCollection = await authorized(
   { name: "Shared logins" }
 )
 assert.equal(secondCollection.status, 200)
+const renamedCollection = await authorized(
+  `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+  "PUT",
+  { name: "Shared logins renamed" }
+)
+assert.equal(renamedCollection.status, 200)
+assert.equal(renamedCollection.body.name, "Shared logins renamed")
+const emptyCollection = await authorized(
+  `/api/organizations/${orgId}/collections`,
+  "POST",
+  { name: "Temporary" }
+)
+assert.equal(emptyCollection.status, 200)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${emptyCollection.body.id}`,
+      "DELETE"
+    )
+  ).status,
+  204
+)
 const orgSync = await authorized("/api/sync")
 assert.equal(
   orgSync.body.profile.organizations[0].key,
@@ -284,6 +306,15 @@ assert.equal(sharedCipher.status, 200)
 assert.equal(sharedCipher.body.organizationId, orgId)
 assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
 const sharedId = sharedCipher.body.id
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+      "DELETE"
+    )
+  ).status,
+  409
+)
 assert.equal(
   (await authorized(`/api/ciphers/${sharedId}`)).body.login.username,
   "2.encrypted-shared-login"
@@ -938,6 +969,32 @@ assert.equal((await fetch(deletionFileLink.body.url)).status, 404)
 assert.equal(
   (await sendAccessRequest(deletionFileSend.body.sendResponse.accessId)).status,
   404
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}`, "DELETE", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}`, "DELETE", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).status,
+  200
+)
+assert.equal((await authorized(`/api/ciphers/${sharedId}`)).status, 404)
+assert.deepEqual((await authorized("/api/sync")).body.profile.organizations, [])
+assert.equal(
+  (
+    await authorized("/api/accounts/delete", "POST", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).status,
+  200
 )
 
 console.log(

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import {
@@ -14,6 +14,49 @@ import {
 export type Organization = typeof vaultOrganization.$inferSelect
 export type Membership = typeof vaultMembership.$inferSelect
 export type Collection = typeof vaultCollection.$inferSelect
+
+export async function beginOrgDeletion(
+  env: CloudflareEnv,
+  orgId: string,
+  userId: string
+) {
+  return !!(await drizzle(env.DB)
+    .update(vaultOrganization)
+    .set({ deletingAt: new Date() })
+    .where(
+      and(
+        eq(vaultOrganization.id, orgId),
+        isNull(vaultOrganization.deletingAt),
+        sql`exists (select 1 from ${vaultMembership} owner where owner.org_id = ${orgId}
+        and owner.user_id = ${userId} and owner.role = 0 and owner.status = 2)`
+      )
+    )
+    .returning({ id: vaultOrganization.id })
+    .get())
+}
+
+export async function deletingOrganizations(env: CloudflareEnv) {
+  return drizzle(env.DB)
+    .select({ id: vaultOrganization.id })
+    .from(vaultOrganization)
+    .where(isNotNull(vaultOrganization.deletingAt))
+    .limit(10)
+    .all()
+}
+
+export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
+  const vault = await env.APP_DATABASE.getByName(`org:${orgId}`)
+  await vault.clearPersonalVault()
+  await drizzle(env.DB)
+    .delete(vaultOrganization)
+    .where(
+      and(
+        eq(vaultOrganization.id, orgId),
+        isNotNull(vaultOrganization.deletingAt)
+      )
+    )
+    .run()
+}
 
 export async function listOrgMembers(env: CloudflareEnv, orgId: string) {
   return drizzle(env.DB)
@@ -178,6 +221,7 @@ export async function createVaultOrganization(
     publicKey: input.publicKey,
     createdAt: now,
     updatedAt: now,
+    deletingAt: null,
   }
   const member: Membership = {
     id: crypto.randomUUID(),
@@ -210,7 +254,9 @@ export async function getVaultOrganization(env: CloudflareEnv, id: string) {
     (await drizzle(env.DB)
       .select()
       .from(vaultOrganization)
-      .where(eq(vaultOrganization.id, id))
+      .where(
+        and(eq(vaultOrganization.id, id), isNull(vaultOrganization.deletingAt))
+      )
       .get()) ?? null
   )
 }
@@ -221,17 +267,24 @@ export async function getVaultMembership(
   userId: string
 ) {
   return (
-    (await drizzle(env.DB)
-      .select()
-      .from(vaultMembership)
-      .where(
-        and(
-          eq(vaultMembership.orgId, orgId),
-          eq(vaultMembership.userId, userId),
-          eq(vaultMembership.status, 2)
+    (
+      await drizzle(env.DB)
+        .select({ membership: vaultMembership })
+        .from(vaultMembership)
+        .innerJoin(
+          vaultOrganization,
+          eq(vaultOrganization.id, vaultMembership.orgId)
         )
-      )
-      .get()) ?? null
+        .where(
+          and(
+            eq(vaultMembership.orgId, orgId),
+            eq(vaultMembership.userId, userId),
+            eq(vaultMembership.status, 2),
+            isNull(vaultOrganization.deletingAt)
+          )
+        )
+        .get()
+    )?.membership ?? null
   )
 }
 
@@ -247,7 +300,11 @@ export async function listVaultOrganizations(
       eq(vaultOrganization.id, vaultMembership.orgId)
     )
     .where(
-      and(eq(vaultMembership.userId, userId), eq(vaultMembership.status, 2))
+      and(
+        eq(vaultMembership.userId, userId),
+        eq(vaultMembership.status, 2),
+        isNull(vaultOrganization.deletingAt)
+      )
     )
     .all()
 }
@@ -300,6 +357,58 @@ export async function createVaultCollection(
     })
     .returning()
     .get()
+}
+
+export async function getVaultCollection(
+  env: CloudflareEnv,
+  orgId: string,
+  id: string
+) {
+  return (
+    (await drizzle(env.DB)
+      .select()
+      .from(vaultCollection)
+      .where(and(eq(vaultCollection.orgId, orgId), eq(vaultCollection.id, id)))
+      .get()) ?? null
+  )
+}
+
+export async function updateVaultCollection(
+  env: CloudflareEnv,
+  orgId: string,
+  id: string,
+  name: string,
+  externalId: string | null
+) {
+  return drizzle(env.DB)
+    .update(vaultCollection)
+    .set({ name, externalId, updatedAt: new Date() })
+    .where(and(eq(vaultCollection.orgId, orgId), eq(vaultCollection.id, id)))
+    .returning()
+    .get()
+}
+
+export async function deleteEmptyVaultCollection(
+  env: CloudflareEnv,
+  orgId: string,
+  id: string
+) {
+  const db = drizzle(env.DB)
+  const deleted = await db
+    .delete(vaultCollection)
+    .where(
+      and(
+        eq(vaultCollection.orgId, orgId),
+        eq(vaultCollection.id, id),
+        sql`not exists (select 1 from ${vaultOrgCipherCollection} where ${vaultOrgCipherCollection.collectionId} = ${id})`
+      )
+    )
+    .returning({ id: vaultCollection.id })
+    .get()
+  if (deleted) return "deleted" as const
+  return (await getVaultCollection(env, orgId, id))
+    ? ("used" as const)
+    : ("missing" as const)
 }
 
 export async function isLastVaultOwner(env: CloudflareEnv, userId: string) {

@@ -34,6 +34,10 @@ resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
 and edit shared ciphers. Collection moves and shared attachments are not yet
 supported.
+Owners and admins can rename collections and delete empty ones. Only an owner
+can delete an organization, with a master-password check. Deletion marks the
+organization in D1, fences and clears its Durable Object, then removes D1 rows;
+the scheduled handler retries interrupted cleanup.
 An owner or admin can invite an already registered account with a public key,
 then confirm the membership using the client-wrapped organization key. Pending
 members have no vault access. Confirmed members see only assigned collections;

@@ -9,6 +9,7 @@ import { handleMcp } from "../mcp/handler"
 import { handleBitwarden, isBitwardenPath } from "./bitwarden"
 import { deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
+import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -34,6 +35,13 @@ export default {
     })
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv) {
+    for (const organization of await deletingOrganizations(env)) {
+      try {
+        await cleanupOrgDeletion(env, organization.id)
+      } catch {
+        console.error("Organization deletion cleanup will retry")
+      }
+    }
     for (const user of await deletingVaultUsers(env)) {
       try {
         await cleanupVaultDeletion(env, user.id)

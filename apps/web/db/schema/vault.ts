@@ -83,6 +83,7 @@ export const vaultOrganization = sqliteTable("vault_organization", {
   privateKey: text("private_key"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  deletingAt: integer("deleting_at", { mode: "timestamp_ms" }),
 })
 
 export const vaultMembership = sqliteTable(

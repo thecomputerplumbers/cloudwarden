@@ -40,13 +40,17 @@ import {
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import {
   collectionResponse,
+  beginOrgDeletion,
+  cleanupOrgDeletion,
   confirmOrgMember,
   createOrgCipherLocator,
   createVaultCollection,
+  deleteEmptyVaultCollection,
   createVaultOrganization,
   deleteOrgCipherLocator,
   getOrgCipherLocator,
   getVaultMembership,
+  getVaultCollection,
   getVaultOrganization,
   isLastVaultOwner,
   inviteOrgMember,
@@ -58,6 +62,7 @@ import {
   profileOrganizationResponse,
   removeOrgMember,
   validOrgCollections,
+  updateVaultCollection,
 } from "./bitwarden-org"
 
 type Body = Record<string, unknown>
@@ -1083,6 +1088,30 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     })
     return json(organizationResponse(created.org))
   }
+  const orgDeleteMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})(?:\/delete)?$/.exec(path)
+  if (
+    orgDeleteMatch &&
+    (method === "DELETE" || (method === "POST" && path.endsWith("/delete")))
+  ) {
+    const orgId = orgDeleteMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role !== 0)
+      return failure("Only owners can delete organizations", 403)
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (!(await beginOrgDeletion(env, orgId, user.id)))
+      return failure("Organization deletion already started", 409)
+    try {
+      await cleanupOrgDeletion(env, orgId)
+      return new Response(null, { status: 200 })
+    } catch {
+      return new Response(null, { status: 202 })
+    }
+  }
   const publicKeyMatch = /^\/api\/users\/([0-9a-f-]{36})\/public-key$/.exec(
     path
   )
@@ -1231,6 +1260,55 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         externalId ?? null
       )
       return json(collectionResponse(collection, membership))
+    }
+    const collectionId = organizationMatch[2]
+    if (collectionId) {
+      const collection = await getVaultCollection(env, orgId, collectionId)
+      if (!collection) return failure("Collection not found", 404)
+      const visible = (await listVaultCollections(env, orgId, membership)).some(
+        (row) => row.id === collectionId
+      )
+      if (!visible) return failure("Collection not found", 404)
+      if (method === "GET")
+        return json(collectionResponse(collection, membership))
+      if (membership.role !== 0 && membership.role !== 1)
+        return failure("Collection management is forbidden", 403)
+      if (method === "PUT" || method === "POST") {
+        const body = await bodyOf(request)
+        const name = body && stringField(body, "name")
+        const externalId = body && stringField(body, "externalId")
+        if (
+          !name ||
+          name.length > 100 ||
+          (externalId && externalId.length > 255)
+        )
+          return failure("Invalid collection")
+        const updated = await updateVaultCollection(
+          env,
+          orgId,
+          collectionId,
+          name,
+          externalId ?? null
+        )
+        return updated
+          ? json(collectionResponse(updated, membership))
+          : failure("Collection not found", 404)
+      }
+      if (method === "DELETE") {
+        const result = await deleteEmptyVaultCollection(
+          env,
+          orgId,
+          collectionId
+        )
+        return result === "deleted"
+          ? new Response(null, { status: 204 })
+          : failure(
+              result === "used"
+                ? "Collection contains shared ciphers"
+                : "Collection not found",
+              result === "used" ? 409 : 404
+            )
+      }
     }
   }
   if (path === "/api/sends" && method === "GET")
