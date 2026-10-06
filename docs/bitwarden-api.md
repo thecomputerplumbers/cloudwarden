@@ -77,8 +77,9 @@ Organization metadata and membership changes prompt confirmed members to sync,
 and removed members receive a final sync notice. Interrupted shares and
 imports notify members when the scheduled handler completes publication. Before
 delivery, the Worker checks current sessions so revoked sockets are closed.
-SCIM background changes and some account settings do not yet emit realtime
-events; clients can still discover them through sync.
+SCIM membership changes also notify current and removed members. Some account
+settings do not yet emit realtime events; clients can still discover them
+through sync.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs

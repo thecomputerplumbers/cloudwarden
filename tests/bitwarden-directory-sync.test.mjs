@@ -160,7 +160,12 @@ test("SCIM sync links only new members and revokes only directory owned access",
       ).status,
       2
     )
-    await reconcileVaultDirectory(env, snapshot([]))
+    const notified = []
+    const recordNotification = async (userId) => {
+      notified.push(userId)
+    }
+    await reconcileVaultDirectory(env, snapshot([]), recordNotification)
+    assert.deepEqual(notified.sort(), [ownerId, manualId, targetId].sort())
     assert.equal(
       (
         await db
@@ -179,7 +184,9 @@ test("SCIM sync links only new members and revokes only directory owned access",
       ).status,
       2
     )
-    await reconcileVaultDirectory(env, snapshot([scimUser]))
+    notified.length = 0
+    await reconcileVaultDirectory(env, snapshot([scimUser]), recordNotification)
+    assert.deepEqual(notified.sort(), [ownerId, manualId, targetId].sort())
     assert.equal(
       (
         await db
