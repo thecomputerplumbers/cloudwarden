@@ -155,10 +155,14 @@ TOTP enrollment and login, recovery, password changes, text and file Send access
 account deletion, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 
-A disposable Bitwarden CLI 2026.2.0 account was also exercised against the
-local Worker through a local HTTPS proxy. Password login, sync, encrypted item
-creation and editing, folder creation, trash, and restore succeeded. This
-checks a real client but does not cover every client or API route.
+A disposable Bitwarden CLI 2026.2.0 account was exercised against the current
+Worker over local HTTPS. Password login, sync, encrypted item creation,
+attachment upload, normal sync after upload, and encrypted attachment download
+succeeded; the downloaded bytes matched the source. Attachment completion and
+deletion advance the cipher revision so clients see changes on their next sync.
+Generated download links use the canonical `APP_URL` origin. An earlier CLI run
+also covered item editing, folders, trash, and restore. These checks do not
+cover every client or API route.
 
 The bundled Vaultwarden web vault 2026.7.0 was exercised in isolated Chrome
 against a disposable HTTPS Wrangler Worker. Account creation, automatic sign-in,

@@ -335,6 +335,10 @@ const uploaded = await fetch(`${origin}/api${attachmentInit.body.url}`, {
 assert.equal(uploaded.status, 204)
 const attachedCipher = await authorized(`/api/ciphers/${cipherId}`)
 assert.equal(attachedCipher.body.attachments[0].id, attachmentId)
+assert.ok(
+  Date.parse(attachedCipher.body.revisionDate) >
+    Date.parse(createdCipher.body.revisionDate)
+)
 const download = await fetch(attachedCipher.body.attachments[0].url)
 assert.equal(download.status, 200)
 assert.deepEqual(
@@ -395,6 +399,10 @@ assert.equal(
   200
 )
 assert.equal((await fetch(attachedCipher.body.attachments[0].url)).status, 404)
+assert.ok(
+  Date.parse((await authorized(`/api/ciphers/${cipherId}`)).body.revisionDate) >
+    Date.parse(attachedCipher.body.revisionDate)
+)
 assert.match((await authorized("/api/accounts/revision-date")).body, /^20/)
 
 const refreshed = await fetch(`${origin}/identity/connect/token`, {

@@ -896,37 +896,78 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   async completeVaultAttachment(id: string, cipherId: string) {
     this.assertVaultActive()
     this.assertCipherNotSharing(cipherId)
-    return !!this.db
-      .update(schema.vaultAttachment)
-      .set({ uploaded: true })
-      .where(
-        and(
-          eq(schema.vaultAttachment.id, id),
-          eq(schema.vaultAttachment.cipherId, cipherId),
-          eq(schema.vaultAttachment.uploaded, false)
+    return this.db.transaction((tx) => {
+      const completed = !!tx
+        .update(schema.vaultAttachment)
+        .set({ uploaded: true })
+        .where(
+          and(
+            eq(schema.vaultAttachment.id, id),
+            eq(schema.vaultAttachment.cipherId, cipherId),
+            eq(schema.vaultAttachment.uploaded, false)
+          )
         )
-      )
-      .returning({ id: schema.vaultAttachment.id })
-      .get()
+        .returning({ id: schema.vaultAttachment.id })
+        .get()
+      if (!completed) return false
+      const cipher = tx
+        .select({
+          revision: schema.vaultCipher.revision,
+          updatedAt: schema.vaultCipher.updatedAt,
+        })
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, cipherId))
+        .get()!
+      tx.update(schema.vaultCipher)
+        .set({
+          revision: cipher.revision + 1,
+          updatedAt: new Date(
+            Math.max(Date.now(), cipher.updatedAt.getTime() + 1)
+          ),
+        })
+        .where(eq(schema.vaultCipher.id, cipherId))
+        .run()
+      return true
+    })
   }
 
   async deleteVaultAttachment(id: string, cipherId: string) {
     this.assertVaultActive()
     this.assertCipherNotSharing(cipherId)
-    this.db
-      .delete(schema.vaultAttachmentToken)
-      .where(eq(schema.vaultAttachmentToken.attachmentId, id))
-      .run()
-    return !!this.db
-      .delete(schema.vaultAttachment)
-      .where(
-        and(
-          eq(schema.vaultAttachment.id, id),
-          eq(schema.vaultAttachment.cipherId, cipherId)
+    return this.db.transaction((tx) => {
+      tx.delete(schema.vaultAttachmentToken)
+        .where(eq(schema.vaultAttachmentToken.attachmentId, id))
+        .run()
+      const deleted = !!tx
+        .delete(schema.vaultAttachment)
+        .where(
+          and(
+            eq(schema.vaultAttachment.id, id),
+            eq(schema.vaultAttachment.cipherId, cipherId)
+          )
         )
-      )
-      .returning({ id: schema.vaultAttachment.id })
-      .get()
+        .returning({ id: schema.vaultAttachment.id })
+        .get()
+      if (!deleted) return false
+      const cipher = tx
+        .select({
+          revision: schema.vaultCipher.revision,
+          updatedAt: schema.vaultCipher.updatedAt,
+        })
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, cipherId))
+        .get()!
+      tx.update(schema.vaultCipher)
+        .set({
+          revision: cipher.revision + 1,
+          updatedAt: new Date(
+            Math.max(Date.now(), cipher.updatedAt.getTime() + 1)
+          ),
+        })
+        .where(eq(schema.vaultCipher.id, cipherId))
+        .run()
+      return true
+    })
   }
 
   async issueVaultAttachmentToken(

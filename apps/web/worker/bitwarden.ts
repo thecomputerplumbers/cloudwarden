@@ -573,6 +573,7 @@ export async function handleBitwarden(
   env: CloudflareEnv
 ): Promise<Response> {
   const url = new URL(request.url)
+  const origin = env.APP_URL ? new URL(env.APP_URL).origin : url.origin
   const path = url.pathname.toLowerCase()
   const method = request.method.toUpperCase()
 
@@ -620,7 +621,7 @@ export async function handleBitwarden(
     const link =
       bearer &&
       id &&
-      (await publicSendFileLink(env, url.origin, bearer, id, fileAccess[1]!))
+      (await publicSendFileLink(env, origin, bearer, id, fileAccess[1]!))
     return link ? json(link) : failure("Send file not found", 404)
   }
   const legacyFileAccess =
@@ -640,7 +641,7 @@ export async function handleBitwarden(
       )
     const link = await publicSendFileLink(
       env,
-      url.origin,
+      origin,
       result.token,
       legacyFileAccess[1]!,
       legacyFileAccess[2]!
@@ -741,7 +742,6 @@ export async function handleBitwarden(
   }
 
   if (path === "/api/config" && method === "GET") {
-    const origin = url.origin
     return json({
       version: "2026.2.0",
       server: { name: "Cloudwarden" },
@@ -868,7 +868,6 @@ export async function handleBitwarden(
     if (verifyEmail) {
       if (!env.APP_URL || !env.EMAIL_FROM)
         return failure("Registration email is unavailable", 503)
-      const origin = new URL(env.APP_URL).origin
       const params = new URLSearchParams({
         email: normalizeEmail(email),
         token,
@@ -1631,7 +1630,7 @@ export async function handleBitwarden(
         if (!locator) return null
         const row = await orgVault.getVaultCipher(locator.id)
         return row
-          ? cipherResponse(row, orgVault, user.id, url.origin, {
+          ? cipherResponse(row, orgVault, user.id, origin, {
               id: orgId,
               collectionIds: locator.collectionIds,
             })
@@ -2179,10 +2178,10 @@ export async function handleBitwarden(
       ciphers: [
         ...(await Promise.all(
           data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, user.id, url.origin)
+            cipherResponse(cipher, vault, user.id, origin)
           )
         )),
-        ...(await sharedCipherResponses(env, user.id, url.origin)),
+        ...(await sharedCipherResponses(env, user.id, origin)),
       ],
       domains: {
         equivalentDomains: [],
@@ -2213,10 +2212,10 @@ export async function handleBitwarden(
       list([
         ...(await Promise.all(
           data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, user.id, url.origin)
+            cipherResponse(cipher, vault, user.id, origin)
           )
         )),
-        ...(await sharedCipherResponses(env, user.id, url.origin)),
+        ...(await sharedCipherResponses(env, user.id, origin)),
       ])
     )
   }
@@ -2316,7 +2315,7 @@ export async function handleBitwarden(
       try {
         const stored = await orgVault.putVaultCipher(id, JSON.stringify(body))
         return json(
-          await cipherResponse(stored.cipher!, orgVault, user.id, url.origin, {
+          await cipherResponse(stored.cipher!, orgVault, user.id, origin, {
             id: orgId,
             collectionIds,
           })
@@ -2331,9 +2330,7 @@ export async function handleBitwarden(
       return failure("Folder not found", 404)
     const id = crypto.randomUUID()
     const stored = await vault.putVaultCipher(id, JSON.stringify(body))
-    return json(
-      await cipherResponse(stored.cipher!, vault, user.id, url.origin)
-    )
+    return json(await cipherResponse(stored.cipher!, vault, user.id, origin))
   }
 
   if (path === "/api/ciphers/share" && method === "PUT") {
@@ -2376,7 +2373,7 @@ export async function handleBitwarden(
       const cipher = raw as Body
       const id = stringField(cipher, "id")!
       const response = await handleBitwarden(
-        new Request(`${url.origin}/api/ciphers/${id}/share`, {
+        new Request(`${origin}/api/ciphers/${id}/share`, {
           method: "PUT",
           headers: {
             Authorization: request.headers.get("Authorization") ?? "",
@@ -2469,7 +2466,7 @@ export async function handleBitwarden(
     const shared = await orgVault.getVaultCipher(id)
     return shared
       ? json(
-          await cipherResponse(shared, orgVault, user.id, url.origin, {
+          await cipherResponse(shared, orgVault, user.id, origin, {
             id: orgId,
             collectionIds: locator.collectionIds,
           })
@@ -2496,13 +2493,10 @@ export async function handleBitwarden(
     const cipher = await orgVault.getVaultCipher(locator.id)
     if (!cipher) return failure("Cipher not found", 404)
     await setOrgCipherCollections(env, locator.id, collectionIds)
-    const updated = await cipherResponse(
-      cipher,
-      orgVault,
-      user.id,
-      url.origin,
-      { id: locator.orgId, collectionIds }
-    )
+    const updated = await cipherResponse(cipher, orgVault, user.id, origin, {
+      id: locator.orgId,
+      collectionIds,
+    })
     return json(
       collectionUpdateMatch[2]
         ? {
@@ -2534,7 +2528,7 @@ export async function handleBitwarden(
       const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
       const response = async (cipher: CipherRow) =>
         json(
-          await cipherResponse(cipher, orgVault, user.id, url.origin, {
+          await cipherResponse(cipher, orgVault, user.id, origin, {
             id: locator.orgId,
             collectionIds: visible,
           })
@@ -2632,7 +2626,7 @@ export async function handleBitwarden(
           cipher,
           attachmentVault,
           user.id,
-          url.origin,
+          origin,
           organization
         )
       )
@@ -2668,7 +2662,7 @@ export async function handleBitwarden(
           cipher,
           attachmentVault,
           user.id,
-          url.origin,
+          origin,
           organization
         ),
       })
@@ -2729,7 +2723,7 @@ export async function handleBitwarden(
                 attachmentVault,
                 attachment,
                 user.id,
-                url.origin,
+                origin,
                 locator?.orgId
               )
             )
@@ -2756,13 +2750,13 @@ export async function handleBitwarden(
     if (method === "GET") {
       const cipher = await vault.getVaultCipher(id)
       return cipher
-        ? json(await cipherResponse(cipher, vault, user.id, url.origin))
+        ? json(await cipherResponse(cipher, vault, user.id, origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/restore") && method === "PUT") {
       const restored = await vault.restoreVaultCipher(id)
       return restored
-        ? json(await cipherResponse(restored, vault, user.id, url.origin))
+        ? json(await cipherResponse(restored, vault, user.id, origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/partial") && (method === "PUT" || method === "POST")) {
@@ -2783,7 +2777,7 @@ export async function handleBitwarden(
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(await cipherResponse(stored.cipher!, vault, user.id, url.origin))
+        : json(await cipherResponse(stored.cipher!, vault, user.id, origin))
     }
     if ((method === "PUT" || method === "POST") && !path.endsWith("/delete")) {
       const body = await bodyOf(request)
@@ -2802,7 +2796,7 @@ export async function handleBitwarden(
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(await cipherResponse(stored.cipher!, vault, user.id, url.origin))
+        : json(await cipherResponse(stored.cipher!, vault, user.id, origin))
     }
     if (method === "DELETE" || path.endsWith("/delete")) {
       const result = await vault.trashVaultCipher(id)
