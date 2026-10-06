@@ -128,6 +128,9 @@ export async function confirmEmailEnrollment(
       pendingEmail: null,
       pendingCodeHash: null,
       pendingCodeExpiresAt: null,
+      loginCodeHash: null,
+      loginCodeExpiresAt: null,
+      loginAttempts: 0,
       recoveryCode: newTotpSecret(),
       updatedAt: new Date(),
     })
