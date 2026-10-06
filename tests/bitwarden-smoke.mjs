@@ -1320,7 +1320,7 @@ const updatedCipher = await authorized(`/api/ciphers/${cipherId}`, "PUT", {
   type: 1,
   name: "2.updated-name",
   folderId: createdFolder.body.id,
-  lastKnownRevisionDate: createdCipher.body.revisionDate,
+  lastKnownRevisionDate: attachedCipher.body.revisionDate,
 })
 assert.equal(updatedCipher.status, 200)
 assert.equal(
