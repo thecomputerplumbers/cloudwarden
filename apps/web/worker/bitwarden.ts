@@ -11,6 +11,7 @@ import {
   issueVaultSession,
   normalizeEmail,
   refreshVaultSession,
+  resetVaultSecurityStamp,
   tokenHash,
   updateVaultKeys,
   updateVaultPassword,
@@ -1303,6 +1304,13 @@ export async function handleBitwarden(
     return otp && (await consumeProtectedOtp(env, user.id, otp))
       ? new Response(null, { status: 200 })
       : failure("Invalid security code", 400)
+  }
+  if (path === "/api/accounts/security-stamp" && method === "POST") {
+    const body = await bodyOf(request)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
+    await resetVaultSecurityStamp(env, user.id)
+    return new Response(null, { status: 200 })
   }
 
   if (

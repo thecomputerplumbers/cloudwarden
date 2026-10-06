@@ -44,6 +44,7 @@ export const vaultSession = sqliteTable(
     deviceId: text("device_id").notNull(),
     deviceType: text("device_type").notNull().default("unknown"),
     clientId: text("client_id").notNull().default("unknown"),
+    securityStamp: text("security_stamp"),
     apiKey: integer("api_key", { mode: "boolean" }).notNull().default(false),
     apiKeyHash: text("api_key_hash"),
     accessHash: text("access_hash").notNull(),

@@ -340,6 +340,7 @@ export async function updateVaultPassword(
 ) {
   const db = drizzle(env.DB)
   const salt = randomToken()
+  const nextSecurityStamp = crypto.randomUUID()
   const updated = await db
     .update(vaultUser)
     .set({
@@ -348,7 +349,7 @@ export async function updateVaultPassword(
       key: newKey,
       kdf: kdf?.type ?? user.kdf,
       kdfIterations: kdf?.iterations ?? user.kdfIterations,
-      securityStamp: crypto.randomUUID(),
+      securityStamp: nextSecurityStamp,
       updatedAt: new Date(),
     })
     .where(
@@ -363,17 +364,57 @@ export async function updateVaultPassword(
   const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
     request.headers.get("Authorization") ?? ""
   )?.[1]
-  if (bearer)
-    await db
-      .delete(vaultSession)
+  if (bearer) {
+    const hash = await tokenHash(bearer)
+    const current = await db
+      .select({ id: vaultSession.id })
+      .from(vaultSession)
       .where(
         and(
           eq(vaultSession.userId, user.id),
-          ne(vaultSession.accessHash, await tokenHash(bearer))
+          or(
+            eq(vaultSession.accessHash, hash),
+            eq(vaultSession.previousAccessHash, hash)
+          )
         )
       )
-      .run()
+      .get()
+    if (current)
+      await db.batch([
+        db
+          .update(vaultSession)
+          .set({ securityStamp: nextSecurityStamp })
+          .where(eq(vaultSession.id, current.id)),
+        db
+          .delete(vaultSession)
+          .where(
+            and(
+              eq(vaultSession.userId, user.id),
+              ne(vaultSession.id, current.id)
+            )
+          ),
+      ])
+    else
+      await db
+        .delete(vaultSession)
+        .where(eq(vaultSession.userId, user.id))
+        .run()
+  }
   return true
+}
+
+export async function resetVaultSecurityStamp(
+  env: CloudflareEnv,
+  userId: string
+) {
+  const db = drizzle(env.DB)
+  await db.batch([
+    db
+      .update(vaultUser)
+      .set({ securityStamp: crypto.randomUUID(), updatedAt: new Date() })
+      .where(and(eq(vaultUser.id, userId), isNull(vaultUser.deletingAt))),
+    db.delete(vaultSession).where(eq(vaultSession.userId, userId)),
+  ])
 }
 
 export async function updateVaultProfile(
@@ -431,6 +472,7 @@ export async function issueVaultSession(
       deviceId,
       deviceType,
       clientId,
+      securityStamp: user.securityStamp,
       apiKey,
       apiKeyHash,
       accessHash: await tokenHash(access),
@@ -473,6 +515,7 @@ export async function refreshVaultSession(
     .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
     .get()
   if (!user) return null
+  if (session.securityStamp !== user.securityStamp) return null
   let nextSsoRefresh = session.ssoRefreshToken
   if (session.ssoIssuer) {
     const config = env as CloudflareEnv & {
@@ -583,13 +626,10 @@ export async function authenticatedVaultUser(
       .get()
     if (current?.secretHash !== session.apiKeyHash) return null
   }
-  return (
-    (await db
-      .select()
-      .from(vaultUser)
-      .where(
-        and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt))
-      )
-      .get()) ?? null
-  )
+  const user = await db
+    .select()
+    .from(vaultUser)
+    .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
+    .get()
+  return user && session.securityStamp === user.securityStamp ? user : null
 }

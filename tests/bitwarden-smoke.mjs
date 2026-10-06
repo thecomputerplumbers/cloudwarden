@@ -2008,6 +2008,43 @@ assert.ok(
 )
 assert.equal(
   (
+    await authorized("/api/accounts/security-stamp", "POST", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+const revokedAccessToken = currentAccessToken
+assert.equal(
+  (
+    await authorized("/api/accounts/security-stamp", "POST", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${revokedAccessToken}` },
+    })
+  ).status,
+  401
+)
+assert.equal(
+  (
+    await post("/identity/connect/token", {
+      grant_type: "refresh_token",
+      refresh_token: refreshedTokens.refresh_token,
+    })
+  ).status,
+  400
+)
+const postStampApiLogin = await apiLogin(otpRotatedApiKey.body.apiKey)
+assert.equal(postStampApiLogin.status, 200)
+currentAccessToken = (await postStampApiLogin.json()).access_token
+assert.equal(
+  (
     await authorized(`/api/organizations/${orgId}`, "DELETE", {
       masterPasswordHash: "client-derived-secret",
     })

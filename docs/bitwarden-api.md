@@ -57,7 +57,10 @@ single-use code in `otp` as an alternative to the master-password hash. Codes
 expire after ten minutes, allow five attempts, and have a 30-second resend
 delay. This lets OIDC accounts without a master password reauthenticate for API
 key management and account or organization deletion when email delivery is
-configured.
+configured. `POST /api/accounts/security-stamp` requires the same
+reauthentication and revokes all account sessions. Access and refresh paths
+compare each session's stamp with the current account stamp, so an in-flight
+login issued before the change cannot restore access.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
