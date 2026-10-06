@@ -88,7 +88,13 @@ and uses a D1 lease so cleanup and retries cannot process it concurrently.
 `PUT /api/ciphers/share` applies the same transfer to a selected group of
 personal ciphers. As with Vaultwarden, a failed item can leave earlier items
 from the request already shared.
-Organization and account deletion first settle pending transfers.
+`POST /api/ciphers/import-organization?organizationId=...` accepts encrypted
+ciphers, collections, and collection relationships for an owner or admin with
+full collection access. Existing collection IDs are reused. Each request is
+bounded to 100 ciphers and 100 collections. A D1 import record lets the
+scheduled handler finish an interrupted publish after cipher data is staged in
+the organization Durable Object. Organization and account deletion first settle
+pending transfers and imports.
 Organization metadata and public-key reads, owner edits, and global collection
 listing are available for client administration screens. Owners and admins with
 full collection access can export encrypted organization collections and ciphers.
@@ -144,7 +150,7 @@ request cannot repopulate it after cleanup.
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
 two-factor providers and remembered
-devices, account recovery, notifications, and organization import still need
+devices, account recovery, and notifications still need
 implementation. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 

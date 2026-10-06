@@ -101,6 +101,11 @@ import {
   verifyEmailLogin,
 } from "./bitwarden-email"
 import { completeVaultShare, startVaultShare } from "./bitwarden-share"
+import {
+  completeOrgImport,
+  startOrgImport,
+  type OrgImportPlan,
+} from "./bitwarden-org-import"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -2236,6 +2241,113 @@ export async function handleBitwarden(
         ...(await sharedCipherResponses(env, user.id, origin)),
       ])
     )
+  }
+  if (path === "/api/ciphers/import-organization" && method === "POST") {
+    const orgId = url.searchParams.get("organizationId")
+    if (!orgId || !/^[0-9a-f-]{36}$/i.test(orgId))
+      return failure("Invalid organization")
+    const member = await getVaultMembership(env, orgId, user.id)
+    if (!member) return failure("Organization not found", 404)
+    if (member.role > 1 || !member.accessAll)
+      return failure("Organization import is forbidden", 403)
+    const body = await bodyOf(request)
+    const rawCollections = body && field(body, "collections")
+    const rawCiphers = body && field(body, "ciphers")
+    const rawRelations = body && field(body, "collectionRelationships")
+    if (
+      !Array.isArray(rawCollections) ||
+      !Array.isArray(rawCiphers) ||
+      !Array.isArray(rawRelations) ||
+      rawCollections.length + rawCiphers.length === 0 ||
+      rawCollections.length > 100 ||
+      rawCiphers.length > 100 ||
+      rawRelations.length > 100
+    )
+      return failure("Invalid organization import")
+    const existing = new Set(
+      (await listVaultCollections(env, orgId, member)).map((row) => row.id)
+    )
+    const collections: OrgImportPlan["collections"] = []
+    for (const raw of rawCollections) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid organization import")
+      const item = raw as Body
+      const name = stringField(item, "name")
+      const suppliedId = field(item, "id")
+      const externalId = field(item, "externalId")
+      if (
+        !name ||
+        name.length > 100 ||
+        (suppliedId != null &&
+          (typeof suppliedId !== "string" ||
+            !/^[0-9a-f-]{36}$/i.test(suppliedId))) ||
+        (externalId != null &&
+          (typeof externalId !== "string" || externalId.length > 100))
+      )
+        return failure("Invalid organization import")
+      const reuse = typeof suppliedId === "string" && existing.has(suppliedId)
+      collections.push({
+        id: reuse ? suppliedId : crypto.randomUUID(),
+        name,
+        externalId: (externalId as string | null) ?? null,
+        existing: reuse,
+      })
+    }
+    if (new Set(collections.map((row) => row.id)).size !== collections.length)
+      return failure("Invalid organization import")
+    const assigned = rawCiphers.map(() => new Set<string>())
+    for (const raw of rawRelations) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid organization import")
+      const key = numberField(raw as Body, "key")
+      const value = numberField(raw as Body, "value")
+      if (
+        key === undefined ||
+        value === undefined ||
+        key < 0 ||
+        key >= rawCiphers.length ||
+        value < 0 ||
+        value >= collections.length
+      )
+        return failure("Invalid organization import")
+      assigned[key]!.add(collections[value]!.id)
+    }
+    const ciphers: OrgImportPlan["ciphers"] = []
+    for (const [index, raw] of rawCiphers.entries()) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid organization import")
+      const cipher = raw as Body
+      const name = stringField(cipher, "name")
+      const type = numberField(cipher, "type")
+      if (!name || name.length > 10_000 || !type || type < 1 || type > 5)
+        return failure("Invalid organization import")
+      const collectionIds = [...assigned[index]!]
+      if (!collectionIds.length)
+        collectionIds.push(...collections.map((row) => row.id))
+      if (!collectionIds.length) return failure("Invalid organization import")
+      const payload = JSON.stringify({
+        ...cipher,
+        organizationId: orgId,
+        folderId: null,
+      })
+      if (payload.length > 1_000_000)
+        return failure("Invalid organization import")
+      ciphers.push({ id: crypto.randomUUID(), payload, collectionIds })
+    }
+    if (
+      collections.filter((row) => !row.existing).length +
+        ciphers.length +
+        ciphers.reduce((sum, row) => sum + row.collectionIds.length, 0) >
+      400
+    )
+      return failure("Organization import is too large")
+    const importId = await startOrgImport(env, orgId, user.id, {
+      collections,
+      ciphers,
+    })
+    if (!(await completeOrgImport(env, importId)))
+      return failure("Organization import is pending; retry sync shortly", 503)
+    return new Response(null, { status: 200 })
   }
   if (path === "/api/ciphers/import" && method === "POST") {
     const body = await bodyOf(request)

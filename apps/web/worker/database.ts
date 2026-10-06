@@ -643,6 +643,40 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     })
   }
 
+  async stageOrgImport(ciphers: { id: string; payload: string }[]) {
+    this.assertVaultActive()
+    if (
+      ciphers.length > 1000 ||
+      ciphers.some((cipher) => !cipher.id || cipher.payload.length > 1_000_000)
+    )
+      throw new Error("Invalid organization import")
+    const now = new Date()
+    this.db.transaction((tx) => {
+      for (const cipher of ciphers)
+        tx.insert(schema.vaultCipher)
+          .values({
+            id: cipher.id,
+            payload: cipher.payload,
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing()
+          .run()
+    })
+  }
+
+  async removeUnpublishedOrgImport(ids: string[]) {
+    this.db.transaction((tx) => {
+      for (const id of ids) {
+        tx.delete(schema.vaultAttachment)
+          .where(eq(schema.vaultAttachment.cipherId, id))
+          .run()
+        tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
+      }
+    })
+  }
+
   async putVaultCipher(
     id: string,
     payload: string,

@@ -3,6 +3,7 @@ import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 
 import {
   vaultCipherTransfer,
+  vaultOrgImport,
   vaultMembership,
   vaultSession,
   vaultUser,
@@ -307,7 +308,8 @@ export async function finishVaultDeletion(env: CloudflareEnv, id: string) {
       and(
         eq(vaultUser.id, id),
         isNotNull(vaultUser.deletingAt),
-        sql`not exists (select 1 from ${vaultCipherTransfer} pending where pending.user_id = ${id})`
+        sql`not exists (select 1 from ${vaultCipherTransfer} pending where pending.user_id = ${id})`,
+        sql`not exists (select 1 from ${vaultOrgImport} pending where pending.user_id = ${id} and pending.completed_at is null)`
       )
     )
     .returning({ id: vaultUser.id })

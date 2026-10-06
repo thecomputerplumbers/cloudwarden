@@ -13,6 +13,11 @@ import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
 import { pruneVaultSsoFlows } from "./bitwarden-sso"
 import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
 import { completeVaultShare, pendingVaultShares } from "./bitwarden-share"
+import {
+  completeOrgImport,
+  pendingOrgImports,
+  pruneOrgImports,
+} from "./bitwarden-org-import"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -54,6 +59,18 @@ export default {
       } catch {
         console.error("Cipher transfer will retry")
       }
+    }
+    for (const pending of await pendingOrgImports(env)) {
+      try {
+        await completeOrgImport(env, pending.id)
+      } catch {
+        console.error("Organization import will retry")
+      }
+    }
+    try {
+      await pruneOrgImports(env)
+    } catch {
+      console.error("Organization import cleanup will retry")
     }
     for (const organization of await deletingOrganizations(env)) {
       try {

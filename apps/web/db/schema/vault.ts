@@ -289,3 +289,20 @@ export const vaultCipherTransfer = sqliteTable("vault_cipher_transfer", {
   leaseId: text("lease_id"),
   leaseUntil: integer("lease_until", { mode: "timestamp_ms" }),
 })
+
+// Organization imports stage encrypted ciphers in the organization Durable
+// Object, then publish collections and cipher locators in one D1 batch.
+export const vaultOrgImport = sqliteTable("vault_org_import", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  payload: text("payload").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+  leaseId: text("lease_id"),
+  leaseUntil: integer("lease_until", { mode: "timestamp_ms" }),
+})

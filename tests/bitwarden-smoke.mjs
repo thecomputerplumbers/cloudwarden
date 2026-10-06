@@ -1819,6 +1819,70 @@ assert.equal(
   ).status,
   403
 )
+const importPath = `/api/ciphers/import-organization?organizationId=${orgId}`
+assert.equal(
+  (
+    await authorized(importPath, "POST", {
+      collections: [{ name: "2.bad-import-collection" }],
+      ciphers: [{ type: 1, name: "2.bad-import-cipher" }],
+      collectionRelationships: [{ key: 0, value: 1 }],
+    })
+  ).status,
+  400
+)
+const beforeOrgImport = await authorized(`/api/organizations/${orgId}/export`)
+assert.equal(
+  (
+    await authorized(importPath, "POST", {
+      collections: [
+        { name: "2.imported-collection", externalId: "external-2" },
+        { id: secondCollection.body.id, name: "2.existing-collection" },
+      ],
+      ciphers: [
+        {
+          type: 1,
+          name: "2.imported-org-login",
+          login: { username: "2.secret" },
+        },
+        { type: 2, name: "2.imported-org-note", secureNote: { type: 0 } },
+      ],
+      collectionRelationships: [
+        { key: 0, value: 0 },
+        { key: 1, value: 1 },
+      ],
+    })
+  ).status,
+  200
+)
+const afterOrgImport = await authorized(`/api/organizations/${orgId}/export`)
+assert.equal(
+  afterOrgImport.body.collections.length,
+  beforeOrgImport.body.collections.length + 1
+)
+assert.equal(
+  afterOrgImport.body.ciphers.length,
+  beforeOrgImport.body.ciphers.length + 2
+)
+const importedOrgCollection = afterOrgImport.body.collections.find(
+  (row) => row.name === "2.imported-collection"
+)
+assert.ok(importedOrgCollection)
+const importedOrgLogin = afterOrgImport.body.ciphers.find(
+  (row) => row.name === "2.imported-org-login"
+)
+assert.equal(importedOrgLogin.organizationId, orgId)
+assert.equal(importedOrgLogin.folderId, null)
+assert.deepEqual(importedOrgLogin.collectionIds, [importedOrgCollection.id])
+assert.deepEqual(
+  afterOrgImport.body.ciphers.find((row) => row.name === "2.imported-org-note")
+    .collectionIds,
+  [secondCollection.body.id]
+)
+assert.ok(
+  (await authorized("/api/sync")).body.ciphers.some(
+    (row) => row.id === importedOrgLogin.id
+  )
+)
 assert.equal(
   (
     await authorized(`/api/organizations/${orgId}`, "DELETE", {
