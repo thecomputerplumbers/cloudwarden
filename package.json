@@ -36,5 +36,18 @@
   "engines": {
     "node": ">=26 <27",
     "pnpm": ">=12 <13"
+  },
+  "cloudflare": {
+    "bindings": {
+      "BETTER_AUTH_SECRET": {
+        "description": "Enter a unique random secret with at least 32 characters. Store it securely; losing or changing it invalidates vault credentials and encrypted API keys."
+      },
+      "APP_URL": {
+        "description": "Set this to the exact HTTPS URL of the Worker you are creating, such as https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev."
+      },
+      "EMAIL_FROM": {
+        "description": "Use a sender address verified in your Cloudflare Email Service account."
+      }
+    }
   }
 }
