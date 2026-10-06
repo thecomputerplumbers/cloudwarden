@@ -213,6 +213,20 @@ function archivedDateField(body: Body): string | null | false {
   return new Date(value).toISOString()
 }
 
+function folderIdField(body: Body): string | null | undefined | false {
+  const value = field(body, "folderId")
+  if (value === undefined || value === null) return value
+  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value)
+    ? value
+    : false
+}
+
+function favoriteField(body: Body): boolean | undefined | null {
+  const value = field(body, "favorite")
+  if (value === undefined || typeof value === "boolean") return value
+  return null
+}
+
 async function validateProtectedAction(
   env: CloudflareEnv,
   user: VaultUser,
@@ -541,12 +555,18 @@ async function attachmentResponse(
 async function cipherResponse(
   row: CipherRow,
   vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
+  env: CloudflareEnv,
   userId: string,
   origin: string,
   organization?: { id: string; collectionIds: string[] }
 ) {
   const data = JSON.parse(row.payload) as Body
   const attachments = await vault.listVaultAttachments(row.id)
+  const preference = organization
+    ? await (
+        await env.APP_DATABASE.getByName(`vault:${userId}`)
+      ).getVaultCipherPreference(row.id)
+    : null
   return {
     object: "cipherDetails",
     id: row.id,
@@ -581,8 +601,12 @@ async function cipherResponse(
     card: field(data, "card") ?? null,
     identity: field(data, "identity") ?? null,
     sshKey: field(data, "sshKey") ?? null,
-    folderId: field(data, "folderId") ?? null,
-    favorite: field(data, "favorite") === true,
+    folderId: organization
+      ? (preference?.folderId ?? null)
+      : (field(data, "folderId") ?? null),
+    favorite: organization
+      ? (preference?.favorite ?? false)
+      : field(data, "favorite") === true,
     archivedDate:
       (await vault.getVaultCipherArchivedAt(row.id, userId))?.toISOString() ??
       null,
@@ -615,7 +639,7 @@ async function sharedCipherResponses(
             return null
           const row = await orgVault.getVaultCipher(locator.id)
           return row
-            ? cipherResponse(row, orgVault, userId, origin, {
+            ? cipherResponse(row, orgVault, env, userId, origin, {
                 id: organization.id,
                 collectionIds: locator.collectionIds.filter((id) =>
                   allowed.has(id)
@@ -2471,7 +2495,7 @@ export async function handleBitwarden(
         if (!locator) return null
         const row = await orgVault.getVaultCipher(locator.id)
         return row
-          ? cipherResponse(row, orgVault, user.id, origin, {
+          ? cipherResponse(row, orgVault, env, user.id, origin, {
               id: orgId,
               collectionIds: locator.collectionIds,
             })
@@ -3126,7 +3150,7 @@ export async function handleBitwarden(
       ciphers: [
         ...(await Promise.all(
           data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, user.id, origin)
+            cipherResponse(cipher, vault, env, user.id, origin)
           )
         )),
         ...(await sharedCipherResponses(env, user.id, origin)),
@@ -3160,7 +3184,7 @@ export async function handleBitwarden(
       list([
         ...(await Promise.all(
           data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, user.id, origin)
+            cipherResponse(cipher, vault, env, user.id, origin)
           )
         )),
         ...(await sharedCipherResponses(env, user.id, origin)),
@@ -3387,8 +3411,12 @@ export async function handleBitwarden(
         !(await validOrgCollections(env, orgId, member, collectionIds))
       )
         return failure("Invalid collections")
-      if (field(body, "folderId"))
-        return failure("Shared ciphers cannot have personal folders")
+      const folderId = folderIdField(body)
+      const favorite = favoriteField(body)
+      if (folderId === false || favorite === null)
+        return failure("Invalid cipher preferences")
+      if (folderId && !(await vault.getVaultFolder(folderId)))
+        return failure("Folder not found", 404)
       const id = crypto.randomUUID()
       await createOrgCipherLocator(env, id, orgId, collectionIds)
       const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
@@ -3400,8 +3428,17 @@ export async function handleBitwarden(
           undefined,
           { userId: user.id, archivedDate }
         )
+        if (folderId !== undefined || favorite !== undefined)
+          if (
+            !(await vault.setVaultCipherPreference(
+              id,
+              folderId,
+              favorite ?? undefined
+            ))
+          )
+            return failure("Folder changed concurrently", 409)
         return json(
-          await cipherResponse(stored.cipher!, orgVault, user.id, origin, {
+          await cipherResponse(stored.cipher!, orgVault, env, user.id, origin, {
             id: orgId,
             collectionIds,
           })
@@ -3422,7 +3459,9 @@ export async function handleBitwarden(
       undefined,
       { userId: user.id, archivedDate }
     )
-    return json(await cipherResponse(stored.cipher!, vault, user.id, origin))
+    return json(
+      await cipherResponse(stored.cipher!, vault, env, user.id, origin)
+    )
   }
 
   if (path === "/api/ciphers/share" && method === "PUT") {
@@ -3494,7 +3533,6 @@ export async function handleBitwarden(
       !orgId ||
       !stringField(data, "name") ||
       !numberField(data, "type") ||
-      field(data, "folderId") ||
       !collectionIds
     )
       return failure("Invalid shared cipher")
@@ -3503,6 +3541,12 @@ export async function handleBitwarden(
       return failure("Cipher sharing is forbidden", 403)
     if (!(await validOrgCollections(env, orgId, member, collectionIds)))
       return failure("Invalid collections")
+    const folderId = folderIdField(data)
+    const favorite = favoriteField(data)
+    if (folderId === false || favorite === null)
+      return failure("Invalid cipher preferences")
+    if (folderId && !(await vault.getVaultFolder(folderId)))
+      return failure("Folder not found", 404)
     const archivedDate = archivedDateField(data)
     if (archivedDate === false) return failure("Invalid archive date")
     const existing = await getOrgCipherLocator(env, id)
@@ -3559,9 +3603,18 @@ export async function handleBitwarden(
     if (!locator) return failure("Cipher transfer will retry", 503)
     const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
     const shared = await orgVault.getVaultCipher(id)
+    if (shared && (folderId !== undefined || favorite !== undefined))
+      if (
+        !(await vault.setVaultCipherPreference(
+          id,
+          folderId,
+          favorite ?? undefined
+        ))
+      )
+        return failure("Folder changed concurrently", 409)
     return shared
       ? json(
-          await cipherResponse(shared, orgVault, user.id, origin, {
+          await cipherResponse(shared, orgVault, env, user.id, origin, {
             id: orgId,
             collectionIds: locator.collectionIds,
           })
@@ -3588,10 +3641,17 @@ export async function handleBitwarden(
     const cipher = await orgVault.getVaultCipher(locator.id)
     if (!cipher) return failure("Cipher not found", 404)
     await setOrgCipherCollections(env, locator.id, collectionIds)
-    const updated = await cipherResponse(cipher, orgVault, user.id, origin, {
-      id: locator.orgId,
-      collectionIds,
-    })
+    const updated = await cipherResponse(
+      cipher,
+      orgVault,
+      env,
+      user.id,
+      origin,
+      {
+        id: locator.orgId,
+        collectionIds,
+      }
+    )
     return json(
       collectionUpdateMatch[2]
         ? {
@@ -3603,7 +3663,7 @@ export async function handleBitwarden(
     )
   }
   const sharedCipherMatch =
-    /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore)?$/.exec(
+    /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore|\/partial)?$/.exec(
       path
     )
   if (sharedCipherMatch) {
@@ -3623,12 +3683,35 @@ export async function handleBitwarden(
       const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
       const response = async (cipher: CipherRow) =>
         json(
-          await cipherResponse(cipher, orgVault, user.id, origin, {
+          await cipherResponse(cipher, orgVault, env, user.id, origin, {
             id: locator.orgId,
             collectionIds: visible,
           })
         )
       if (method === "GET") {
+        const cipher = await orgVault.getVaultCipher(locator.id)
+        return cipher ? response(cipher) : failure("Cipher not found", 404)
+      }
+      if (
+        path.endsWith("/partial") &&
+        (method === "PUT" || method === "POST")
+      ) {
+        const body = await bodyOf(request)
+        if (!body) return failure("Invalid cipher preferences")
+        const folderId = folderIdField(body)
+        const favorite = favoriteField(body)
+        if (folderId === false || favorite === null)
+          return failure("Invalid cipher preferences")
+        if (!(await orgVault.getVaultCipher(locator.id)))
+          return failure("Cipher not found", 404)
+        if (
+          !(await vault.setVaultCipherPreference(
+            locator.id,
+            folderId,
+            favorite
+          ))
+        )
+          return failure("Folder not found", 404)
         const cipher = await orgVault.getVaultCipher(locator.id)
         return cipher ? response(cipher) : failure("Cipher not found", 404)
       }
@@ -3653,10 +3736,15 @@ export async function handleBitwarden(
           !body ||
           !stringField(body, "name") ||
           !numberField(body, "type") ||
-          stringField(body, "organizationId") !== locator.orgId ||
-          field(body, "folderId")
+          stringField(body, "organizationId") !== locator.orgId
         )
           return failure("Invalid shared cipher")
+        const folderId = folderIdField(body)
+        const favorite = favoriteField(body)
+        if (folderId === false || favorite === null)
+          return failure("Invalid cipher preferences")
+        if (folderId && !(await vault.getVaultFolder(folderId)))
+          return failure("Folder not found", 404)
         const collectionIds = collectionIdsField(body)
         if (
           !collectionIds ||
@@ -3678,9 +3766,18 @@ export async function handleBitwarden(
           stringField(body, "lastKnownRevisionDate"),
           { userId: user.id, archivedDate }
         )
-        return stored.conflict
-          ? failure("Cipher was changed concurrently", 409)
-          : response(stored.cipher!)
+        if (stored.conflict)
+          return failure("Cipher was changed concurrently", 409)
+        if (folderId !== undefined || favorite !== undefined)
+          if (
+            !(await vault.setVaultCipherPreference(
+              locator.id,
+              folderId,
+              favorite ?? undefined
+            ))
+          )
+            return failure("Folder changed concurrently", 409)
+        return response(stored.cipher!)
       }
     }
   }
@@ -3723,6 +3820,7 @@ export async function handleBitwarden(
         await cipherResponse(
           cipher,
           attachmentVault,
+          env,
           user.id,
           origin,
           organization
@@ -3759,6 +3857,7 @@ export async function handleBitwarden(
         cipherResponse: await cipherResponse(
           cipher,
           attachmentVault,
+          env,
           user.id,
           origin,
           organization
@@ -3906,6 +4005,7 @@ export async function handleBitwarden(
         await cipherResponse(
           row,
           target.targetVault,
+          env,
           user.id,
           origin,
           target.organization
@@ -3914,6 +4014,60 @@ export async function handleBitwarden(
     }
     await publishVaultNotification(env, { type: 5, userId: user.id })
     return json(singleId ? responses[0] : list(responses))
+  }
+  if (path === "/api/ciphers/move" && (method === "PUT" || method === "POST")) {
+    const body = await bodyOf(request)
+    const ids = body && field(body, "ids")
+    const folderId = body && folderIdField(body)
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > 100 ||
+      ids.some(
+        (id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)
+      ) ||
+      new Set(ids).size !== ids.length ||
+      folderId === false
+    )
+      return failure("Invalid cipher move")
+    if (folderId && !(await vault.getVaultFolder(folderId)))
+      return failure("Folder not found", 404)
+    const selected = [] as { id: string; shared: boolean }[]
+    for (const id of ids as string[]) {
+      const locator = await getOrgCipherLocator(env, id)
+      if (locator) {
+        const member = await getVaultMembership(env, locator.orgId, user.id)
+        if (!member) return failure("Cipher not found", 404)
+        const visible = new Set(
+          (await listVaultCollections(env, locator.orgId, member)).map(
+            (collection) => collection.id
+          )
+        )
+        if (
+          !locator.collectionIds.some((collectionId) =>
+            visible.has(collectionId)
+          )
+        )
+          return failure("Cipher not found", 404)
+        const orgVault = await env.APP_DATABASE.getByName(
+          `org:${locator.orgId}`
+        )
+        if (!(await orgVault.getVaultCipher(id)))
+          return failure("Cipher not found", 404)
+        selected.push({ id, shared: true })
+      } else {
+        if (!(await vault.getVaultCipher(id)))
+          return failure("Cipher not found", 404)
+        selected.push({ id, shared: false })
+      }
+    }
+    for (const cipher of selected) {
+      const moved = cipher.shared
+        ? await vault.setVaultCipherPreference(cipher.id, folderId ?? null)
+        : await vault.moveVaultCipherToFolder(cipher.id, folderId ?? null)
+      if (!moved) return failure("Folder changed concurrently", 409)
+    }
+    return new Response(null, { status: 200 })
   }
   if (
     (path === "/api/ciphers/delete" || path === "/api/ciphers/restore") &&
@@ -3982,6 +4136,7 @@ export async function handleBitwarden(
           await cipherResponse(
             row,
             target.targetVault,
+            env,
             user.id,
             origin,
             target.organization
@@ -4002,13 +4157,13 @@ export async function handleBitwarden(
     if (method === "GET") {
       const cipher = await vault.getVaultCipher(id)
       return cipher
-        ? json(await cipherResponse(cipher, vault, user.id, origin))
+        ? json(await cipherResponse(cipher, vault, env, user.id, origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/restore") && method === "PUT") {
       const restored = await vault.restoreVaultCipher(id)
       return restored
-        ? json(await cipherResponse(restored, vault, user.id, origin))
+        ? json(await cipherResponse(restored, vault, env, user.id, origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/partial") && (method === "PUT" || method === "POST")) {
@@ -4029,7 +4184,9 @@ export async function handleBitwarden(
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(await cipherResponse(stored.cipher!, vault, user.id, origin))
+        : json(
+            await cipherResponse(stored.cipher!, vault, env, user.id, origin)
+          )
     }
     if ((method === "PUT" || method === "POST") && !path.endsWith("/delete")) {
       const body = await bodyOf(request)
@@ -4051,7 +4208,9 @@ export async function handleBitwarden(
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(await cipherResponse(stored.cipher!, vault, user.id, origin))
+        : json(
+            await cipherResponse(stored.cipher!, vault, env, user.id, origin)
+          )
     }
     if (method === "DELETE" || path.endsWith("/delete")) {
       const result = await vault.trashVaultCipher(id)

@@ -66,8 +66,14 @@ export default {
           vaultMutation || orgMutation
             ? await authenticatedVaultUser(env, request)
             : null
+        const userOnlyCipherMutation =
+          /\/api\/ciphers\/[0-9a-f-]{36}\/(?:partial|archive|unarchive)$/i.test(
+            path
+          )
         const cipherId =
-          user && path.match(/^\/api\/ciphers\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]
+          user &&
+          !userOnlyCipherMutation &&
+          path.match(/^\/api\/ciphers\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]
         const beforeLocator = cipherId
           ? await getOrgCipherLocator(env, cipherId)
           : null

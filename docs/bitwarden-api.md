@@ -27,8 +27,8 @@ organization members. Batch trash and restore accept personal and shared
 ciphers, checking collection access and editing rights before changing any
 items. Cipher creation, editing, import, and personal-to-organization sharing
 preserve the acting user's archive date. Reads and writes check current
-collection access. Send content and
-access counters live in the owner's Durable Object; D1 maps public Send IDs to
+collection access. Send content and access counters live in the owner's
+Durable Object; D1 maps public Send IDs to
 that object. File Send uploads are currently capped at 20 MB. It also
 supports authenticator app TOTP enrollment, login challenges,
 single-use recovery codes, and disabling the factor. Optional email two-factor
@@ -144,8 +144,11 @@ recheck confirmed membership; only owners and admins can create collections.
 Shared cipher IDs and collection assignments live in D1; encrypted cipher data
 resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
-and edit shared ciphers. Shared attachments use private R2 objects under an
-organization prefix; download links recheck the requester's current collection
+and edit shared ciphers. Each user's personal Durable Object stores folder and
+favorite preferences for shared ciphers. Shared partial updates and batch
+folder moves change only that user's preferences; deleting a personal folder
+clears its shared cipher assignments. Shared attachments use private R2 objects
+under an organization prefix; download links recheck the requester's current collection
 access, and organization deletion removes those objects. Owners and admins can
 change a shared cipher's collection assignments; the new mapping takes effect
 for reads and attachment links immediately. Attachment tokens are bound to the

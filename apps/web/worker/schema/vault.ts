@@ -21,6 +21,15 @@ export const vaultCipherArchive = sqliteTable(
   (table) => [primaryKey({ columns: [table.cipherId, table.userId] })]
 )
 
+// Shared cipher folders and favorites belong to the viewing user, not the
+// organization's encrypted cipher payload.
+export const vaultCipherPreference = sqliteTable("vault_cipher_preference", {
+  cipherId: text("cipher_id").primaryKey(),
+  folderId: text("folder_id"),
+  favorite: integer("favorite", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
 export const vaultFolder = sqliteTable("vault_folder", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),

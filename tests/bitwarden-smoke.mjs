@@ -1403,6 +1403,7 @@ const plainBeforeShare = await authorized("/api/ciphers", "POST", {
   type: 2,
   name: "2.personal-plain-share",
   notes: "2.personal-plain-notes",
+  favorite: true,
 })
 assert.equal(plainBeforeShare.status, 200)
 const plainMoved = await authorized(
@@ -1424,6 +1425,7 @@ assert.equal(plainMoved.status, 200)
 assert.equal(plainMoved.body.organizationId, orgId)
 assert.equal(plainMoved.body.notes, "2.shared-plain-notes")
 assert.equal(plainMoved.body.archivedDate, archivedDate)
+assert.equal(plainMoved.body.favorite, true)
 const bulkSources = await Promise.all(
   ["first", "second"].map((part) =>
     authorized("/api/ciphers", "POST", {
@@ -1470,9 +1472,11 @@ const sharedCipherBody = {
   organizationId: orgId,
   collectionIds: [secondCollection.body.id],
   login: { username: "2.encrypted-shared-login" },
+  favorite: true,
 }
 const sharedCipher = await authorized("/api/ciphers", "POST", sharedCipherBody)
 assert.equal(sharedCipher.status, 200)
+assert.equal(sharedCipher.body.favorite, true)
 assert.equal(sharedCipher.body.organizationId, orgId)
 assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
 const sharedId = sharedCipher.body.id
@@ -1485,9 +1489,49 @@ assert.equal(sharedArchived.body.archivedDate, archivedDate)
 const sharedUnarchived = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
   ...sharedCipherBody,
   archivedDate: null,
+  favorite: false,
 })
 assert.equal(sharedUnarchived.status, 200)
 assert.equal(sharedUnarchived.body.archivedDate, null)
+assert.equal(sharedUnarchived.body.favorite, false)
+const ownerMoveFolder = await authorized("/api/folders", "POST", {
+  name: "2.owner-move-folder",
+})
+assert.equal(ownerMoveFolder.status, 200)
+assert.equal(
+  (
+    await authorized("/api/ciphers/move", "PUT", {
+      ids: [cipherId, crypto.randomUUID()],
+      folderId: ownerMoveFolder.body.id,
+    })
+  ).status,
+  404
+)
+assert.equal((await authorized(`/api/ciphers/${cipherId}`)).body.folderId, null)
+assert.equal(
+  (
+    await authorized("/api/ciphers/move", "PUT", {
+      ids: [cipherId, sharedId],
+      folderId: ownerMoveFolder.body.id,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}`)).body.folderId,
+  ownerMoveFolder.body.id
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}`)).body.folderId,
+  ownerMoveFolder.body.id
+)
+assert.equal(
+  (await authorized(`/api/folders/${ownerMoveFolder.body.id}`, "DELETE"))
+    .status,
+  204
+)
+assert.equal((await authorized(`/api/ciphers/${sharedId}`)).body.folderId, null)
+assert.equal((await authorized(`/api/ciphers/${cipherId}`)).body.folderId, null)
 assert.equal(
   (
     await authorized("/api/ciphers/delete", "PUT", {
@@ -1580,6 +1624,16 @@ assert.equal(
   404
 )
 assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${sharedId}/partial`,
+      { folderId: null, favorite: false },
+      "PUT"
+    )
+  ).status,
+  404
+)
+assert.equal(
   (await otherAuthorized("/api/ciphers", sharedCipherBody)).status,
   404
 )
@@ -1589,6 +1643,7 @@ const beforeSharedEditRevision = (
 const editedShared = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
   ...sharedCipherBody,
   name: "2.edited-shared-name",
+  favorite: false,
 })
 assert.equal(editedShared.status, 200)
 assert.equal(editedShared.body.name, "2.edited-shared-name")
@@ -1821,6 +1876,54 @@ assert.equal(
   memberSync.body.ciphers.find((cipher) => cipher.id === plainMoved.body.id)
     .archivedDate,
   null
+)
+assert.equal(
+  memberSync.body.ciphers.find((cipher) => cipher.id === plainMoved.body.id)
+    .favorite,
+  false
+)
+const memberFolder = await otherAuthorized("/api/folders", {
+  name: "2.member-shared-folder",
+})
+assert.equal(memberFolder.status, 200)
+const memberPartial = await otherAuthorized(
+  `/api/ciphers/${sharedId}/partial`,
+  { folderId: memberFolder.body.id, favorite: true },
+  "PUT"
+)
+assert.equal(memberPartial.status, 200)
+assert.equal(memberPartial.body.folderId, memberFolder.body.id)
+assert.equal(memberPartial.body.favorite, true)
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}`)).body.favorite,
+  false
+)
+assert.equal((await authorized(`/api/ciphers/${sharedId}`)).body.folderId, null)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.ciphers.find(
+    (cipher) => cipher.id === sharedId
+  ).folderId,
+  memberFolder.body.id
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/folders/${memberFolder.body.id}`,
+      undefined,
+      "DELETE"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .folderId,
+  null
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).body
+    .favorite,
+  true
 )
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,

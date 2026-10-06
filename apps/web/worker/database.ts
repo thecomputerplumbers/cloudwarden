@@ -275,6 +275,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultSendDownloadToken).run()
       tx.delete(schema.vaultSendToken).run()
       tx.delete(schema.vaultSend).run()
+      tx.delete(schema.vaultCipherPreference).run()
       tx.delete(schema.vaultCipherArchive).run()
       tx.delete(schema.vaultCipher).run()
       tx.delete(schema.vaultFolder).run()
@@ -379,7 +380,89 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .get()
     if (archiveRevision)
       latest = Math.max(latest, archiveRevision.updatedAt.getTime())
+    const preferenceRevision = this.db
+      .select({ updatedAt: schema.setting.updatedAt })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:preference-revision"))
+      .get()
+    if (preferenceRevision)
+      latest = Math.max(latest, preferenceRevision.updatedAt.getTime())
     return latest
+  }
+
+  async getVaultCipherPreference(id: string) {
+    this.assertVaultActive()
+    return (
+      this.db
+        .select()
+        .from(schema.vaultCipherPreference)
+        .where(eq(schema.vaultCipherPreference.cipherId, id))
+        .get() ?? null
+    )
+  }
+
+  async setVaultCipherPreference(
+    id: string,
+    folderId?: string | null,
+    favorite?: boolean
+  ) {
+    this.assertVaultActive()
+    return this.db.transaction((tx) => {
+      const current = tx
+        .select()
+        .from(schema.vaultCipherPreference)
+        .where(eq(schema.vaultCipherPreference.cipherId, id))
+        .get()
+      const selectedFolder =
+        folderId === undefined ? (current?.folderId ?? null) : folderId
+      const selectedFavorite =
+        favorite === undefined ? (current?.favorite ?? false) : favorite
+      if (
+        selectedFolder &&
+        !tx
+          .select({ id: schema.vaultFolder.id })
+          .from(schema.vaultFolder)
+          .where(eq(schema.vaultFolder.id, selectedFolder))
+          .get()
+      )
+        return false
+      const previous = tx
+        .select({ updatedAt: schema.setting.updatedAt })
+        .from(schema.setting)
+        .where(eq(schema.setting.key, "vault:preference-revision"))
+        .get()
+      const now = new Date(
+        Math.max(Date.now(), (previous?.updatedAt.getTime() ?? 0) + 1)
+      )
+      tx.insert(schema.vaultCipherPreference)
+        .values({
+          cipherId: id,
+          folderId: selectedFolder,
+          favorite: selectedFavorite,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: schema.vaultCipherPreference.cipherId,
+          set: {
+            folderId: selectedFolder,
+            favorite: selectedFavorite,
+            updatedAt: now,
+          },
+        })
+        .run()
+      tx.insert(schema.setting)
+        .values({
+          key: "vault:preference-revision",
+          value: "1",
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: schema.setting.key,
+          set: { updatedAt: now },
+        })
+        .run()
+      return true
+    })
   }
 
   async getVaultCipherArchivedAt(id: string, userId: string) {
@@ -805,6 +888,31 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
         .where(eq(schema.setting.key, this.vaultShareKey(id)))
         .get()
       if (!share) throw new Error("Cipher transfer is unavailable")
+      const source = tx
+        .select({ payload: schema.vaultCipher.payload })
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, id))
+        .get()
+      if (source) {
+        const data = JSON.parse(source.payload) as Record<string, unknown>
+        const folderId = Object.entries(data).find(
+          ([key]) => key.toLowerCase() === "folderid"
+        )?.[1]
+        const favorite =
+          Object.entries(data).find(
+            ([key]) => key.toLowerCase() === "favorite"
+          )?.[1] === true
+        if (typeof folderId === "string" || favorite)
+          tx.insert(schema.vaultCipherPreference)
+            .values({
+              cipherId: id,
+              folderId: typeof folderId === "string" ? folderId : null,
+              favorite,
+              updatedAt: new Date(),
+            })
+            .onConflictDoNothing()
+            .run()
+      }
       const attachments = tx
         .select({ id: schema.vaultAttachment.id })
         .from(schema.vaultAttachment)
@@ -1072,6 +1180,42 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     )
   }
 
+  async moveVaultCipherToFolder(id: string, folderId: string | null) {
+    this.assertVaultActive()
+    this.assertCipherNotSharing(id)
+    return this.db.transaction((tx) => {
+      if (
+        folderId &&
+        !tx
+          .select({ id: schema.vaultFolder.id })
+          .from(schema.vaultFolder)
+          .where(eq(schema.vaultFolder.id, folderId))
+          .get()
+      )
+        return false
+      const cipher = tx
+        .select()
+        .from(schema.vaultCipher)
+        .where(eq(schema.vaultCipher.id, id))
+        .get()
+      if (!cipher) return false
+      const payload = JSON.parse(cipher.payload) as Record<string, unknown>
+      const key = Object.keys(payload).find(
+        (field) => field.toLowerCase() === "folderid"
+      )
+      payload[key ?? "folderId"] = folderId
+      tx.update(schema.vaultCipher)
+        .set({
+          payload: JSON.stringify(payload),
+          revision: cipher.revision + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.vaultCipher.id, id))
+        .run()
+      return true
+    })
+  }
+
   async getVaultFolder(id: string) {
     this.assertVaultActive()
     return (
@@ -1139,6 +1283,27 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .returning({ id: schema.vaultFolder.id })
       .get()
     if (!deleted) return false
+    const previous = this.db
+      .select({ updatedAt: schema.setting.updatedAt })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:preference-revision"))
+      .get()
+    const now = new Date(
+      Math.max(Date.now(), (previous?.updatedAt.getTime() ?? 0) + 1)
+    )
+    this.db
+      .update(schema.vaultCipherPreference)
+      .set({ folderId: null, updatedAt: now })
+      .where(eq(schema.vaultCipherPreference.folderId, id))
+      .run()
+    this.db
+      .insert(schema.setting)
+      .values({ key: "vault:preference-revision", value: "1", updatedAt: now })
+      .onConflictDoUpdate({
+        target: schema.setting.key,
+        set: { updatedAt: now },
+      })
+      .run()
     for (const cipher of this.db.select().from(schema.vaultCipher).all()) {
       const payload = JSON.parse(cipher.payload) as Record<string, unknown>
       const folderKey = Object.keys(payload).find(
