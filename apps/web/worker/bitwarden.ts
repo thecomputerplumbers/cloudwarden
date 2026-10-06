@@ -63,6 +63,7 @@ import {
   removeOrgMember,
   validOrgCollections,
   updateVaultCollection,
+  updateVaultOrganization,
 } from "./bitwarden-org"
 
 type Body = Record<string, unknown>
@@ -378,6 +379,7 @@ export function isBitwardenPath(path: string) {
     path === "/api/now" ||
     path === "/api/version" ||
     path === "/api/sync" ||
+    path === "/api/collections" ||
     path === "/api/organizations" ||
     path.startsWith("/api/organizations/") ||
     path.startsWith("/api/users/") ||
@@ -1047,6 +1049,19 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       globalEquivalentDomains: [],
       object: "domains",
     })
+  if (path === "/api/collections" && method === "GET") {
+    const organizations = await listVaultOrganizations(env, user.id)
+    const collections = (
+      await Promise.all(
+        organizations.map(async ({ organization, membership }) =>
+          (await listVaultCollections(env, organization.id, membership)).map(
+            (collection) => collectionResponse(collection, membership)
+          )
+        )
+      )
+    ).flat()
+    return json(list(collections))
+  }
   if (path === "/api/organizations" && method === "POST") {
     const allowed = (env as CloudflareEnv & { ORG_CREATION_USERS?: string })
       .ORG_CREATION_USERS
@@ -1124,6 +1139,17 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
           object: "userKey",
         })
       : failure("Public key not found", 404)
+  }
+  const orgKeyMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/(public-key|keys)$/.exec(path)
+  if (orgKeyMatch && method === "GET") {
+    const orgId = orgKeyMatch[1]!
+    if (!(await getVaultMembership(env, orgId, user.id)))
+      return failure("Organization not found", 404)
+    const org = await getVaultOrganization(env, orgId)
+    return org
+      ? json({ object: "organizationPublicKey", publicKey: org.publicKey })
+      : failure("Organization not found", 404)
   }
   const memberMatch =
     /^\/api\/organizations\/([0-9a-f-]{36})\/users(?:\/(invite|[0-9a-f-]{36})(?:\/(confirm|delete))?)?$/.exec(
@@ -1237,6 +1263,32 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!org) return failure("Organization not found", 404)
     if (!path.includes("/collections") && method === "GET")
       return json(organizationResponse(org))
+    if (
+      !path.includes("/collections") &&
+      (method === "PUT" || method === "POST")
+    ) {
+      if (membership.role !== 0)
+        return failure("Only owners can update organizations", 403)
+      const body = await bodyOf(request)
+      const name = body && stringField(body, "name")
+      const billingEmail = body && stringField(body, "billingEmail")
+      if (
+        !name ||
+        name.length > 100 ||
+        !billingEmail ||
+        billingEmail.length > 254
+      )
+        return failure("Invalid organization")
+      const updated = await updateVaultOrganization(
+        env,
+        orgId,
+        name,
+        normalizeEmail(billingEmail)
+      )
+      return updated
+        ? json(organizationResponse(updated))
+        : failure("Organization not found", 404)
+    }
     if (path.endsWith("/collections") && method === "GET")
       return json(
         list(

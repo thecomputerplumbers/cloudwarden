@@ -261,6 +261,22 @@ export async function getVaultOrganization(env: CloudflareEnv, id: string) {
   )
 }
 
+export async function updateVaultOrganization(
+  env: CloudflareEnv,
+  id: string,
+  name: string,
+  billingEmail: string
+) {
+  return drizzle(env.DB)
+    .update(vaultOrganization)
+    .set({ name, billingEmail, updatedAt: new Date() })
+    .where(
+      and(eq(vaultOrganization.id, id), isNull(vaultOrganization.deletingAt))
+    )
+    .returning()
+    .get()
+}
+
 export async function getVaultMembership(
   env: CloudflareEnv,
   orgId: string,

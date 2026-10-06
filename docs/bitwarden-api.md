@@ -34,6 +34,8 @@ resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
 and edit shared ciphers. Collection moves and shared attachments are not yet
 supported.
+Organization metadata and public-key reads, owner edits, and global collection
+listing are available for client administration screens.
 Owners and admins can rename collections and delete empty ones. Only an owner
 can delete an organization, with a master-password check. Deletion marks the
 organization in D1, fences and clears its Durable Object, then removes D1 rows;

@@ -254,6 +254,20 @@ const organization = await authorized("/api/organizations", "POST", {
 })
 assert.equal(organization.status, 200)
 const orgId = organization.body.id
+assert.equal(
+  (await authorized(`/api/organizations/${orgId}/public-key`)).body.publicKey,
+  "organization-public-key"
+)
+const renamedOrganization = await authorized(
+  `/api/organizations/${orgId}`,
+  "PUT",
+  {
+    name: "Encrypted Team Renamed",
+    billingEmail: email,
+  }
+)
+assert.equal(renamedOrganization.status, 200)
+assert.equal(renamedOrganization.body.name, "Encrypted Team Renamed")
 const orgCollections = await authorized(
   `/api/organizations/${orgId}/collections`
 )
@@ -294,6 +308,7 @@ assert.equal(
   "2.encrypted-organization-key"
 )
 assert.equal(orgSync.body.collections.length, 2)
+assert.equal((await authorized("/api/collections")).body.data.length, 2)
 const sharedCipherBody = {
   type: 1,
   name: "2.encrypted-shared-name",
