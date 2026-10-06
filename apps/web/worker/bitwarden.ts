@@ -1558,6 +1558,37 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     })
     return json(organizationResponse(created.org))
   }
+  const orgExportMatch = /^\/api\/organizations\/([0-9a-f-]{36})\/export$/.exec(
+    path
+  )
+  if (orgExportMatch && method === "GET") {
+    const orgId = orgExportMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role > 1 || !membership.accessAll)
+      return failure("Organization export is forbidden", 403)
+    const collections = await listVaultCollections(env, orgId, membership)
+    const locators = await listOrgCipherLocators(env, orgId)
+    const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
+    const ciphers = await Promise.all(
+      locators.map(async (locator) => {
+        if (!locator) return null
+        const row = await orgVault.getVaultCipher(locator.id)
+        return row
+          ? cipherResponse(row, orgVault, user.id, url.origin, {
+              id: orgId,
+              collectionIds: locator.collectionIds,
+            })
+          : null
+      })
+    )
+    return json({
+      collections: collections.map((collection) =>
+        collectionResponse(collection, membership)
+      ),
+      ciphers: ciphers.filter((cipher) => cipher !== null),
+    })
+  }
   const orgDeleteMatch =
     /^\/api\/organizations\/([0-9a-f-]{36})(?:\/delete)?$/.exec(path)
   if (

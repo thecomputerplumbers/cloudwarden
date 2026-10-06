@@ -632,6 +632,18 @@ const sharedUploaded = await fetch(
 assert.equal(sharedUploaded.status, 204)
 const ownerSharedLink = (await authorized(`/api/ciphers/${sharedId}`)).body
   .attachments[0].url
+const orgExport = await authorized(`/api/organizations/${orgId}/export`)
+assert.equal(orgExport.status, 200)
+assert.equal(orgExport.body.collections.length, 2)
+assert.ok(
+  orgExport.body.ciphers.some(
+    (cipher) =>
+      cipher.id === transferId &&
+      cipher.organizationId === orgId &&
+      cipher.attachments[0].key === "2.shared-attachment-key"
+  )
+)
+assert.ok(orgExport.body.ciphers.some((cipher) => cipher.id === sharedId))
 assert.deepEqual(
   new Uint8Array(await (await fetch(ownerSharedLink)).arrayBuffer()),
   new Uint8Array([9, 8, 7])
@@ -863,6 +875,16 @@ assert.equal(
   200
 )
 const memberSync = await otherAuthorized("/api/sync", undefined, "GET")
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/export`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  403
+)
 assert.equal(
   memberSync.body.profile.organizations[0].key,
   "2.encrypted-key-for-other"
