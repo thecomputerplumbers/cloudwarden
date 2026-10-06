@@ -309,6 +309,51 @@ assert.equal(
   401
 )
 assert.equal((await apiLogin(rotatedApiKey.body.apiKey)).status, 200)
+assert.equal(
+  (await authorized("/api/accounts/request-otp", "POST")).status,
+  200
+)
+assert.equal(
+  (await authorized("/api/accounts/request-otp", "POST")).status,
+  429
+)
+const securityMail = await invitationMail(email, "Cloudwarden security code")
+const securityCode = /security code is (\d{6})/.exec(securityMail)?.[1]
+assert.ok(securityCode)
+const wrongSecurityCode = securityCode === "000001" ? "000002" : "000001"
+for (let attempt = 0; attempt < 4; attempt++)
+  assert.equal(
+    (
+      await authorized("/api/accounts/verify-otp", "POST", {
+        otp: wrongSecurityCode,
+      })
+    ).status,
+    400
+  )
+assert.equal(
+  (await authorized("/api/accounts/verify-otp", "POST", { otp: "0000000" }))
+    .status,
+  400
+)
+const otpRotatedApiKey = await authorized(
+  "/api/accounts/rotate-api-key",
+  "POST",
+  {
+    otp: securityCode,
+  }
+)
+assert.equal(otpRotatedApiKey.status, 200)
+assert.notEqual(otpRotatedApiKey.body.apiKey, rotatedApiKey.body.apiKey)
+assert.equal(
+  (
+    await authorized("/api/accounts/rotate-api-key", "POST", {
+      otp: securityCode,
+    })
+  ).status,
+  403
+)
+assert.equal((await apiLogin(rotatedApiKey.body.apiKey)).status, 400)
+assert.equal((await apiLogin(otpRotatedApiKey.body.apiKey)).status, 200)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
 const beforeImport = await authorized("/api/sync")
@@ -1859,9 +1904,21 @@ assert.equal(
   403
 )
 assert.equal(
+  (await currentAuthorized("/api/accounts/request-otp", {})).status,
+  200
+)
+const deletionSecurityMail = await invitationMail(
+  otherEmail,
+  "Cloudwarden security code"
+)
+const deletionSecurityCode = /security code is (\d{6})/.exec(
+  deletionSecurityMail
+)?.[1]
+assert.ok(deletionSecurityCode)
+assert.equal(
   (
     await currentAuthorized("/api/accounts/delete", {
-      masterPasswordHash: "third-secret",
+      otp: deletionSecurityCode,
     })
   ).status,
   200

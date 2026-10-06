@@ -25,6 +25,9 @@ export async function GET() {
     await getDb().run(
       sql`select user_id, secret_hash, sealed_secret from vault_api_key limit 0`
     )
+    await getDb().run(
+      sql`select user_id, code_hash, attempts from vault_protected_otp limit 0`
+    )
     await getDb().run(sql`select id, lease_until from vault_org_import limit 0`)
     if (product.features.projects)
       await getDb().run(sql`select id, version from project limit 0`)

@@ -103,6 +103,10 @@ import {
 import { completeVaultShare, startVaultShare } from "./bitwarden-share"
 import { personalApiKey, userForPersonalApiKey } from "./bitwarden-api-key"
 import {
+  consumeProtectedOtp,
+  requestProtectedOtp,
+} from "./bitwarden-protected-otp"
+import {
   completeOrgImport,
   startOrgImport,
   type OrgImportPlan,
@@ -148,6 +152,20 @@ function field(body: Body, name: string) {
 function stringField(body: Body, name: string) {
   const value = field(body, name)
   return typeof value === "string" ? value : undefined
+}
+
+async function validateProtectedAction(
+  env: CloudflareEnv,
+  user: VaultUser,
+  body: Body | null
+) {
+  if (!body) return false
+  const password = stringField(body, "masterPasswordHash")
+  const otp = stringField(body, "otp")
+  if (!!password === !!otp) return false
+  return password
+    ? verifyVaultPassword(user, password)
+    : consumeProtectedOtp(env, user.id, otp!)
 }
 
 function numberField(body: Body, name: string) {
@@ -1266,33 +1284,35 @@ export async function handleBitwarden(
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
 
+  if (path === "/api/accounts/request-otp" && method === "POST") {
+    const result = await requestProtectedOtp(env, user)
+    return result === "sent"
+      ? new Response(null, { status: 200 })
+      : failure(
+          result === "rate_limited"
+            ? "Please wait before requesting another code"
+            : result === "delivery_failed"
+              ? "Email delivery failed"
+              : "Email security codes are unavailable",
+          result === "rate_limited" ? 429 : 503
+        )
+  }
+  if (path === "/api/accounts/verify-otp" && method === "POST") {
+    const body = await bodyOf(request)
+    const otp = body && stringField(body, "otp")
+    return otp && (await consumeProtectedOtp(env, user.id, otp))
+      ? new Response(null, { status: 200 })
+      : failure("Invalid security code", 400)
+  }
+
   if (
     (path === "/api/accounts/api-key" ||
       path === "/api/accounts/rotate-api-key") &&
     method === "POST"
   ) {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
-    const otp = body && stringField(body, "otp")
-    if (!body || !!password === !!otp)
-      return failure("Reauthentication required", 403)
-    let authorized = password
-      ? await verifyVaultPassword(user, password)
-      : false
-    if (otp) {
-      const factors = await enabledTwoFactors(env, user.id)
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
-      if (
-        !(await limiter.consumeRateLimit(`api-key:${user.id}`, 10, 5 * 60_000))
-          .allowed
-      )
-        return failure("Too many reauthentication attempts", 429)
-      authorized = !!(
-        (factors.totp && (await verifyTotpLogin(env, factors.totp, otp))) ||
-        (factors.email && (await verifyEmailLogin(env, user.id, otp)))
-      )
-    }
-    if (!authorized) return failure("Invalid reauthentication", 403)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
     const apiKey = await personalApiKey(
       env,
       user.id,
@@ -1349,9 +1369,8 @@ export async function handleBitwarden(
     (path === "/api/accounts" && method === "DELETE")
   ) {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
-    if (!password || !(await verifyVaultPassword(user, password)))
-      return failure("Invalid password", 403)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
     if (await isLastVaultOwner(env, user.id))
       return failure("Transfer or delete owned organizations first", 409)
     if (!(await beginVaultDeletion(env, user.id, user.passwordHash)))
@@ -1763,9 +1782,8 @@ export async function handleBitwarden(
     if (membership.role !== 0)
       return failure("Only owners can delete organizations", 403)
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
-    if (!password || !(await verifyVaultPassword(user, password)))
-      return failure("Invalid password", 403)
+    if (!(await validateProtectedAction(env, user, body)))
+      return failure("Invalid reauthentication", 403)
     if (!(await beginOrgDeletion(env, orgId, user.id)))
       return failure("Organization deletion already started", 409)
     try {

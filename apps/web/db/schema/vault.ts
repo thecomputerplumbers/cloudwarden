@@ -79,6 +79,16 @@ export const vaultApiKey = sqliteTable("vault_api_key", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 })
 
+export const vaultProtectedOtp = sqliteTable("vault_protected_otp", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  codeHash: text("code_hash").notNull(),
+  sentAt: integer("sent_at", { mode: "timestamp_ms" }).notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  attempts: integer("attempts").notNull().default(0),
+})
+
 export const vaultSsoFlow = sqliteTable("vault_sso_flow", {
   id: text("id").primaryKey(),
   clientState: text("client_state").notNull(),

@@ -50,9 +50,14 @@ encrypted at rest in D1 and checked by hash. A client can log in with
 `grant_type=client_credentials`, `client_id=user.<account UUID>`, `scope=api`,
 and the key as `client_secret`. These sessions have no refresh token. Rotation
 revokes existing API-key sessions, including a concurrent login that presents
-the old key. The API-key endpoints also accept an active authenticator or email
-two-factor code in `otp`; they do not yet implement Vaultwarden's separate
-protected-action OTP flow for accounts without a master password.
+the old key. `POST /api/accounts/request-otp` emails a separate
+protected-action code to the verified account address;
+`POST /api/accounts/verify-otp` consumes it. The API-key endpoints accept this
+single-use code in `otp` as an alternative to the master-password hash. Codes
+expire after ten minutes, allow five attempts, and have a 30-second resend
+delay. This lets OIDC accounts without a master password reauthenticate for API
+key management and account or organization deletion when email delivery is
+configured.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
