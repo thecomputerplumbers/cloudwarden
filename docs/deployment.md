@@ -46,11 +46,13 @@ pnpm deploy staging
 pnpm deploy production
 ```
 
-The command validates target configuration/secret inventory and code checks,
-builds with the selected CLOUDFLARE_ENV, and verifies the generated artifact's
-Worker and D1 identities. It then applies D1 migrations, deploys that exact built
-artifact, and checks the canonical HTTPS health endpoint for the expected commit
-marker and configured dependencies. No production deploy occurs on a plain push.
+The command validates target configuration/secret inventory, code checks, and
+the isolated Wrangler Worker smoke test. It builds with the selected
+CLOUDFLARE_ENV and verifies the generated artifact's Worker and D1 identities.
+It then applies D1 migrations, deploys that exact built artifact, and checks
+the canonical HTTPS health endpoint for the expected commit marker and
+configured dependencies. It also checks the Bitwarden config route and bundled
+web vault page. No production deploy occurs on a plain push.
 
 Use backward-compatible migrations: the old Worker can still serve requests
 between migration and deployment. Split destructive schema changes across

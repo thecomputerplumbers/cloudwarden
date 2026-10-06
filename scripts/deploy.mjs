@@ -17,6 +17,7 @@ run("pnpm", ["lint"])
 run("pnpm", ["format:check"])
 run("pnpm", ["typecheck"])
 run("pnpm", ["test"])
+run("pnpm", ["test:worker"])
 const buildId = spawnSync("git", ["rev-parse", "HEAD"], {
   cwd: root,
   encoding: "utf8",
@@ -77,10 +78,29 @@ for (let attempt = 0; attempt < 12; attempt++) {
       }),
       health = await response.json()
     if (response.ok && health.ok && health.buildId === buildId) {
-      console.log(
-        `Verified ${environment}: ${config.vars.APP_URL} (${buildId})`
-      )
-      process.exit(0)
+      const [api, webVault] = await Promise.all([
+        fetch(`${config.vars.APP_URL}/api/config`, {
+          signal: AbortSignal.timeout(10000),
+          cache: "no-store",
+        }),
+        fetch(config.vars.APP_URL, {
+          signal: AbortSignal.timeout(10000),
+          cache: "no-store",
+        }),
+      ])
+      const apiConfig = await api.json()
+      const html = await webVault.text()
+      if (
+        api.ok &&
+        apiConfig.environment?.identity === `${config.vars.APP_URL}/identity` &&
+        webVault.ok &&
+        html.includes("<title page-title>Vaultwarden Web</title>")
+      ) {
+        console.log(
+          `Verified ${environment}: ${config.vars.APP_URL} (${buildId})`
+        )
+        process.exit(0)
+      }
     }
   } catch {
     /* Wait for propagation. */

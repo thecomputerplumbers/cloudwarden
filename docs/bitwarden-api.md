@@ -239,11 +239,11 @@ The account revision endpoint includes organization Durable Object revisions,
 so edits to shared ciphers trigger a client sync even when the personal vault
 has not changed.
 
-The bundled Vaultwarden web vault 2026.7.0 was exercised in isolated Chrome
-against a disposable HTTPS Wrangler Worker. Account creation, automatic sign-in,
-loading the vault, creating an encrypted login item, and viewing it succeeded.
-The client requests `/api/auth-requests/pending`; Cloudwarden now serves that
-route and the device approval exchange, but the browser flow has not yet been
-rechecked against this change. The upstream bundle also links
+The bundled Vaultwarden web vault 2026.7.0 was rechecked in isolated Chrome
+against a disposable HTTPS Wrangler Worker after the authentication changes.
+Account creation, automatic sign-in, loading the vault, creating an encrypted
+login item, and viewing it succeeded. This local proxy did not forward WebSocket
+upgrades, so the run did not verify realtime notifications or device approval.
+The upstream bundle also links
 to `/css/vaultwarden.css` without shipping that stylesheet; the main styles
 load and the tested screens rendered.
