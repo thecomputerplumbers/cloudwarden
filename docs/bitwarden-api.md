@@ -31,13 +31,17 @@ verification, so enable it only for a controlled local environment. Access
 tokens are signed JWTs that clients can decode, while refresh tokens are
 opaque random values. Both are stored as SHA-256 hashes in D1 and checked
 against the current session on every request. Access tokens expire after one
-hour and refresh tokens after 30 days. Issuing tokens requires the
+hour and refresh tokens after 30 days. After a refresh, the previous access
+token remains valid for at most 30 seconds so in-flight browser requests can
+finish; the previous refresh token cannot be reused. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
-are reused when they belong to the account. Browser export remains unverified;
-server-side export is not implemented.
+are reused when they belong to the account. Browser CSV import and unencrypted
+JSON export were exercised locally in isolated Chrome; the exported JSON
+contained the imported folder and both personal items. Other export formats
+and server-side export remain unverified.
 
 Optional OIDC sign-in for the bundled web vault uses the fork's confidential
 provider client. Configure `SSO_AUTHORITY` as the exact issuer,

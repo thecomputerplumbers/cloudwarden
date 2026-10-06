@@ -45,6 +45,10 @@ export const vaultSession = sqliteTable(
     deviceType: text("device_type").notNull().default("unknown"),
     clientId: text("client_id").notNull().default("unknown"),
     accessHash: text("access_hash").notNull(),
+    previousAccessHash: text("previous_access_hash"),
+    previousAccessExpiresAt: integer("previous_access_expires_at", {
+      mode: "timestamp_ms",
+    }),
     refreshHash: text("refresh_hash").notNull(),
     ssoIssuer: text("sso_issuer"),
     ssoRefreshToken: text("sso_refresh_token"),
@@ -57,6 +61,9 @@ export const vaultSession = sqliteTable(
   },
   (table) => [
     uniqueIndex("vault_session_access_unique").on(table.accessHash),
+    uniqueIndex("vault_session_previous_access_unique").on(
+      table.previousAccessHash
+    ),
     uniqueIndex("vault_session_refresh_unique").on(table.refreshHash),
   ]
 )

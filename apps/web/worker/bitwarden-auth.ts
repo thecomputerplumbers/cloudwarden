@@ -1,5 +1,5 @@
 import { drizzle } from "drizzle-orm/d1"
-import { and, eq, isNotNull, isNull, ne, sql } from "drizzle-orm"
+import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 
 import { vaultMembership, vaultSession, vaultUser } from "../db/schema/vault"
 import {
@@ -13,6 +13,7 @@ export type VaultUser = typeof vaultUser.$inferSelect
 
 const ACCESS_LIFETIME_MS = 60 * 60 * 1000
 const REFRESH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
+const ACCESS_REFRESH_OVERLAP_MS = 30 * 1000
 const encoder = new TextEncoder()
 
 function bytesToHex(bytes: Uint8Array) {
@@ -486,6 +487,17 @@ export async function refreshVaultSession(
   const updated = await db
     .update(vaultSession)
     .set({
+      previousAccessHash:
+        session.accessExpiresAt.getTime() > now ? session.accessHash : null,
+      previousAccessExpiresAt:
+        session.accessExpiresAt.getTime() > now
+          ? new Date(
+              Math.min(
+                session.accessExpiresAt.getTime(),
+                now + ACCESS_REFRESH_OVERLAP_MS
+              )
+            )
+          : null,
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(nextRefresh),
       ssoRefreshToken: nextSsoRefresh,
@@ -509,12 +521,25 @@ export async function authenticatedVaultUser(
   )
   if (!match) return null
   const db = drizzle(env.DB)
+  const hash = await tokenHash(match[1]!)
+  const now = new Date()
   const session = await db
     .select()
     .from(vaultSession)
-    .where(eq(vaultSession.accessHash, await tokenHash(match[1]!)))
+    .where(
+      or(
+        and(
+          eq(vaultSession.accessHash, hash),
+          gt(vaultSession.accessExpiresAt, now)
+        ),
+        and(
+          eq(vaultSession.previousAccessHash, hash),
+          gt(vaultSession.previousAccessExpiresAt, now)
+        )
+      )
+    )
     .get()
-  if (!session || session.accessExpiresAt.getTime() <= Date.now()) return null
+  if (!session) return null
   return (
     (await db
       .select()

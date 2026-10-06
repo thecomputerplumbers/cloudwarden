@@ -373,6 +373,14 @@ const refreshed = await fetch(`${origin}/identity/connect/token`, {
 })
 assert.equal(refreshed.status, 200)
 const refreshedTokens = await refreshed.json()
+assert.equal(
+  (
+    await call("/api/accounts/profile", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    })
+  ).status,
+  200
+)
 currentAccessToken = refreshedTokens.access_token
 assert.equal(
   (
