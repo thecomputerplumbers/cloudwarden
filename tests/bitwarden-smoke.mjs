@@ -1159,6 +1159,188 @@ function totp(secret, step) {
 }
 
 assert.equal(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1), "287082")
+
+const emailFactorUser = `email-factor-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await post("/identity/accounts/register", {
+      email: emailFactorUser,
+      masterPasswordHash: "email-factor-secret",
+      key: "2.email-factor-key",
+      kdf: 0,
+      kdfIterations: 600_000,
+    })
+  ).status,
+  200
+)
+const emailFactorLogin = await tokenRequest(
+  emailFactorUser,
+  "email-factor-secret"
+)
+assert.equal(emailFactorLogin.status, 200)
+const emailFactorToken = (await emailFactorLogin.json()).access_token
+const emailFactorAuthorized = (path, body, method = "POST") =>
+  call(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${emailFactorToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  })
+assert.equal(
+  (
+    await emailFactorAuthorized("/api/two-factor/send-email", {
+      email: emailFactorUser,
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await emailFactorAuthorized("/api/two-factor/send-email", {
+      email: emailFactorUser,
+      masterPasswordHash: "email-factor-secret",
+    })
+  ).status,
+  200
+)
+const enrollmentCode = /verification code is (\d{6})/.exec(
+  await invitationMail(emailFactorUser, "Cloudwarden verification code")
+)?.[1]
+assert.match(enrollmentCode, /^\d{6}$/)
+assert.equal(
+  (
+    await emailFactorAuthorized(
+      "/api/two-factor/email",
+      {
+        email: emailFactorUser,
+        token: "000000",
+        masterPasswordHash: "email-factor-secret",
+      },
+      "PUT"
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await emailFactorAuthorized(
+      "/api/two-factor/email",
+      {
+        email: emailFactorUser,
+        token: enrollmentCode,
+        masterPasswordHash: "email-factor-secret",
+      },
+      "PUT"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (await emailFactorAuthorized("/api/two-factor", undefined, "GET")).body
+    .data[0].type,
+  1
+)
+const emailChallenge = await tokenRequest(
+  emailFactorUser,
+  "email-factor-secret"
+)
+assert.deepEqual((await emailChallenge.json()).TwoFactorProviders, ["1"])
+assert.equal(
+  (
+    await post("/api/two-factor/send-email-login", {
+      email: emailFactorUser,
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await post("/api/two-factor/send-email-login", {
+      email: emailFactorUser,
+      masterPasswordHash: "email-factor-secret",
+    })
+  ).status,
+  200
+)
+let loginEmailCode
+for (let attempt = 0; attempt < 30; attempt++) {
+  loginEmailCode = /verification code is (\d{6})/.exec(
+    await invitationMail(emailFactorUser, "Cloudwarden verification code")
+  )?.[1]
+  if (loginEmailCode && loginEmailCode !== enrollmentCode) break
+  await delay(100)
+}
+assert.match(loginEmailCode, /^\d{6}$/)
+assert.notEqual(loginEmailCode, enrollmentCode)
+assert.equal(
+  (
+    await tokenRequest(emailFactorUser, "email-factor-secret", {
+      two_factor_provider: "1",
+      two_factor_token: loginEmailCode,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await tokenRequest(emailFactorUser, "email-factor-secret", {
+      two_factor_provider: "1",
+      two_factor_token: loginEmailCode,
+    })
+  ).status,
+  400
+)
+const combinedEnrollment = await emailFactorAuthorized(
+  "/api/two-factor/get-authenticator",
+  { masterPasswordHash: "email-factor-secret" }
+)
+assert.equal(combinedEnrollment.status, 200)
+assert.equal(
+  (
+    await emailFactorAuthorized("/api/two-factor/authenticator", {
+      masterPasswordHash: "email-factor-secret",
+      key: combinedEnrollment.body.key,
+      token: totp(combinedEnrollment.body.key, Math.floor(Date.now() / 30_000)),
+    })
+  ).status,
+  200
+)
+const combinedChallenge = await tokenRequest(
+  emailFactorUser,
+  "email-factor-secret"
+)
+assert.deepEqual((await combinedChallenge.json()).TwoFactorProviders, [
+  "0",
+  "1",
+])
+const emailRecovery = await emailFactorAuthorized(
+  "/api/two-factor/get-recover",
+  { masterPasswordHash: "email-factor-secret" }
+)
+assert.match(emailRecovery.body.code, /^[A-Z2-7]{32}$/)
+const emailRecovered = await tokenRequest(
+  emailFactorUser,
+  "email-factor-secret",
+  {
+    two_factor_provider: "8",
+    two_factor_token: emailRecovery.body.code,
+  }
+)
+assert.equal(emailRecovered.status, 200)
+const emailRecoveredToken = (await emailRecovered.json()).access_token
+assert.equal(
+  (
+    await call("/api/two-factor", {
+      headers: { Authorization: `Bearer ${emailRecoveredToken}` },
+    })
+  ).body.data.length,
+  0
+)
+
 assert.equal(
   (
     await otherAuthorized("/api/two-factor/get-authenticator", {

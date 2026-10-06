@@ -53,6 +53,8 @@ try {
       "--var",
       "ORG_INVITATION_EMAILS_ENABLED:true",
       "--var",
+      "EMAIL_2FA_ENABLED:true",
+      "--var",
       "EMAIL_FROM:cloudwarden@example.com",
       "--var",
       "SSO_AUTHORITY:https://auth.example.test/api/auth",

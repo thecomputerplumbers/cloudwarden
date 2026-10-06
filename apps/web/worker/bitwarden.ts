@@ -88,6 +88,16 @@ import {
   sendOrgInvite,
   validOrgInvite,
 } from "./bitwarden-invite"
+import {
+  confirmEmailEnrollment,
+  disableEmailTwoFactor,
+  emailTwoFactorAvailable,
+  getEmailTwoFactor,
+  redeemEmailRecoveryCode,
+  sendEmailEnrollment,
+  sendEmailLogin,
+  verifyEmailLogin,
+} from "./bitwarden-email"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -176,6 +186,58 @@ function registrationsAllowed(env: CloudflareEnv) {
     (env as CloudflareEnv & { SIGNUPS_ALLOWED?: string }).SIGNUPS_ALLOWED ===
     "true"
   )
+}
+
+async function enabledTwoFactors(env: CloudflareEnv, userId: string) {
+  const [totp, email] = await Promise.all([
+    getTotp(env, userId),
+    getEmailTwoFactor(env, userId),
+  ])
+  return { totp, email: email?.email ? email : null }
+}
+
+function twoFactorChallenge(
+  factors: Awaited<ReturnType<typeof enabledTwoFactors>>
+) {
+  const providers = [
+    ...(factors.totp ? ["0"] : []),
+    ...(factors.email ? ["1"] : []),
+  ]
+  const email = factors.email?.email
+  const maskedEmail = email ? `${email[0]}***@${email.split("@")[1]}` : null
+  return json(
+    {
+      error: "invalid_grant",
+      error_description: "Two factor required.",
+      TwoFactorProviders: providers,
+      TwoFactorProviders2: {
+        ...(factors.totp ? { "0": null } : {}),
+        ...(maskedEmail ? { "1": { Email: maskedEmail } } : {}),
+      },
+      MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
+    },
+    400
+  )
+}
+
+async function verifySecondFactor(
+  env: CloudflareEnv,
+  userId: string,
+  factors: Awaited<ReturnType<typeof enabledTwoFactors>>,
+  provider: number,
+  code: string
+) {
+  if (provider === 0 && factors.totp)
+    return verifyTotpLogin(env, factors.totp, code)
+  if (provider === 1 && factors.email)
+    return verifyEmailLogin(env, userId, code)
+  if (provider === 8)
+    return (
+      (factors.totp && (await redeemTotpRecoveryCode(env, userId, code))) ||
+      (factors.email && (await redeemEmailRecoveryCode(env, userId, code))) ||
+      false
+    )
+  return false
 }
 
 function profile(
@@ -912,6 +974,33 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json({ object: "register", captchaBypassToken: "" })
   }
 
+  if (path === "/api/two-factor/send-email-login" && method === "POST") {
+    if (!emailTwoFactorAvailable(env))
+      return failure("Email two-factor is unavailable", 503)
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!email || !password) return failure("Credentials are required")
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    if (
+      !(await limiter.consumeRateLimit(`email-login:${ip}`, 10, 60 * 60_000))
+        .allowed
+    )
+      return failure("Too many email code requests", 429)
+    const account = await findVaultUser(env, email)
+    if (!(await verifyVaultPassword(account, password)) || !account)
+      return failure("Username or password is incorrect")
+    if (!(await getEmailTwoFactor(env, account.id))?.email)
+      return failure("Email two-factor is unavailable", 404)
+    try {
+      await sendEmailLogin(env, account.id)
+    } catch {
+      return failure("Email delivery failed", 503)
+    }
+    return new Response(null, { status: 200 })
+  }
+
   if (path === "/identity/connect/token" && method === "POST") {
     const body = await bodyOf(request)
     if (!body) return failure("Invalid token request")
@@ -948,33 +1037,24 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         return json({ error: "invalid_grant" }, 400)
       }
       const ssoUser = sso.user
-      const factor = await getTotp(env, ssoUser.id)
-      if (factor) {
+      const factors = await enabledTwoFactors(env, ssoUser.id)
+      if (factors.totp || factors.email) {
         const factorCode = stringField(body, "two_factor_token")
         const provider = integerField(body, "two_factor_provider") ?? 0
-        if (!factorCode)
-          return json(
-            {
-              error: "invalid_grant",
-              error_description: "Two factor required.",
-              TwoFactorProviders: ["0"],
-              TwoFactorProviders2: { "0": null },
-              MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
-            },
-            400
-          )
+        if (!factorCode) return twoFactorChallenge(factors)
         if (
           !(
             await limiter.consumeRateLimit(`totp:${ssoUser.id}`, 15, 5 * 60_000)
           ).allowed
         )
           return failure("Too many two-factor attempts", 429)
-        const valid =
-          provider === 0
-            ? await verifyTotpLogin(env, factor, factorCode)
-            : provider === 8
-              ? await redeemTotpRecoveryCode(env, ssoUser.id, factorCode)
-              : false
+        const valid = await verifySecondFactor(
+          env,
+          ssoUser.id,
+          factors,
+          provider,
+          factorCode
+        )
         if (!valid) return failure("Invalid two-factor code", 400)
       }
       if (!(await consumeVaultSso(env, code, ssoUser.id)))
@@ -1047,21 +1127,11 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const user = await findVaultUser(env, username)
     if (!(await verifyVaultPassword(user, password)) || !user)
       return failure("Username or password is incorrect", 400)
-    const factor = await getTotp(env, user.id)
-    if (factor) {
+    const factors = await enabledTwoFactors(env, user.id)
+    if (factors.totp || factors.email) {
       const code = stringField(body, "two_factor_token")
       const provider = integerField(body, "two_factor_provider") ?? 0
-      if (!code)
-        return json(
-          {
-            error: "invalid_grant",
-            error_description: "Two factor required.",
-            TwoFactorProviders: ["0"],
-            TwoFactorProviders2: { "0": null },
-            MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
-          },
-          400
-        )
+      if (!code) return twoFactorChallenge(factors)
       const secondFactorAllowed = await limiter.consumeRateLimit(
         `totp:${user.id}`,
         15,
@@ -1069,12 +1139,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       )
       if (!secondFactorAllowed.allowed)
         return failure("Too many two-factor attempts", 429)
-      const valid =
-        provider === 0
-          ? await verifyTotpLogin(env, factor, code)
-          : provider === 8
-            ? await redeemTotpRecoveryCode(env, user.id, code)
-            : false
+      const valid = await verifySecondFactor(
+        env,
+        user.id,
+        factors,
+        provider,
+        code
+      )
       if (!valid) return failure("Invalid two-factor code", 400)
     }
     return json(
@@ -1225,14 +1296,85 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       : failure("Account changed", 409)
   }
 
-  if (path === "/api/two-factor" && method === "GET")
+  if (path === "/api/two-factor" && method === "GET") {
+    const factors = await enabledTwoFactors(env, user.id)
     return json({
-      data: (await getTotp(env, user.id))
-        ? [{ enabled: true, type: 0, object: "twoFactorProvider" }]
-        : [],
+      data: [
+        ...(factors.totp
+          ? [{ enabled: true, type: 0, object: "twoFactorProvider" }]
+          : []),
+        ...(factors.email
+          ? [{ enabled: true, type: 1, object: "twoFactorProvider" }]
+          : []),
+      ],
       object: "list",
       continuationToken: null,
     })
+  }
+  if (path === "/api/two-factor/get-email" && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    const factor = await getEmailTwoFactor(env, user.id)
+    return json({
+      email: factor?.email ?? null,
+      enabled: !!factor?.email,
+      object: "twoFactorEmail",
+    })
+  }
+  if (path === "/api/two-factor/send-email" && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    const email = body && stringField(body, "email")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (!email) return failure("Email is required")
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    if (
+      !(
+        await limiter.consumeRateLimit(
+          `email-enroll:${user.id}`,
+          5,
+          60 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many email code requests", 429)
+    try {
+      return (await sendEmailEnrollment(env, user.id, email))
+        ? new Response(null, { status: 200 })
+        : failure("Email two-factor is unavailable")
+    } catch {
+      return failure("Email delivery failed", 503)
+    }
+  }
+  if (
+    path === "/api/two-factor/email" &&
+    (method === "PUT" || method === "POST")
+  ) {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    const email = body && stringField(body, "email")
+    const code = body && stringField(body, "token")
+    if (!password || !(await verifyVaultPassword(user, password)))
+      return failure("Invalid password", 403)
+    if (!email || !code) return failure("Invalid email factor")
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    if (
+      !(
+        await limiter.consumeRateLimit(
+          `email-confirm:${user.id}`,
+          10,
+          10 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many email code attempts", 429)
+    if (!(await confirmEmailEnrollment(env, user.id, email, code, request)))
+      return failure("Invalid email code")
+    return json({ email, enabled: true, object: "twoFactorEmail" })
+  }
   if (path === "/api/two-factor/get-authenticator" && method === "POST") {
     const body = await bodyOf(request)
     const password = body && stringField(body, "masterPasswordHash")
@@ -1271,22 +1413,30 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const password = body && stringField(body, "masterPasswordHash")
     if (!password || !(await verifyVaultPassword(user, password)))
       return failure("Invalid password", 403)
-    const factor = await getTotp(env, user.id)
-    return factor
-      ? json({ code: factor.recoveryCode, object: "twoFactorRecover" })
+    const factors = await enabledTwoFactors(env, user.id)
+    const recovery = factors.email?.recoveryCode ?? factors.totp?.recoveryCode
+    return recovery
+      ? json({ code: recovery, object: "twoFactorRecover" })
       : failure("Two-factor authentication is disabled", 404)
   }
   if (
     (path === "/api/two-factor/disable" ||
-      path === "/api/two-factor/authenticator") &&
+      path === "/api/two-factor/authenticator" ||
+      path === "/api/two-factor/email") &&
     (method === "POST" || method === "PUT" || method === "DELETE")
   ) {
     const body = await bodyOf(request)
     const password = body && stringField(body, "masterPasswordHash")
     if (!password || !(await verifyVaultPassword(user, password)))
       return failure("Invalid password", 403)
-    if (body && integerField(body, "type") !== 0)
-      return failure("Invalid two-factor provider")
+    const type = body && integerField(body, "type")
+    if (type !== 0 && type !== 1) return failure("Invalid two-factor provider")
+    if (type === 1) {
+      if (!(await getEmailTwoFactor(env, user.id))?.email)
+        return failure("Two-factor authentication is disabled", 404)
+      await disableEmailTwoFactor(env, user.id, request)
+      return json({ enabled: false, type: 1, object: "twoFactorProvider" })
+    }
     const factor = await getTotp(env, user.id)
     if (!factor) return failure("Two-factor authentication is disabled", 404)
     const key = body && stringField(body, "key")
@@ -1305,7 +1455,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(
       profile(
         user,
-        !!(await getTotp(env, user.id)),
+        !!(await getTotp(env, user.id)) ||
+          !!(await getEmailTwoFactor(env, user.id))?.email,
         await profileOrganizations()
       )
     )
@@ -1320,7 +1471,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(
       profile(
         updated,
-        !!(await getTotp(env, user.id)),
+        !!(await getTotp(env, user.id)) ||
+          !!(await getEmailTwoFactor(env, user.id))?.email,
         await profileOrganizations()
       )
     )
@@ -1927,7 +2079,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json({
       profile: profile(
         user,
-        !!(await getTotp(env, user.id)),
+        !!(await getTotp(env, user.id)) ||
+          !!(await getEmailTwoFactor(env, user.id))?.email,
         organizations.map(({ organization, membership }) =>
           profileOrganizationResponse(organization, membership)
         )

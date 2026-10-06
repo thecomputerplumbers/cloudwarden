@@ -1,7 +1,11 @@
 import { drizzle } from "drizzle-orm/d1"
 import { and, eq, lt, ne } from "drizzle-orm"
 
-import { vaultSession, vaultTotp } from "../db/schema/vault"
+import {
+  vaultEmailTwoFactor,
+  vaultSession,
+  vaultTotp,
+} from "../db/schema/vault"
 import { tokenHash } from "./bitwarden-auth"
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
@@ -147,6 +151,10 @@ export async function redeemTotpRecoveryCode(
     .get()
   if (!removed) return false
   await drizzle(env.DB)
+    .delete(vaultEmailTwoFactor)
+    .where(eq(vaultEmailTwoFactor.userId, userId))
+    .run()
+  await drizzle(env.DB)
     .delete(vaultSession)
     .where(eq(vaultSession.userId, userId))
     .run()
@@ -165,7 +173,7 @@ export async function disableTotp(
   await revokeOtherSessions(env, userId, request)
 }
 
-async function revokeOtherSessions(
+export async function revokeOtherSessions(
   env: CloudflareEnv,
   userId: string,
   request: Request

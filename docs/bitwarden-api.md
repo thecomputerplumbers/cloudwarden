@@ -23,8 +23,14 @@ and access limits, and encrypted attachments stored in private R2. Send content
 and access counters live in the owner's Durable Object; D1 maps public Send IDs
 to that object. File Send uploads are currently capped at 20 MB. It also
 supports authenticator app TOTP enrollment, login challenges,
-single-use recovery codes, and disabling the factor. TOTP codes cannot be
-replayed, and enrolling a factor revokes other sessions. Attachment links
+single-use recovery codes, and disabling the factor. Optional email two-factor
+uses the native Cloudflare Email Service when `EMAIL_2FA_ENABLED=true` and
+`EMAIL_FROM` is configured with a verified sender. A six-digit code expires
+after ten minutes and can be used once. Enrolling an email address requires
+the account password and verification of a code sent to that address. Login
+codes are rate limited; recovery disables all active two-factor methods.
+TOTP codes cannot be replayed, and enrolling a factor revokes other sessions.
+Attachment links
 expire after five minutes. Registration is disabled unless
 `SIGNUPS_ALLOWED=true` is configured. Open registration currently has no email
 verification, so enable it only for a controlled local environment. Access

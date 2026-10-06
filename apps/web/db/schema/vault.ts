@@ -118,6 +118,25 @@ export const vaultTotp = sqliteTable("vault_totp", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 })
 
+export const vaultEmailTwoFactor = sqliteTable("vault_email_two_factor", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  email: text("email"),
+  pendingEmail: text("pending_email"),
+  pendingCodeHash: text("pending_code_hash"),
+  pendingCodeExpiresAt: integer("pending_code_expires_at", {
+    mode: "timestamp_ms",
+  }),
+  loginCodeHash: text("login_code_hash"),
+  loginCodeExpiresAt: integer("login_code_expires_at", {
+    mode: "timestamp_ms",
+  }),
+  loginAttempts: integer("login_attempts").notNull().default(0),
+  recoveryCode: text("recovery_code"),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
 // Public Send URLs resolve to the owner's Durable Object through this index.
 // The encrypted content and access counter remain in that object.
 export const vaultSendLocator = sqliteTable("vault_send_locator", {
