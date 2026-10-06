@@ -1,0 +1,1 @@
+ALTER TABLE `vault_user` ADD `password_hint` text;

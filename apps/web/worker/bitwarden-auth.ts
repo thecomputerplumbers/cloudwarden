@@ -133,6 +133,7 @@ export async function createVaultUser(
     email: string
     name: string
     masterPasswordHash: string
+    passwordHint?: string | null
     key: string
     privateKey?: string
     publicKey?: string
@@ -153,6 +154,7 @@ export async function createVaultUser(
     name: input.name || email,
     passwordSalt: salt,
     passwordHash: await hashClientPassword(input.masterPasswordHash, salt),
+    passwordHint: input.passwordHint ?? null,
     key: input.key,
     privateKey: input.privateKey ?? null,
     publicKey: input.publicKey ?? null,
@@ -205,6 +207,7 @@ export async function initializeVaultPassword(
   userId: string,
   input: {
     masterPasswordHash: string
+    passwordHint?: string | null
     key: string
     privateKey: string
     publicKey: string
@@ -221,6 +224,7 @@ export async function initializeVaultPassword(
     .update(vaultUser)
     .set({
       passwordHash: await hashClientPassword(input.masterPasswordHash, salt),
+      passwordHint: input.passwordHint ?? null,
       passwordSalt: salt,
       key: input.key,
       privateKey: input.privateKey,
@@ -343,6 +347,7 @@ export async function updateVaultPassword(
   request: Request,
   newPassword: string,
   newKey: string,
+  passwordHint: string | null | undefined,
   kdf: {
     type: number
     iterations: number
@@ -359,6 +364,7 @@ export async function updateVaultPassword(
       passwordSalt: salt,
       passwordHash: await hashClientPassword(newPassword, salt),
       key: newKey,
+      ...(passwordHint !== undefined ? { passwordHint } : {}),
       kdf: kdf?.type ?? user.kdf,
       kdfIterations: kdf?.iterations ?? user.kdfIterations,
       kdfMemory: kdf ? kdf.memory : user.kdfMemory,

@@ -306,6 +306,7 @@ const registration = await registerWithEmail({
   email,
   name: "Vault Test",
   masterPasswordHash: "client-derived-secret",
+  masterPasswordHint: "  blue mountain  ",
   key: "2.encrypted-user-key",
   keys: {
     encryptedPrivateKey: "2.encrypted-private-key",
@@ -315,6 +316,19 @@ const registration = await registerWithEmail({
   kdfIterations: 600_000,
 })
 assert.equal(registration.status, 200)
+assert.equal((await post("/api/accounts/password-hint", { email })).status, 200)
+const hintMail = await invitationMail(email, "Your Cloudwarden password hint")
+assert.match(hintMail, /Your master password hint is: blue mountain/)
+const missingHintEmail = `missing-hint-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (await post("/api/accounts/password-hint", { email: missingHintEmail }))
+    .status,
+  200
+)
+assert.doesNotMatch(
+  readFileSync(`${storage}/worker.log`, "utf8"),
+  new RegExp(`To: ${missingHintEmail}`)
+)
 
 const webEmail = `web-${crypto.randomUUID()}@example.test`
 const registrationToken = await registrationTokenFor(webEmail, "Web Test")
@@ -3499,6 +3513,7 @@ const passwordChange = (authenticationSalt) =>
     },
     body: JSON.stringify({
       masterPasswordHash: "second-secret",
+      masterPasswordHint: "  green river  ",
       authenticationData: {
         salt: authenticationSalt,
         kdf: { kdfType: 0, iterations: 650_000 },
@@ -3513,6 +3528,14 @@ const passwordChange = (authenticationSalt) =>
   })
 assert.equal((await passwordChange("wrong@example.test")).status, 400)
 assert.equal((await passwordChange(otherEmail)).status, 200)
+assert.equal(
+  (await post("/api/accounts/password-hint", { email: otherEmail })).status,
+  200
+)
+assert.match(
+  await invitationMail(otherEmail, "Your Cloudwarden password hint"),
+  /Your master password hint is: green river/
+)
 assert.equal(
   (
     await call("/api/sync", {

@@ -208,6 +208,14 @@ function stringField(body: Body, name: string) {
   return typeof value === "string" ? value : undefined
 }
 
+function passwordHintField(body: Body): string | null | undefined | false {
+  const value = field(body, "masterPasswordHint")
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== "string" || value.length > 512) return false
+  return value.trim() || null
+}
+
 function archivedDateField(body: Body): string | null | false {
   const value = field(body, "archivedDate")
   if (value == null) return null
@@ -1183,6 +1191,59 @@ export async function handleBitwarden(
     })
   }
 
+  if (path === "/api/accounts/password-hint" && method === "POST") {
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    if (
+      !email ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      email.length > 254
+    )
+      return failure("Invalid email")
+    if (!env.APP_URL || !env.EMAIL_FROM)
+      return failure("Password hints are unavailable", 503)
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    if (
+      !(await limiter.consumeRateLimit(`password-hint:${ip}`, 5, 60 * 60_000))
+        .allowed ||
+      !(
+        await limiter.consumeRateLimit(
+          `password-hint-email:${await tokenHash(normalizeEmail(email))}`,
+          3,
+          60 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many hint requests", 429)
+    const account = await findVaultUser(env, email)
+    if (account) {
+      try {
+        await createMailer(
+          env.EMAIL,
+          env.EMAIL_FROM
+        )({
+          to: account.email,
+          subject: "Your Cloudwarden password hint",
+          message: account.passwordHint
+            ? `Your master password hint is: ${account.passwordHint}`
+            : "You have no master password hint set for this account.",
+          url: origin,
+          label: "Open Cloudwarden",
+        })
+      } catch {
+        console.error("Password hint email failed")
+      }
+    } else {
+      // Match Vaultwarden's response delay so an absent account does not
+      // produce an immediate answer while a present one triggers mail delivery.
+      await new Promise((resolve) =>
+        setTimeout(resolve, 900 + Math.floor(Math.random() * 201))
+      )
+    }
+    return new Response(null, { status: 200 })
+  }
+
   if (
     (path === "/identity/accounts/register/send-verification-email" ||
       path === "/api/accounts/register/send-verification-email") &&
@@ -1314,6 +1375,7 @@ export async function handleBitwarden(
     const unlock = field(body, "masterPasswordUnlock") as Body | undefined
     const kdfSettings = authentication && field(authentication, "kdf")
     const legacyHash = stringField(body, "masterPasswordHash")
+    const passwordHint = passwordHintField(body)
     const hash =
       (authentication &&
         (stringField(authentication, "masterPasswordAuthenticationHash") ??
@@ -1339,6 +1401,7 @@ export async function handleBitwarden(
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
       !hash ||
       hash.length > 1024 ||
+      passwordHint === false ||
       !key ||
       key.length > 20_000 ||
       !kdf ||
@@ -1371,6 +1434,7 @@ export async function handleBitwarden(
           return failure("Account keys are required")
         const initialized = await initializeVaultPassword(env, existing.id, {
           masterPasswordHash: hash,
+          passwordHint,
           key,
           privateKey,
           publicKey,
@@ -1387,6 +1451,7 @@ export async function handleBitwarden(
           email,
           name,
           masterPasswordHash: hash,
+          passwordHint,
           key,
           privateKey: keys && stringField(keys, "encryptedPrivateKey"),
           publicKey: keys && stringField(keys, "publicKey"),
@@ -2012,6 +2077,7 @@ export async function handleBitwarden(
 
   if (path === "/api/accounts/set-password" && method === "POST") {
     const body = await bodyOf(request)
+    const passwordHint = body && passwordHintField(body)
     const keys = body && (field(body, "keys") as Body | undefined)
     const hash = body && stringField(body, "masterPasswordHash")
     const key = body && stringField(body, "key")
@@ -2029,6 +2095,7 @@ export async function handleBitwarden(
     if (
       !hash ||
       hash.length > 1024 ||
+      passwordHint === false ||
       !key ||
       key.length > 20_000 ||
       !privateKey ||
@@ -2040,6 +2107,7 @@ export async function handleBitwarden(
       return failure("Invalid password setup")
     const initialized = await initializeVaultPassword(env, user.id, {
       masterPasswordHash: hash,
+      passwordHint: passwordHint ?? null,
       key,
       privateKey,
       publicKey,
@@ -2079,8 +2147,10 @@ export async function handleBitwarden(
   ) {
     const body = await bodyOf(request)
     const oldPassword = body && stringField(body, "masterPasswordHash")
+    const passwordHint = body && passwordHintField(body)
     if (!oldPassword || !(await verifyVaultPassword(user, oldPassword)))
       return failure("Invalid password", 403)
+    if (passwordHint === false) return failure("Invalid password hint")
     const authentication = body && field(body, "authenticationData")
     const unlock = body && field(body, "unlockData")
     let nextPassword: string | undefined
@@ -2126,6 +2196,7 @@ export async function handleBitwarden(
       request,
       nextPassword,
       nextKey,
+      passwordHint ?? undefined,
       kdf
     )
     if (updated)

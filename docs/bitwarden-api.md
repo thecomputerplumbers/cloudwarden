@@ -21,6 +21,7 @@ registration, the web vault's start/finish registration flow with a short-lived 
 prelogin, password login, master password and PBKDF2 or Argon2id setting changes, rotating
 refresh tokens, profile and asymmetric key updates, personal vault sync,
 verified account email changes with client rewrapped keys,
+optional master password hints set during registration or password changes,
 personal ciphers, folders, encrypted text and file Sends with public password
 and access limits, and encrypted attachments stored in private R2. Cipher
 archive and unarchive routes support single items and batches. Archive dates
@@ -254,6 +255,10 @@ uses the same deletion pipeline. The token is bound to the current account
 security stamp, cannot delete the last organization owner, and stops working
 once deletion begins. This deletes the account; it cannot decrypt or restore
 its vault.
+`POST /api/accounts/password-hint` emails the saved hint, or says that no hint
+was set. It returns the same response for unknown addresses and limits requests
+by IP and email address. Hints are stored as plaintext in D1, so they must
+never contain the master password.
 
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other

@@ -19,6 +19,7 @@ export const vaultUser = sqliteTable(
       .default(false),
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
+    passwordHint: text("password_hint"),
     passwordSalt: text("password_salt").notNull(),
     key: text("key").notNull(),
     privateKey: text("private_key"),
