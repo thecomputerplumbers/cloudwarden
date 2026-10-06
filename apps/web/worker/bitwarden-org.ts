@@ -194,6 +194,22 @@ export async function createOrgCipherLocator(
   ])
 }
 
+export async function setOrgCipherCollections(
+  env: CloudflareEnv,
+  cipherId: string,
+  collectionIds: string[]
+) {
+  const db = drizzle(env.DB)
+  await db.batch([
+    db
+      .delete(vaultOrgCipherCollection)
+      .where(eq(vaultOrgCipherCollection.cipherId, cipherId)),
+    ...collectionIds.map((collectionId) =>
+      db.insert(vaultOrgCipherCollection).values({ cipherId, collectionId })
+    ),
+  ])
+}
+
 export async function deleteOrgCipherLocator(env: CloudflareEnv, id: string) {
   await drizzle(env.DB)
     .delete(vaultOrgCipher)

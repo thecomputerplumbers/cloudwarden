@@ -519,6 +519,35 @@ const memberSharedLink = (
   await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
 ).body.attachments[0].url
 assert.equal((await fetch(memberSharedLink)).status, 200)
+const movedShared = await authorized(
+  `/api/ciphers/${sharedId}/collections_v2`,
+  "PUT",
+  {
+    collectionIds: [orgCollections.body.data[0].id],
+  }
+)
+assert.equal(movedShared.status, 200)
+assert.equal(
+  movedShared.body.cipher.collectionIds[0],
+  orgCollections.body.data[0].id
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal((await fetch(memberSharedLink)).status, 404)
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${sharedId}/collections`, "PUT", {
+      collectionIds: [secondCollection.body.id],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  200
+)
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, sharedCipherBody, "PUT"))
     .status,

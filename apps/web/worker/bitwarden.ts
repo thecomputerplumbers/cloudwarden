@@ -65,6 +65,7 @@ import {
   organizationResponse,
   profileOrganizationResponse,
   removeOrgMember,
+  setOrgCipherCollections,
   validOrgCollections,
   updateVaultCollection,
   updateVaultOrganization,
@@ -1683,6 +1684,42 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     )
   }
 
+  const collectionUpdateMatch =
+    /^\/api\/ciphers\/([0-9a-f-]{36})\/collections(_v2)?$/.exec(path)
+  if (collectionUpdateMatch && (method === "PUT" || method === "POST")) {
+    const locator = await getOrgCipherLocator(env, collectionUpdateMatch[1]!)
+    if (!locator) return failure("Cipher not found", 404)
+    const member = await getVaultMembership(env, locator.orgId, user.id)
+    if (!member) return failure("Cipher not found", 404)
+    if (member.role > 1) return failure("Collection editing is forbidden", 403)
+    const body = await bodyOf(request)
+    const collectionIds = body && collectionIdsField(body)
+    if (
+      !collectionIds ||
+      !(await validOrgCollections(env, locator.orgId, member, collectionIds))
+    )
+      return failure("Invalid collections")
+    const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
+    const cipher = await orgVault.getVaultCipher(locator.id)
+    if (!cipher) return failure("Cipher not found", 404)
+    await setOrgCipherCollections(env, locator.id, collectionIds)
+    const updated = await cipherResponse(
+      cipher,
+      orgVault,
+      user.id,
+      url.origin,
+      { id: locator.orgId, collectionIds }
+    )
+    return json(
+      collectionUpdateMatch[2]
+        ? {
+            object: "optionalCipherDetails",
+            unavailable: false,
+            cipher: updated,
+          }
+        : updated
+    )
+  }
   const sharedCipherMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore)?$/.exec(
       path

@@ -43,8 +43,10 @@ resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
 and edit shared ciphers. Shared attachments use private R2 objects under an
 organization prefix; download links recheck the requester's current collection
-access, and organization deletion removes those objects. Collection moves are
-not yet supported.
+access, and organization deletion removes those objects. Owners and admins can
+change a shared cipher's collection assignments; the new mapping takes effect
+for reads and attachment links immediately. Moving personal ciphers into an
+organization is not yet supported.
 Organization metadata and public-key reads, owner edits, and global collection
 listing are available for client administration screens.
 Owners and admins can rename collections and delete empty ones. Only an owner
