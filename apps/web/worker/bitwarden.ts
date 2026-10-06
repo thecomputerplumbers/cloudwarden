@@ -1979,6 +1979,76 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       ])
     )
   }
+  if (path === "/api/ciphers/import" && method === "POST") {
+    const body = await bodyOf(request)
+    const rawFolders = body && field(body, "folders")
+    const rawCiphers = body && field(body, "ciphers")
+    const rawRelations = body && field(body, "folderRelationships")
+    if (
+      !Array.isArray(rawFolders) ||
+      !Array.isArray(rawCiphers) ||
+      !Array.isArray(rawRelations) ||
+      rawFolders.length > 1000 ||
+      rawCiphers.length > 1000 ||
+      rawRelations.length > rawCiphers.length
+    )
+      return failure("Invalid vault import")
+    const folders: { id: string | null; name: string }[] = []
+    for (const raw of rawFolders) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid vault import")
+      const name = stringField(raw as Body, "name")
+      if (!name || name.length > 10_000) return failure("Invalid vault import")
+      const id = field(raw as Body, "id")
+      if (
+        id != null &&
+        (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))
+      )
+        return failure("Invalid vault import")
+      folders.push({ id: (id as string | null) ?? null, name })
+    }
+    const folderIndices = new Map<number, number>()
+    for (const raw of rawRelations) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid vault import")
+      const relation = raw as Body
+      const key = numberField(relation, "key")
+      const value = numberField(relation, "value")
+      if (
+        key === undefined ||
+        value === undefined ||
+        key < 0 ||
+        key >= rawCiphers.length ||
+        value < 0 ||
+        value >= folders.length ||
+        folderIndices.has(key)
+      )
+        return failure("Invalid vault import")
+      folderIndices.set(key, value)
+    }
+    const ciphers: { payload: string; folderIndex: number | null }[] = []
+    for (const [index, raw] of rawCiphers.entries()) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return failure("Invalid vault import")
+      const cipher = raw as Body
+      const name = stringField(cipher, "name")
+      const type = numberField(cipher, "type")
+      const orgId = field(cipher, "organizationId")
+      const payload = JSON.stringify(cipher)
+      if (
+        !name ||
+        !type ||
+        type < 1 ||
+        type > 5 ||
+        orgId != null ||
+        payload.length > 1_000_000
+      )
+        return failure("Invalid vault import")
+      ciphers.push({ payload, folderIndex: folderIndices.get(index) ?? null })
+    }
+    await vault.importVault(folders, ciphers)
+    return new Response(null, { status: 200 })
+  }
   if (
     (path === "/api/ciphers" || path === "/api/ciphers/create") &&
     method === "POST"

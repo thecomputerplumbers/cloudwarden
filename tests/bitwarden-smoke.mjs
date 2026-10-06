@@ -211,6 +211,79 @@ assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
+const beforeImport = await authorized("/api/sync")
+assert.equal(
+  (
+    await authorized("/api/ciphers/import", "POST", {
+      folders: [{ name: "2.must-not-appear" }],
+      ciphers: [
+        { type: 1, name: "2.valid-import" },
+        {
+          type: 1,
+          name: "2.invalid-import",
+          organizationId: crypto.randomUUID(),
+        },
+      ],
+      folderRelationships: [{ key: 0, value: 0 }],
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (await authorized("/api/sync")).body.ciphers.length,
+  beforeImport.body.ciphers.length
+)
+assert.equal(
+  (
+    await authorized("/api/ciphers/import", "POST", {
+      folders: [{ name: "2.imported-folder" }],
+      ciphers: [
+        {
+          type: 1,
+          name: "2.imported-login",
+          login: { username: "2.imported-user" },
+        },
+        { type: 2, name: "2.imported-note", secureNote: { type: 0 } },
+      ],
+      folderRelationships: [{ key: 0, value: 0 }],
+    })
+  ).status,
+  200
+)
+const imported = await authorized("/api/sync")
+const importedFolder = imported.body.folders.find(
+  (folder) => folder.name === "2.imported-folder"
+)
+assert.ok(importedFolder)
+assert.equal(
+  imported.body.ciphers.find((cipher) => cipher.name === "2.imported-login")
+    .folderId,
+  importedFolder.id
+)
+assert.equal(
+  imported.body.ciphers.find((cipher) => cipher.name === "2.imported-note")
+    .folderId,
+  null
+)
+assert.equal(
+  (
+    await authorized("/api/ciphers/import", "POST", {
+      folders: [{ id: importedFolder.id, name: "2.ignored-rename" }],
+      ciphers: [{ type: 1, name: "2.imported-into-existing-folder" }],
+      folderRelationships: [{ key: 0, value: 0 }],
+    })
+  ).status,
+  200
+)
+const reused = await authorized("/api/sync")
+assert.equal(reused.body.folders.length, imported.body.folders.length)
+assert.equal(
+  reused.body.ciphers.find(
+    (cipher) => cipher.name === "2.imported-into-existing-folder"
+  ).folderId,
+  importedFolder.id
+)
+
 const attachmentInit = await authorized(
   `/api/ciphers/${cipherId}/attachment/v2`,
   "POST",

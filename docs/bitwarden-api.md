@@ -11,8 +11,8 @@ verify its SHA-256 checksum, and package its static files at `/`. The release
 is from [Vaultwarden's web vault builds](https://github.com/dani-garcia/bw_web_builds/tree/v2026.7.0)
 under GPL-3.0; `web-vault-source.txt` ships with the assets. The archive is
 cached under `apps/web/.cache/` for repeat builds. The web vault requires HTTPS
-even on localhost. Its static loading is verified locally, but signup and vault
-use in a browser still need testing on a trusted HTTPS deployment.
+even on localhost. Signup and basic vault use passed in isolated Chrome against
+a local HTTPS Worker; a trusted HTTPS deployment has not been tested.
 
 Current routes cover server configuration, legacy account registration,
 the web vault's start/finish registration flow with a short-lived signed token,
@@ -33,6 +33,11 @@ opaque random values. Both are stored as SHA-256 hashes in D1 and checked
 against the current session on every request. Access tokens expire after one
 hour and refresh tokens after 30 days. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
+
+Personal vault import accepts the web client's encrypted folders, ciphers, and
+folder relationships in one Durable Object transaction; existing folder IDs
+are reused when they belong to the account. Browser export remains unverified;
+server-side export is not implemented.
 
 Optional OIDC sign-in for the bundled web vault uses the fork's confidential
 provider client. Configure `SSO_AUTHORITY` as the exact issuer,
@@ -118,7 +123,7 @@ request cannot repopulate it after cleanup.
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
 two-factor providers and remembered
-devices, account recovery, notifications, and import/export still need
+devices, account recovery, notifications, and organization import/export still need
 implementation. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 

@@ -138,6 +138,52 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     }
   }
 
+  async importVault(
+    folders: { id: string | null; name: string }[],
+    ciphers: { payload: string; folderIndex: number | null }[]
+  ) {
+    this.assertVaultActive()
+    const now = new Date()
+    const folderIds: string[] = []
+    this.db.transaction((tx) => {
+      for (const folder of folders) {
+        const existing = folder.id
+          ? tx
+              .select({ id: schema.vaultFolder.id })
+              .from(schema.vaultFolder)
+              .where(eq(schema.vaultFolder.id, folder.id))
+              .get()
+          : null
+        const id = existing?.id ?? crypto.randomUUID()
+        folderIds.push(id)
+        if (!existing)
+          tx.insert(schema.vaultFolder)
+            .values({
+              id,
+              name: folder.name,
+              revision: 1,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .run()
+      }
+      for (const cipher of ciphers) {
+        const payload = JSON.parse(cipher.payload) as Record<string, unknown>
+        payload.folderId =
+          cipher.folderIndex === null ? null : folderIds[cipher.folderIndex]!
+        tx.insert(schema.vaultCipher)
+          .values({
+            id: crypto.randomUUID(),
+            payload: JSON.stringify(payload),
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run()
+      }
+    })
+  }
+
   async vaultRevision() {
     this.assertVaultActive()
     const ciphers = this.db.select().from(schema.vaultCipher).all()
