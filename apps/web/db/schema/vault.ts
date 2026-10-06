@@ -85,6 +85,10 @@ export const vaultDevice = sqliteTable(
     deviceId: text("device_id").notNull(),
     deviceType: integer("device_type").notNull(),
     deviceName: text("device_name").notNull(),
+    twoFactorRememberHash: text("two_factor_remember_hash"),
+    twoFactorRememberExpiresAt: integer("two_factor_remember_expires_at", {
+      mode: "timestamp_ms",
+    }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },

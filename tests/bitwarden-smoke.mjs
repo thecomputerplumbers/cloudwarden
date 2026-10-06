@@ -309,10 +309,13 @@ const prelogin = await post("/identity/accounts/prelogin", { email })
 assert.equal(prelogin.status, 200)
 assert.equal(prelogin.body.kdfIterations, 600_000)
 
-const tokenRequest = (username, password, secondFactor = {}) =>
+const tokenRequest = (username, password, secondFactor = {}, clientIp) =>
   fetch(`${origin}/identity/connect/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...(clientIp ? { "CF-Connecting-IP": clientIp } : {}),
+    },
     body: new URLSearchParams({
       grant_type: "password",
       client_id: "web",
@@ -2124,12 +2127,94 @@ assert.equal(
   ).status,
   400
 )
-const otpLogin = await tokenRequest(otherEmail, "second-secret", {
-  two_factor_provider: "0",
-  two_factor_token: totp(enrollment.body.key, step),
-})
+const rememberedDeviceId = crypto.randomUUID()
+const otpLogin = await tokenRequest(
+  otherEmail,
+  "second-secret",
+  {
+    two_factor_provider: "0",
+    two_factor_token: totp(enrollment.body.key, step),
+    two_factor_remember: "1",
+    deviceIdentifier: rememberedDeviceId,
+  },
+  "203.0.113.41"
+)
 assert.equal(otpLogin.status, 200)
-assert.ok((await otpLogin.json()).access_token)
+const otpTokens = await otpLogin.json()
+assert.ok(otpTokens.access_token)
+assert.match(otpTokens.TwoFactorToken, /^[A-Za-z0-9_-]{43}$/)
+const rememberedLogin = await tokenRequest(
+  otherEmail,
+  "second-secret",
+  {
+    two_factor_provider: "5",
+    two_factor_token: otpTokens.TwoFactorToken,
+    deviceIdentifier: rememberedDeviceId,
+  },
+  "203.0.113.42"
+)
+assert.equal(rememberedLogin.status, 200)
+assert.equal((await rememberedLogin.json()).TwoFactorToken, undefined)
+const rotatedRememberLogin = await tokenRequest(
+  otherEmail,
+  "second-secret",
+  {
+    two_factor_provider: "5",
+    two_factor_token: otpTokens.TwoFactorToken,
+    two_factor_remember: "1",
+    deviceIdentifier: rememberedDeviceId,
+  },
+  "203.0.113.46"
+)
+assert.equal(rotatedRememberLogin.status, 200)
+const rotatedRememberToken = (await rotatedRememberLogin.json()).TwoFactorToken
+assert.match(rotatedRememberToken, /^[A-Za-z0-9_-]{43}$/)
+assert.notEqual(rotatedRememberToken, otpTokens.TwoFactorToken)
+assert.equal(
+  (
+    await tokenRequest(
+      otherEmail,
+      "second-secret",
+      {
+        two_factor_provider: "5",
+        two_factor_token: otpTokens.TwoFactorToken,
+        deviceIdentifier: rememberedDeviceId,
+      },
+      "203.0.113.47"
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await tokenRequest(
+      otherEmail,
+      "second-secret",
+      {
+        two_factor_provider: "5",
+        two_factor_token: rotatedRememberToken,
+        deviceIdentifier: crypto.randomUUID(),
+      },
+      "203.0.113.43"
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await tokenRequest(
+      otherEmail,
+      "second-secret",
+      {
+        two_factor_provider: "5",
+        two_factor_token: "wrong",
+        deviceIdentifier: rememberedDeviceId,
+      },
+      "203.0.113.44"
+    )
+  ).status,
+  400
+)
 assert.equal(
   (
     await tokenRequest(otherEmail, "second-secret", {
@@ -2145,6 +2230,44 @@ const recovered = await tokenRequest(otherEmail, "second-secret", {
 })
 assert.equal(recovered.status, 200)
 const recoveredTokens = await recovered.json()
+const reenabledTotp = await post(
+  "/api/two-factor/authenticator",
+  {
+    masterPasswordHash: "second-secret",
+    key: enrollment.body.key,
+    token: totp(enrollment.body.key, Math.floor(Date.now() / 30_000)),
+  },
+  recoveredTokens.access_token
+)
+assert.equal(reenabledTotp.status, 200)
+assert.equal(
+  (
+    await tokenRequest(
+      otherEmail,
+      "second-secret",
+      {
+        two_factor_provider: "5",
+        two_factor_token: rotatedRememberToken,
+        deviceIdentifier: rememberedDeviceId,
+      },
+      "203.0.113.45"
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await post(
+      "/api/two-factor/disable",
+      {
+        masterPasswordHash: "second-secret",
+        type: 0,
+      },
+      recoveredTokens.access_token
+    )
+  ).status,
+  200
+)
 const beforeChange = await tokenRequest(otherEmail, "second-secret")
 assert.equal(beforeChange.status, 200)
 const beforeChangeTokens = await beforeChange.json()

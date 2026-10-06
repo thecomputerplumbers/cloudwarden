@@ -362,6 +362,7 @@ export async function updateVaultPassword(
     .returning({ id: vaultUser.id })
     .get()
   if (!updated) return false
+  await clearRememberedVaultDevices(env, user.id)
   const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
     request.headers.get("Authorization") ?? ""
   )?.[1]
@@ -416,6 +417,7 @@ export async function resetVaultSecurityStamp(
       .where(and(eq(vaultUser.id, userId), isNull(vaultUser.deletingAt))),
     db.delete(vaultSession).where(eq(vaultSession.userId, userId)),
   ])
+  await clearRememberedVaultDevices(env, userId)
 }
 
 export async function updateVaultProfile(
@@ -669,6 +671,61 @@ export async function listVaultDevices(env: CloudflareEnv, userId: string) {
     .orderBy(vaultDevice.createdAt)
     .limit(1000)
     .all()
+}
+
+export async function verifyRememberedVaultDevice(
+  env: CloudflareEnv,
+  userId: string,
+  deviceId: string,
+  token: string
+) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false
+  const db = drizzle(env.DB)
+  const device = await db
+    .select({
+      hash: vaultDevice.twoFactorRememberHash,
+      expiresAt: vaultDevice.twoFactorRememberExpiresAt,
+    })
+    .from(vaultDevice)
+    .where(
+      and(eq(vaultDevice.userId, userId), eq(vaultDevice.deviceId, deviceId))
+    )
+    .get()
+  if (!device?.hash || !device.expiresAt || device.expiresAt <= new Date())
+    return false
+  return constantTimeEqual(device.hash, await tokenHash(token))
+}
+
+export async function rememberVaultDevice(
+  env: CloudflareEnv,
+  userId: string,
+  deviceId: string
+) {
+  const token = randomToken()
+  const updated = await drizzle(env.DB)
+    .update(vaultDevice)
+    .set({
+      twoFactorRememberHash: await tokenHash(token),
+      twoFactorRememberExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+    })
+    .where(
+      and(eq(vaultDevice.userId, userId), eq(vaultDevice.deviceId, deviceId))
+    )
+    .returning({ id: vaultDevice.id })
+    .get()
+  if (!updated) throw new Error("Device was not registered")
+  return token
+}
+
+export async function clearRememberedVaultDevices(
+  env: CloudflareEnv,
+  userId: string
+) {
+  await drizzle(env.DB)
+    .update(vaultDevice)
+    .set({ twoFactorRememberHash: null, twoFactorRememberExpiresAt: null })
+    .where(eq(vaultDevice.userId, userId))
+    .run()
 }
 
 export async function knownVaultDevice(

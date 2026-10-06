@@ -3,6 +3,7 @@ import { createMailer } from "@workspace/email"
 import {
   authenticatedVaultUser,
   beginVaultDeletion,
+  clearRememberedVaultDevices,
   createVaultUser,
   createVaultStubUser,
   currentVaultDeviceId,
@@ -15,12 +16,14 @@ import {
   listVaultDevices,
   normalizeEmail,
   refreshVaultSession,
+  rememberVaultDevice,
   resetVaultSecurityStamp,
   tokenHash,
   updateVaultKeys,
   updateVaultPassword,
   updateVaultProfile,
   verifyVaultPassword,
+  verifyRememberedVaultDevice,
   type VaultUser,
 } from "./bitwarden-auth"
 import type { AppDatabase } from "./database"
@@ -274,18 +277,23 @@ async function verifySecondFactor(
   userId: string,
   factors: Awaited<ReturnType<typeof enabledTwoFactors>>,
   provider: number,
-  code: string
+  code: string,
+  deviceId: string
 ) {
+  if (provider === 5)
+    return verifyRememberedVaultDevice(env, userId, deviceId, code)
   if (provider === 0 && factors.totp)
     return verifyTotpLogin(env, factors.totp, code)
   if (provider === 1 && factors.email)
     return verifyEmailLogin(env, userId, code)
-  if (provider === 8)
-    return (
+  if (provider === 8) {
+    const recovered =
       (factors.totp && (await redeemTotpRecoveryCode(env, userId, code))) ||
       (factors.email && (await redeemEmailRecoveryCode(env, userId, code))) ||
       false
-    )
+    if (recovered) await clearRememberedVaultDevices(env, userId)
+    return recovered
+  }
   return false
 }
 
@@ -1276,32 +1284,38 @@ export async function handleBitwarden(
           ssoUser.id,
           factors,
           provider,
-          factorCode
+          factorCode,
+          deviceId
         )
         if (!valid) return failure("Invalid two-factor code", 400)
       }
       if (!(await consumeVaultSso(env, code, ssoUser.id)))
         return json({ error: "invalid_grant" }, 400)
-      return json(
-        tokenResponse(
-          ssoUser,
-          await issueVaultSession(
-            env,
-            ssoUser,
-            deviceId,
-            clientId,
-            deviceType,
-            {
-              sso: {
-                issuer: (env as CloudflareEnv & { SSO_AUTHORITY: string })
-                  .SSO_AUTHORITY,
-                refreshToken: sso.refreshToken,
-              },
-              deviceName: stringField(body, "device_name") ?? clientId,
-            }
-          )
-        )
+      const tokens = await issueVaultSession(
+        env,
+        ssoUser,
+        deviceId,
+        clientId,
+        deviceType,
+        {
+          sso: {
+            issuer: (env as CloudflareEnv & { SSO_AUTHORITY: string })
+              .SSO_AUTHORITY,
+            refreshToken: sso.refreshToken,
+          },
+          deviceName: stringField(body, "device_name") ?? clientId,
+        }
       )
+      const remember =
+        (factors.totp || factors.email) &&
+        integerField(body, "two_factor_provider") !== 8 &&
+        integerField(body, "two_factor_remember") === 1
+          ? await rememberVaultDevice(env, ssoUser.id, deviceId)
+          : null
+      return json({
+        ...tokenResponse(ssoUser, tokens),
+        ...(remember ? { TwoFactorToken: remember } : {}),
+      })
     }
     if (grant === "send_access") {
       const accessId = stringField(body, "send_id")
@@ -1441,7 +1455,8 @@ export async function handleBitwarden(
         user.id,
         factors,
         provider,
-        code
+        code,
+        deviceId
       )
       if (!valid) return failure("Invalid two-factor code", 400)
     }
@@ -1450,14 +1465,26 @@ export async function handleBitwarden(
       !(await claimAuthRequestLogin(env, authRequest, user.id, deviceId))
     )
       return json({ error: "invalid_grant" }, 400)
-    return json(
-      tokenResponse(
-        user,
-        await issueVaultSession(env, user, deviceId, clientId, deviceType, {
-          deviceName: stringField(body, "device_name") ?? clientId,
-        })
-      )
+    const tokens = await issueVaultSession(
+      env,
+      user,
+      deviceId,
+      clientId,
+      deviceType,
+      {
+        deviceName: stringField(body, "device_name") ?? clientId,
+      }
     )
+    const remember =
+      (factors.totp || factors.email) &&
+      integerField(body, "two_factor_provider") !== 8 &&
+      integerField(body, "two_factor_remember") === 1
+        ? await rememberVaultDevice(env, user.id, deviceId)
+        : null
+    return json({
+      ...tokenResponse(user, tokens),
+      ...(remember ? { TwoFactorToken: remember } : {}),
+    })
   }
 
   const user = await authenticatedVaultUser(env, request)
@@ -1834,6 +1861,7 @@ export async function handleBitwarden(
       return failure("Too many email code attempts", 429)
     if (!(await confirmEmailEnrollment(env, user.id, email, code, request)))
       return failure("Invalid email code")
+    await clearRememberedVaultDevices(env, user.id)
     await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({ email, enabled: true, object: "twoFactorEmail" })
   }
@@ -1864,6 +1892,7 @@ export async function handleBitwarden(
     if (step === null) return failure("Invalid authenticator code")
     if (!(await enableTotp(env, user.id, key.toUpperCase(), step, request)))
       return failure("Invalid authenticator key")
+    await clearRememberedVaultDevices(env, user.id)
     await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({
       enabled: true,
@@ -1898,6 +1927,7 @@ export async function handleBitwarden(
       if (!(await getEmailTwoFactor(env, user.id))?.email)
         return failure("Two-factor authentication is disabled", 404)
       await disableEmailTwoFactor(env, user.id, request)
+      await clearRememberedVaultDevices(env, user.id)
       await publishVaultNotification(env, { type: 11, userId: user.id })
       return json({ enabled: false, type: 1, object: "twoFactorProvider" })
     }
@@ -1907,6 +1937,7 @@ export async function handleBitwarden(
     if (path === "/api/two-factor/authenticator" && key !== factor.secret)
       return failure("Invalid authenticator key", 403)
     await disableTotp(env, user.id, request)
+    await clearRememberedVaultDevices(env, user.id)
     await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({ enabled: false, type: 0, object: "twoFactorProvider" })
   }

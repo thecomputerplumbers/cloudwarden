@@ -29,6 +29,11 @@ uses the native Cloudflare Email Service when `EMAIL_2FA_ENABLED=true` and
 after ten minutes and can be used once. Enrolling an email address requires
 the account password and verification of a code sent to that address. Login
 codes are rate limited; recovery disables all active two-factor methods.
+Clients can remember a device for 30 days by sending `two_factor_remember=1`
+after a successful second-factor login. The response returns `TwoFactorToken`;
+subsequent logins from the same device can present it with provider `5`.
+Only a SHA-256 hash is stored, and factor changes, recovery, or a password
+change revoke remembered devices.
 TOTP codes cannot be replayed, and enrolling a factor revokes other sessions.
 Attachment links
 expire after five minutes. Registration is disabled unless
@@ -186,8 +191,7 @@ request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
-two-factor providers and remembered
-devices, account recovery, and complete notification coverage still need
+two-factor providers, account recovery, and complete notification coverage still need
 implementation. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 
