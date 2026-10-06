@@ -127,6 +127,19 @@ export function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
 }
 
+function registrationFailureKind(error: unknown) {
+  let current = error
+  for (let depth = 0; depth < 3 && current; depth++) {
+    const message = current instanceof Error ? current.message : ""
+    const known = message.match(
+      /(?:SQLITE_[A-Z_]+|D1_ERROR|NOT NULL constraint failed|UNIQUE constraint failed|FOREIGN KEY constraint failed|no such (?:table|column): [a-zA-Z0-9_.]+)/
+    )
+    if (known) return known[0]
+    current = current instanceof Error ? current.cause : null
+  }
+  return error instanceof Error ? error.name : "unknown"
+}
+
 export async function createVaultUser(
   env: CloudflareEnv,
   input: {
@@ -148,12 +161,21 @@ export async function createVaultUser(
   const email = normalizeEmail(input.email)
   const salt = randomToken()
   const now = new Date()
+  let passwordHash: string
+  try {
+    passwordHash = await hashClientPassword(input.masterPasswordHash, salt)
+  } catch (error) {
+    console.error("[registration-finish] password hashing failed", {
+      kind: registrationFailureKind(error),
+    })
+    throw error
+  }
   const user: typeof vaultUser.$inferInsert = {
     id: crypto.randomUUID(),
     email,
     name: input.name || email,
     passwordSalt: salt,
-    passwordHash: await hashClientPassword(input.masterPasswordHash, salt),
+    passwordHash,
     passwordHint: input.passwordHint ?? null,
     key: input.key,
     privateKey: input.privateKey ?? null,
@@ -167,7 +189,14 @@ export async function createVaultUser(
     createdAt: now,
     updatedAt: now,
   }
-  await db.insert(vaultUser).values(user).run()
+  try {
+    await db.insert(vaultUser).values(user).run()
+  } catch (error) {
+    console.error("[registration-finish] vault user insert failed", {
+      kind: registrationFailureKind(error),
+    })
+    throw error
+  }
   return user
 }
 
