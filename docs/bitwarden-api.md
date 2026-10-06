@@ -195,10 +195,18 @@ then clears the account's Durable Object and removes attachment and Send objects
 from R2. D1 removes the account last. A five-minute scheduled handler retries
 interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
+For a lost master password, `POST /api/accounts/delete-recover` emails a
+30-minute confirmation link without revealing whether the address has an
+account. `POST /api/accounts/delete-recover-token` checks the signed token and
+uses the same deletion pipeline. The token is bound to the current account
+security stamp, cannot delete the last organization owner, and stops working
+once deletion begins. This deletes the account; it cannot decrypt or restore
+its vault.
 
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
-two-factor providers, account recovery, and complete notification coverage still need
+two-factor providers, organization account recovery and emergency access, and
+complete notification coverage still need
 implementation. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 

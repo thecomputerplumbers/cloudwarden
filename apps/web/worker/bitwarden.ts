@@ -51,6 +51,10 @@ import {
 } from "./bitwarden-send"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import {
+  issueDeleteRecoveryToken,
+  verifyDeleteRecoveryToken,
+} from "./bitwarden-delete-token"
+import {
   issueRegistrationToken,
   verifyRegistrationToken,
 } from "./bitwarden-register"
@@ -1219,6 +1223,86 @@ export async function handleBitwarden(
       return failure("Registration unavailable", 409)
     }
     return json({ object: "register", captchaBypassToken: "" })
+  }
+
+  if (path === "/api/accounts/delete-recover" && method === "POST") {
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    if (
+      !email ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      email.length > 254
+    )
+      return failure("Invalid email")
+    if (!env.APP_URL || !env.EMAIL_FROM)
+      return failure("Account email is unavailable", 503)
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    if (
+      !(await limiter.consumeRateLimit(`delete-recover:${ip}`, 5, 60 * 60_000))
+        .allowed ||
+      !(
+        await limiter.consumeRateLimit(
+          `delete-recover-email:${await tokenHash(normalizeEmail(email))}`,
+          3,
+          60 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many deletion requests", 429)
+    const account = await findVaultUser(env, email)
+    if (account) {
+      const token = await issueDeleteRecoveryToken(env, account)
+      const params = new URLSearchParams({
+        userId: account.id,
+        email: account.email,
+        token,
+      })
+      try {
+        await createMailer(
+          env.EMAIL,
+          env.EMAIL_FROM
+        )({
+          to: account.email,
+          subject: "Delete your Cloudwarden account",
+          message:
+            "Confirm that you want to permanently delete your Cloudwarden account.",
+          url: `${origin}/#/verify-recover-delete?${params}`,
+          label: "Delete your account",
+        })
+      } catch {
+        console.error("Account deletion email failed")
+      }
+    }
+    return new Response(null, { status: 200 })
+  }
+  if (path === "/api/accounts/delete-recover-token" && method === "POST") {
+    const body = await bodyOf(request)
+    const userId = body && stringField(body, "userId")
+    const token = body && stringField(body, "token")
+    if (!userId || !/^[0-9a-f-]{36}$/i.test(userId) || !token)
+      return failure("Invalid deletion token", 400)
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    if (
+      !(await limiter.consumeRateLimit(`delete-confirm:${ip}`, 10, 5 * 60_000))
+        .allowed
+    )
+      return failure("Too many deletion attempts", 429)
+    const account = await findVaultUserById(env, userId)
+    if (!account || !(await verifyDeleteRecoveryToken(env, account, token)))
+      return failure("Invalid deletion token", 400)
+    if (await isLastVaultOwner(env, account.id))
+      return failure("Transfer or delete owned organizations first", 409)
+    if (!(await beginVaultDeletion(env, account.id, account.passwordHash)))
+      return failure("Account deletion already started", 409)
+    await publishVaultNotification(env, { type: 11, userId: account.id })
+    try {
+      const complete = await cleanupVaultDeletion(env, account.id)
+      return new Response(null, { status: complete ? 200 : 202 })
+    } catch {
+      return new Response(null, { status: 202 })
+    }
   }
 
   if (path === "/api/two-factor/send-email-login" && method === "POST") {

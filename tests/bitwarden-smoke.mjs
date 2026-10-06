@@ -2586,6 +2586,28 @@ const postStampApiLogin = await apiLogin(otpRotatedApiKey.body.apiKey)
 assert.equal(postStampApiLogin.status, 200)
 currentAccessToken = (await postStampApiLogin.json()).access_token
 assert.equal(
+  (await post("/api/accounts/delete-recover", { email })).status,
+  200
+)
+const ownerDeletionMail = await invitationMail(
+  email,
+  "Delete your Cloudwarden account"
+)
+const ownerDeletionLink = ownerDeletionMail.match(/https?:\/\/\S+/)?.[0]
+assert.ok(ownerDeletionLink)
+const ownerDeletionParams = new URLSearchParams(
+  new URL(ownerDeletionLink).hash.split("?")[1]
+)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover-token", {
+      userId: ownerDeletionParams.get("userId"),
+      token: ownerDeletionParams.get("token"),
+    })
+  ).status,
+  409
+)
+assert.equal(
   (
     await authorized(`/api/organizations/${orgId}`, "DELETE", {
       masterPasswordHash: "client-derived-secret",
@@ -2603,6 +2625,72 @@ assert.equal(
     })
   ).status,
   200
+)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover", {
+      email: "missing@example.test",
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await post("/api/accounts/delete-recover", { email: emailFactorUser }))
+    .status,
+  200
+)
+const recoveryDeletionMail = await invitationMail(
+  emailFactorUser,
+  "Delete your Cloudwarden account"
+)
+const recoveryDeletionLink = recoveryDeletionMail.match(/https?:\/\/\S+/)?.[0]
+assert.ok(recoveryDeletionLink)
+const recoveryDeletionParams = new URLSearchParams(
+  new URL(recoveryDeletionLink).hash.split("?")[1]
+)
+const recoveryDeletionId = recoveryDeletionParams.get("userId")
+const recoveryDeletionToken = recoveryDeletionParams.get("token")
+assert.match(recoveryDeletionId, /^[0-9a-f-]{36}$/i)
+assert.ok(recoveryDeletionToken)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover-token", {
+      userId: recoveryDeletionId,
+      token: `${recoveryDeletionToken}tampered`,
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover-token", {
+      userId: sync.body.profile.id,
+      token: recoveryDeletionToken,
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover-token", {
+      userId: recoveryDeletionId,
+      token: recoveryDeletionToken,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await tokenRequest(emailFactorUser, "email-factor-secret")).status,
+  400
+)
+assert.equal(
+  (
+    await post("/api/accounts/delete-recover-token", {
+      userId: recoveryDeletionId,
+      token: recoveryDeletionToken,
+    })
+  ).status,
+  400
 )
 
 console.log(
