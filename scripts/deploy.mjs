@@ -9,6 +9,13 @@ import {
   wranglerArgs,
 } from "./project-lib.mjs"
 const environment = process.argv[2]
+if (!environment) {
+  const result = spawnSync(process.execPath, ["scripts/deploy-oneclick.mjs"], {
+    cwd: root,
+    stdio: "inherit",
+  })
+  process.exit(result.status ?? 1)
+}
 if (!["staging", "production"].includes(environment))
   throw new Error("Usage: pnpm run deploy staging|production")
 const config = targetConfig(environment)
