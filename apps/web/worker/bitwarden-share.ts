@@ -2,6 +2,7 @@ import { and, eq, isNull, lt, or } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import { vaultCipherTransfer } from "../db/schema/vault"
+import { publishOrganizationSync } from "./bitwarden-notifications"
 import {
   createOrgCipherLocator,
   getOrgCipherLocator,
@@ -178,11 +179,13 @@ async function completeClaimedVaultShare(
   const locator = await getOrgCipherLocator(env, cipherId)
   if (!snapshot) {
     if (!locator) await abortVaultShare(env, transfer)
-    else
+    else {
       await db
         .delete(vaultCipherTransfer)
         .where(eq(vaultCipherTransfer.cipherId, cipherId))
         .run()
+      await publishOrganizationSync(env, locator.orgId, locator.collectionIds)
+    }
     return !!locator
   }
   if (snapshot.orgId !== transfer.orgId)
@@ -247,5 +250,8 @@ async function completeClaimedVaultShare(
     .delete(vaultCipherTransfer)
     .where(eq(vaultCipherTransfer.cipherId, cipherId))
     .run()
+  const published = await getOrgCipherLocator(env, cipherId)
+  if (published)
+    await publishOrganizationSync(env, published.orgId, published.collectionIds)
   return true
 }

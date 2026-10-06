@@ -73,6 +73,20 @@ function socketClosed(socket) {
   })
 }
 
+async function noSocketMessage(socket, durationMs = 300) {
+  return new Promise((resolve) => {
+    const received = () => {
+      clearTimeout(timeout)
+      resolve(false)
+    }
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", received)
+      resolve(true)
+    }, durationMs)
+    socket.addEventListener("message", received, { once: true })
+  })
+}
+
 function decodeNotificationFrame(bytes) {
   let cursor = 0
   let length = 0
@@ -1524,6 +1538,10 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
 )
+const memberNotificationSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(otherTokens.access_token)}`
+)
+const movedAwayNotification = nextSocketMessage(memberNotificationSocket)
 const movedShared = await authorized(
   `/api/ciphers/${sharedId}/collections_v2`,
   "PUT",
@@ -1532,6 +1550,7 @@ const movedShared = await authorized(
   }
 )
 assert.equal(movedShared.status, 200)
+assert.equal(decodeNotificationFrame(await movedAwayNotification)[4][0].Type, 5)
 assert.equal(
   movedShared.body.cipher.collectionIds[0],
   orgCollections.body.data[0].id
@@ -1540,7 +1559,19 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   404
 )
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+      ...sharedCipherBody,
+      collectionIds: [orgCollections.body.data[0].id],
+      name: "2.hidden-from-member",
+    })
+  ).status,
+  200
+)
+assert.equal(await noSocketMessage(memberNotificationSocket), true)
 assert.equal((await fetch(memberSharedLink)).status, 404)
+const movedBackNotification = nextSocketMessage(memberNotificationSocket)
 assert.equal(
   (
     await authorized(`/api/ciphers/${sharedId}/collections`, "PUT", {
@@ -1549,6 +1580,8 @@ assert.equal(
   ).status,
   200
 )
+assert.equal(decodeNotificationFrame(await movedBackNotification)[4][0].Type, 5)
+memberNotificationSocket.close()
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
@@ -1558,6 +1591,10 @@ assert.equal(
     .status,
   403
 )
+const removedMemberSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(otherTokens.access_token)}`
+)
+const removalNotification = nextSocketMessage(removedMemberSocket)
 assert.equal(
   (
     await authorized(
@@ -1567,6 +1604,8 @@ assert.equal(
   ).status,
   200
 )
+assert.equal(decodeNotificationFrame(await removalNotification)[4][0].Type, 5)
+removedMemberSocket.close()
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   404

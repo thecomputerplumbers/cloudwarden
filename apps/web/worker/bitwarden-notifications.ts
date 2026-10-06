@@ -1,9 +1,12 @@
-import { eq, gt, and, or } from "drizzle-orm"
+import { eq, gt, and, or, inArray, isNull } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import {
   vaultApiKey,
   vaultAuthRequest,
+  vaultCollectionMember,
+  vaultMembership,
+  vaultOrganization,
   vaultSession,
   vaultUser,
 } from "../db/schema/vault"
@@ -171,6 +174,68 @@ export async function publishVaultNotification(
     await object.publishVaultNotification(event)
   } catch {
     console.error("Vault notification delivery failed")
+  }
+}
+
+export async function organizationNotificationTargets(
+  env: CloudflareEnv,
+  orgId: string,
+  collectionIds: string[] | null
+) {
+  const db = drizzle(env.DB)
+  const members = await db
+    .select({
+      id: vaultMembership.id,
+      userId: vaultMembership.userId,
+      accessAll: vaultMembership.accessAll,
+    })
+    .from(vaultMembership)
+    .innerJoin(
+      vaultOrganization,
+      eq(vaultOrganization.id, vaultMembership.orgId)
+    )
+    .innerJoin(vaultUser, eq(vaultUser.id, vaultMembership.userId))
+    .where(
+      and(
+        eq(vaultMembership.orgId, orgId),
+        eq(vaultMembership.status, 2),
+        isNull(vaultOrganization.deletingAt),
+        isNull(vaultUser.deletingAt)
+      )
+    )
+    .all()
+  if (collectionIds === null) return members.map((member) => member.userId)
+  if (!collectionIds.length) return []
+  const grants = await db
+    .select({ membershipId: vaultCollectionMember.membershipId })
+    .from(vaultCollectionMember)
+    .where(inArray(vaultCollectionMember.collectionId, collectionIds))
+    .all()
+  const allowed = new Set(grants.map((grant) => grant.membershipId))
+  return members
+    .filter((member) => member.accessAll || allowed.has(member.id))
+    .map((member) => member.userId)
+}
+
+export async function publishOrganizationSync(
+  env: CloudflareEnv,
+  orgId: string,
+  collectionIds: string[] | null
+) {
+  try {
+    const users = await organizationNotificationTargets(
+      env,
+      orgId,
+      collectionIds
+    )
+    for (let index = 0; index < users.length; index += 20)
+      await Promise.all(
+        users
+          .slice(index, index + 20)
+          .map((userId) => publishVaultNotification(env, { type: 5, userId }))
+      )
+  } catch {
+    console.error("Organization notification delivery failed")
   }
 }
 

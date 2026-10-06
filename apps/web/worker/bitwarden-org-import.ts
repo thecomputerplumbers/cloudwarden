@@ -9,6 +9,7 @@ import {
   vaultOrganization,
 } from "../db/schema/vault"
 import { findVaultUserById } from "./bitwarden-auth"
+import { publishOrganizationSync } from "./bitwarden-notifications"
 import {
   getOrgCipherLocator,
   getVaultCollection,
@@ -129,6 +130,7 @@ export async function completeOrgImport(env: CloudflareEnv, id: string) {
     const plan = JSON.parse(row.payload) as OrgImportPlan
     if (await publishedOrgImport(env, row.orgId, plan)) {
       await finishOrgImport(env, id)
+      await publishOrganizationSync(env, row.orgId, null)
       return true
     }
     const [organization, member, user] = await Promise.all([
@@ -200,6 +202,7 @@ export async function completeOrgImport(env: CloudflareEnv, id: string) {
     const [first, ...rest] = statements
     await db.batch([first!, ...rest])
     await finishOrgImport(env, id)
+    await publishOrganizationSync(env, row.orgId, null)
     return true
   } finally {
     await db

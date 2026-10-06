@@ -70,10 +70,15 @@ approval requests require a previously registered device with a matching type.
 The notification hub accepts authenticated SignalR MessagePack WebSockets on
 `/notifications/hub` and an IP-bound pending device request on
 `/notifications/anonymous-hub`. A hibernating Durable Object keeps the sockets,
-limits their lifetime and count, and sends device approval, personal vault sync,
-and logout events. Before delivery, the Worker checks the account's current
-sessions so revoked sessions are closed. Organization changes are not yet
-broadcast to every member; clients can still discover them through sync.
+limits their lifetime and count, and sends device approval, vault sync, and
+logout events. Shared cipher changes go to confirmed members with access to
+an affected collection; collection moves notify both old and new audiences.
+Organization metadata and membership changes prompt confirmed members to sync,
+and removed members receive a final sync notice. Interrupted shares and
+imports notify members when the scheduled handler completes publication. Before
+delivery, the Worker checks current sessions so revoked sockets are closed.
+SCIM background changes and some account settings do not yet emit realtime
+events; clients can still discover them through sync.
 
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs

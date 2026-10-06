@@ -11,7 +11,11 @@ import { authenticatedVaultUser, deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
 import { pruneVaultSsoFlows } from "./bitwarden-sso"
-import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
+import {
+  cleanupOrgDeletion,
+  deletingOrganizations,
+  getOrgCipherLocator,
+} from "./bitwarden-org"
 import { completeVaultShare, pendingVaultShares } from "./bitwarden-share"
 import {
   completeOrgImport,
@@ -22,6 +26,8 @@ import { pruneProtectedOtps } from "./bitwarden-protected-otp"
 import { pruneAuthRequests } from "./bitwarden-auth-request"
 import {
   handleVaultNotification,
+  organizationNotificationTargets,
+  publishOrganizationSync,
   publishVaultNotification,
 } from "./bitwarden-notifications"
 
@@ -35,20 +41,121 @@ export default {
       )
         return handleVaultNotification(request, env)
       if (isBitwardenPath(path)) {
+        const mutating = !["GET", "HEAD"].includes(request.method)
         const vaultMutation =
-          !["GET", "HEAD"].includes(request.method) &&
+          mutating &&
           (path.startsWith("/api/ciphers") ||
             path.startsWith("/api/folders") ||
             path.startsWith("/api/sends"))
-        const user = vaultMutation
-          ? await authenticatedVaultUser(env, request)
+        const orgMutation = mutating && path.startsWith("/api/organizations")
+        const user =
+          vaultMutation || orgMutation
+            ? await authenticatedVaultUser(env, request)
+            : null
+        const cipherId =
+          user && path.match(/^\/api\/ciphers\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]
+        const beforeLocator = cipherId
+          ? await getOrgCipherLocator(env, cipherId)
           : null
+        const orgIdFromPath =
+          user &&
+          path.match(/^\/api\/organizations\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]
+        const beforeMembers =
+          orgIdFromPath &&
+          request.method === "DELETE" &&
+          (path === `/api/organizations/${orgIdFromPath}` ||
+            path.includes("/users/"))
+            ? await organizationNotificationTargets(env, orgIdFromPath, null)
+            : []
+        const shareRequest =
+          user && path === "/api/ciphers/share" && request.method === "PUT"
+            ? request.clone()
+            : null
         const response = await handleBitwarden(request, env)
-        if (user && response.ok)
-          await publishVaultNotification(env, {
-            type: 5,
-            userId: user.id,
-          })
+        if (user && response.ok) {
+          try {
+            if (vaultMutation)
+              await publishVaultNotification(env, { type: 5, userId: user.id })
+            const notices = new Map<string, Set<string> | null>()
+            const add = (
+              orgId: string | null | undefined,
+              collections: string[] | null
+            ) => {
+              if (!orgId) return
+              const existing = notices.get(orgId)
+              if (existing === null || collections === null) {
+                notices.set(orgId, null)
+                return
+              }
+              const ids = existing ?? new Set<string>()
+              for (const id of collections) ids.add(id)
+              notices.set(orgId, ids)
+            }
+            if (beforeLocator)
+              add(beforeLocator.orgId, beforeLocator.collectionIds)
+            if (cipherId) {
+              const afterLocator = await getOrgCipherLocator(env, cipherId)
+              if (afterLocator)
+                add(afterLocator.orgId, afterLocator.collectionIds)
+            }
+            if (path === "/api/ciphers/import-organization")
+              add(new URL(request.url).searchParams.get("organizationId"), null)
+            if (shareRequest) {
+              const body = (await shareRequest.json().catch(() => null)) as {
+                ciphers?: { organizationId?: string }[]
+                collectionIds?: string[]
+              } | null
+              if (
+                body?.ciphers?.[0]?.organizationId &&
+                Array.isArray(body.collectionIds)
+              )
+                add(body.ciphers[0].organizationId, body.collectionIds)
+            }
+            if (path === "/api/ciphers" && request.method === "POST") {
+              const body = (await response
+                .clone()
+                .json()
+                .catch(() => null)) as {
+                organizationId?: string
+                collectionIds?: string[]
+              } | null
+              if (body?.organizationId && Array.isArray(body.collectionIds))
+                add(body.organizationId, body.collectionIds)
+            }
+            if (orgMutation) {
+              if (orgIdFromPath) add(orgIdFromPath, null)
+              else if (
+                path === "/api/organizations" &&
+                request.method === "POST"
+              ) {
+                const body = (await response
+                  .clone()
+                  .json()
+                  .catch(() => null)) as { id?: string } | null
+                add(body?.id, null)
+              }
+            }
+            for (const [orgId, collections] of notices)
+              await publishOrganizationSync(
+                env,
+                orgId,
+                collections ? [...collections] : null
+              )
+            if (orgIdFromPath && beforeMembers.length) {
+              const afterMembers = new Set(
+                await organizationNotificationTargets(env, orgIdFromPath, null)
+              )
+              for (const removed of beforeMembers)
+                if (!afterMembers.has(removed))
+                  await publishVaultNotification(env, {
+                    type: 5,
+                    userId: removed,
+                  })
+            }
+          } catch {
+            console.error("Vault mutation notification failed")
+          }
+        }
         return response
       }
       if (
