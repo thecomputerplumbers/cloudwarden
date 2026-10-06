@@ -786,13 +786,32 @@ async function publicSendFileLink(
   }
 }
 
+export function canonicalBitwardenPath(path: string) {
+  if (path === "/api/ciphers/admin") return "/api/ciphers"
+  if (path === "/api/ciphers/delete-admin") return "/api/ciphers/delete"
+  if (path === "/api/ciphers/restore-admin") return "/api/ciphers/restore"
+  const item =
+    /^\/api\/ciphers\/([0-9a-f-]{36})\/(admin|delete-admin|restore-admin|collections-admin|attachment-admin)$/.exec(
+      path
+    )
+  if (item)
+    return `/api/ciphers/${item[1]}${item[2] === "admin" ? "" : `/${item[2]!.replace(/-admin$/, "")}`}`
+  const attachment =
+    /^\/api\/ciphers\/([0-9a-f-]{36})\/attachment\/([0-9a-f-]{36})\/(admin|delete-admin)$/.exec(
+      path
+    )
+  if (attachment)
+    return `/api/ciphers/${attachment[1]}/attachment/${attachment[2]}${attachment[3] === "admin" ? "" : "/delete"}`
+  return path
+}
+
 export async function handleBitwarden(
   request: Request,
   env: CloudflareEnv
 ): Promise<Response> {
   const url = new URL(request.url)
   const origin = env.APP_URL ? new URL(env.APP_URL).origin : url.origin
-  const path = url.pathname.toLowerCase()
+  const path = canonicalBitwardenPath(url.pathname.toLowerCase())
   const method = request.method.toUpperCase()
 
   const sendDownload = /^\/api\/sends\/([0-9a-f-]{36})\/([0-9a-f]{64})$/.exec(

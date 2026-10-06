@@ -6,7 +6,11 @@ export { AppDatabase } from "./database"
 
 import { auth } from "../lib/auth"
 import { handleMcp } from "../mcp/handler"
-import { handleBitwarden, isBitwardenPath } from "./bitwarden"
+import {
+  canonicalBitwardenPath,
+  handleBitwarden,
+  isBitwardenPath,
+} from "./bitwarden"
 import { authenticatedVaultUser, deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
@@ -36,7 +40,9 @@ import {
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     return observeRequest(request, async () => {
-      const path = new URL(request.url).pathname
+      const path = canonicalBitwardenPath(
+        new URL(request.url).pathname.toLowerCase()
+      )
       if (path.startsWith("/__ops/"))
         return path.startsWith("/__ops/recovery/")
           ? handleVaultRecovery(request, env)

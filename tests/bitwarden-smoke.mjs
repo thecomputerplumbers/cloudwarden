@@ -680,6 +680,93 @@ assert.equal(
   (await authorized(`/api/ciphers/${batchDeletedPersonal.body.id}`)).status,
   404
 )
+const adminAliasCipher = await authorized("/api/ciphers/admin", "POST", {
+  type: 1,
+  name: "2.admin-alias-created",
+})
+assert.equal(adminAliasCipher.status, 200)
+assert.equal(
+  (await authorized(`/api/ciphers/${adminAliasCipher.body.id}/admin`)).body
+    .name,
+  "2.admin-alias-created"
+)
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${adminAliasCipher.body.id}/admin`, "PUT", {
+      type: 1,
+      name: "2.admin-alias-edited",
+    })
+  ).body.name,
+  "2.admin-alias-edited"
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${adminAliasCipher.body.id}/delete-admin`,
+      "PUT"
+    )
+  ).status,
+  204
+)
+assert.ok(
+  (await authorized(`/api/ciphers/${adminAliasCipher.body.id}/admin`)).body
+    .deletedDate
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${adminAliasCipher.body.id}/restore-admin`,
+      "PUT"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${adminAliasCipher.body.id}/delete-admin`,
+      "POST"
+    )
+  ).status,
+  204
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${adminAliasCipher.body.id}`)).status,
+  404
+)
+const adminBatchCipher = await authorized("/api/ciphers/admin", "POST", {
+  type: 1,
+  name: "2.admin-alias-batch",
+})
+assert.equal(adminBatchCipher.status, 200)
+assert.equal(
+  (
+    await authorized("/api/ciphers/delete-admin", "PUT", {
+      ids: [adminBatchCipher.body.id],
+    })
+  ).status,
+  204
+)
+assert.equal(
+  (
+    await authorized("/api/ciphers/restore-admin", "PUT", {
+      ids: [adminBatchCipher.body.id],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await authorized("/api/ciphers/delete-admin", "POST", {
+      ids: [adminBatchCipher.body.id],
+    })
+  ).status,
+  204
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${adminBatchCipher.body.id}`)).status,
+  404
+)
 
 const sync = await authorized("/api/sync")
 assert.equal(sync.status, 200)

@@ -28,7 +28,8 @@ ciphers, checking collection access and editing rights before changing any
 items. `PUT` moves a cipher to Trash; `POST` or `DELETE` permanently removes it.
 Permanent deletion removes encrypted cipher and attachment metadata and queues
 R2 attachment cleanup in the vault Durable Object so interrupted cleanup can
-retry. Cipher creation, editing, import, and personal-to-organization sharing
+retry. Vaultwarden's `/admin` cipher aliases use the same permission checks and
+mutation handlers. Cipher creation, editing, import, and personal-to-organization sharing
 preserve the acting user's archive date. Reads and writes check current
 collection access. Send content and access counters live in the owner's
 Durable Object; D1 maps public Send IDs to
