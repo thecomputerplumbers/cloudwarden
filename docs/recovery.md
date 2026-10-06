@@ -8,8 +8,18 @@ file Send bytes in private R2. These stores need a coordinated recovery point.
 
 Install the AWS CLI and use a read-only R2 access key scoped to the selected
 attachment bucket. Provide `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from
-the operator's secret manager; do not commit them. During a quiet period with no
-vault writes, run:
+the operator's secret manager; do not commit them. To stop new Worker requests
+and scheduled jobs, set the `MAINTENANCE_MODE` Worker secret to `true` for the
+selected environment. For staging:
+
+```sh
+printf true | pnpm --filter web exec wrangler secret put MAINTENANCE_MODE --env staging
+```
+
+Omit `--env staging` for production. Wrangler deploys a new Worker version
+immediately when a secret is added or removed, so treat these as live release
+operations. Confirm that `/api/config` returns HTTP 503, and allow in-flight
+requests to drain. Then run:
 
 ```sh
 pnpm r2:snapshot staging /secure/offsite/cloudwarden-staging-2026-10-06
@@ -23,8 +33,13 @@ source bucket, and capture time. The snapshot directory is private to the
 operator. Keep a copy outside the Cloudflare account and test it regularly.
 An R2 snapshot is not atomic with D1 or Durable Object writes. It also cannot
 guarantee that an object did not change twice between the listings. Pause writes
-or take the snapshot during a maintenance window before treating it as a
-coordinated recovery point.
+with maintenance mode before treating it as a coordinated recovery point. Keep
+the vault in maintenance mode throughout a restore drill. After a snapshot or
+restore, remove the secret and verify a normal request succeeds again:
+
+```sh
+pnpm --filter web exec wrangler secret delete MAINTENANCE_MODE --env staging
+```
 
 ## Restore drill
 

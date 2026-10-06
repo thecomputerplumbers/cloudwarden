@@ -35,47 +35,47 @@ try {
     { stdio: ["ignore", log, log] }
   )
   if (migration.status !== 0) throw new Error("Local migrations failed")
-  worker = spawn(
-    "pnpm",
-    [
-      "--filter",
-      "web",
-      "exec",
-      "wrangler",
-      "dev",
-      "--config",
-      "dist/server/wrangler.json",
-      "--port",
-      String(port),
-      "--var",
-      `APP_URL:${origin}`,
-      "--var",
-      "SIGNUPS_ALLOWED:true",
-      "--var",
-      "SIGNUPS_VERIFY:true",
-      "--var",
-      "ORG_INVITATION_EMAILS_ENABLED:true",
-      "--var",
-      "EMAIL_2FA_ENABLED:true",
-      "--var",
-      `EMAIL_FROM:${product.supportEmail}`,
-      "--var",
-      "SSO_AUTHORITY:https://auth.example.test/api/auth",
-      "--var",
-      "SSO_CLIENT_ID:tcp-vaultwarden",
-      "--var",
-      "SSO_CLIENT_SECRET:local-provider-secret",
-      "--var",
-      "SSO_IDENTIFIER:thecomputerplumbers",
-      "--var",
-      "SSO_CALLBACK_URL:https://vault.example.test/identity/connect/oidc-signin",
-      "--var",
-      "BETTER_AUTH_SECRET:local-smoke-only-signing-secret-2026",
-      "--persist-to",
-      storage,
-    ],
-    { stdio: ["ignore", log, log], detached: true }
-  )
+  const workerArgs = [
+    "--filter",
+    "web",
+    "exec",
+    "wrangler",
+    "dev",
+    "--config",
+    "dist/server/wrangler.json",
+    "--port",
+    String(port),
+    "--var",
+    `APP_URL:${origin}`,
+    "--var",
+    "SIGNUPS_ALLOWED:true",
+    "--var",
+    "SIGNUPS_VERIFY:true",
+    "--var",
+    "ORG_INVITATION_EMAILS_ENABLED:true",
+    "--var",
+    "EMAIL_2FA_ENABLED:true",
+    "--var",
+    `EMAIL_FROM:${product.supportEmail}`,
+    "--var",
+    "SSO_AUTHORITY:https://auth.example.test/api/auth",
+    "--var",
+    "SSO_CLIENT_ID:tcp-vaultwarden",
+    "--var",
+    "SSO_CLIENT_SECRET:local-provider-secret",
+    "--var",
+    "SSO_IDENTIFIER:thecomputerplumbers",
+    "--var",
+    "SSO_CALLBACK_URL:https://vault.example.test/identity/connect/oidc-signin",
+    "--var",
+    "BETTER_AUTH_SECRET:local-smoke-only-signing-secret-2026",
+    "--persist-to",
+    storage,
+  ]
+  worker = spawn("pnpm", workerArgs, {
+    stdio: ["ignore", log, log],
+    detached: true,
+  })
   let ready = false
   for (let attempt = 0; attempt < 100; attempt++) {
     if (worker.exitCode !== null)
@@ -111,6 +111,38 @@ try {
   )
   const [vaultCode] = await once(vaultTest, "exit")
   if (vaultCode !== 0) throw new Error("Bitwarden API smoke test failed")
+  const stopped = once(worker, "exit")
+  process.kill(-worker.pid, "SIGTERM")
+  await stopped
+  worker = spawn("pnpm", [...workerArgs, "--var", "MAINTENANCE_MODE:true"], {
+    stdio: ["ignore", log, log],
+    detached: true,
+  })
+  let maintenance = false
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (worker.exitCode !== null)
+      throw new Error("Maintenance Worker exited before startup")
+    try {
+      const response = await fetch(`${origin}/api/config`)
+      if (response.status === 503) {
+        const body = await response.json()
+        maintenance = body.maintenance === true
+        if (maintenance) break
+      }
+    } catch {
+      /* Starting. */
+    }
+    await delay(100)
+  }
+  if (!maintenance) throw new Error("Maintenance mode did not block requests")
+  const blockedWrite = await fetch(`${origin}/api/accounts/register`, {
+    method: "POST",
+    body: "{}",
+    headers: { "Content-Type": "application/json" },
+  })
+  if (blockedWrite.status !== 503)
+    throw new Error("Maintenance mode did not block vault writes")
+  console.log("Maintenance mode blocked vault reads and writes")
   passed = true
 } finally {
   if (worker?.pid) {

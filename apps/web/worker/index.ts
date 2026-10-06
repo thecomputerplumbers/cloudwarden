@@ -34,6 +34,14 @@ import {
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     return observeRequest(request, async () => {
+      if (env.MAINTENANCE_MODE === "true")
+        return Response.json(
+          { error: "Vault temporarily unavailable", maintenance: true },
+          {
+            status: 503,
+            headers: { "Cache-Control": "no-store", "Retry-After": "300" },
+          }
+        )
       const path = new URL(request.url).pathname
       if (
         path === "/notifications/hub" ||
@@ -177,6 +185,7 @@ export default {
     })
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv) {
+    if (env.MAINTENANCE_MODE === "true") return
     try {
       await pruneVaultSsoFlows(env)
     } catch {
