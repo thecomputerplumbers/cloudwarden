@@ -119,7 +119,17 @@ test("reads group IDs and rejects malformed group membership", async () => {
   const users = await readVaultDirectory(source, "token", async () =>
     page([{ ...user, groups: [{ value: "engineering" }] }])
   )
-  assert.deepEqual(users[0].groups, ["engineering"])
+  assert.deepEqual(users[0].groups, [
+    { id: "engineering", name: "engineering" },
+  ])
+  const named = await readVaultDirectory(source, "token", async () =>
+    page([
+      { ...user, groups: [{ value: "engineering", display: "Engineering" }] },
+    ])
+  )
+  assert.deepEqual(named[0].groups, [
+    { id: "engineering", name: "Engineering" },
+  ])
   await assert.rejects(
     readVaultDirectory(source, "token", async () =>
       page([{ ...user, groups: [{ display: "Engineering" }] }])

@@ -176,8 +176,12 @@ Owners and admins can create groups, assign members and collections, and grant
 collection access through group membership. Group changes update the
 organization revision and notify members. The group API follows Vaultwarden's
 list, details, create, update, and delete routes. Directory sync still uses
-collection external IDs for group grants; it does not yet create or update
-Cloudwarden groups from SCIM group records.
+collection external IDs for direct grants and also creates Cloudwarden groups
+from SCIM user group records. Existing group external IDs are reused so an
+owner can assign shared collections in the group console. Directory sync
+removes only group memberships it created. An admin's group membership additions
+remain manual; editing a group's collections preserves directory ownership of
+unchanged members. An absent SCIM groups field leaves existing grants untouched.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.

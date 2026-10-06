@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/d1"
 
 import {
   vaultCollection,
+  vaultDirectoryGroupGrant,
   vaultGroup,
   vaultGroupCollection,
   vaultGroupMember,
@@ -132,6 +133,11 @@ export async function saveVaultGroup(
     return null
   const existing = input.id ? await getVaultGroup(env, orgId, input.id) : null
   if (input.id && !existing) return null
+  const removedMembers = existing
+    ? (await groupMemberIds(env, existing.id)).filter(
+        (id) => !input.users.includes(id)
+      )
+    : []
   const now = new Date()
   const group: VaultGroup = {
     id: existing?.id ?? crypto.randomUUID(),
@@ -156,6 +162,18 @@ export async function saveVaultGroup(
     db
       .delete(vaultGroupCollection)
       .where(eq(vaultGroupCollection.groupId, group.id)),
+    ...(removedMembers.length
+      ? [
+          db
+            .delete(vaultDirectoryGroupGrant)
+            .where(
+              and(
+                eq(vaultDirectoryGroupGrant.groupId, group.id),
+                inArray(vaultDirectoryGroupGrant.membershipId, removedMembers)
+              )
+            ),
+        ]
+      : []),
     db.delete(vaultGroupMember).where(eq(vaultGroupMember.groupId, group.id)),
     ...input.collections.map((entry) =>
       db.insert(vaultGroupCollection).values({
@@ -225,6 +243,9 @@ export async function setMemberGroups(
     : []
   if (groups.length !== groupIds.length) return false
   await db.batch([
+    db
+      .delete(vaultDirectoryGroupGrant)
+      .where(eq(vaultDirectoryGroupGrant.membershipId, memberId)),
     db
       .delete(vaultGroupMember)
       .where(eq(vaultGroupMember.membershipId, memberId)),

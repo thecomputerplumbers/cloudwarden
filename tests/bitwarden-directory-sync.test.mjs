@@ -55,8 +55,10 @@ test("SCIM sync links only new members and revokes only directory owned access",
     const { reconcileVaultDirectory } = await vite.ssrLoadModule(
       "/worker/bitwarden-directory-sync.ts"
     )
-    const { setOrgMemberCollections } = await vite.ssrLoadModule(
-      "/worker/bitwarden-org.ts"
+    const { setOrgMemberCollections, listVaultCollections } =
+      await vite.ssrLoadModule("/worker/bitwarden-org.ts")
+    const { saveVaultGroup, setMemberGroups } = await vite.ssrLoadModule(
+      "/worker/bitwarden-groups.ts"
     )
     const db = proxy.env.DB
     const user = async (id, email) =>
@@ -179,6 +181,91 @@ test("SCIM sync links only new members and revokes only directory owned access",
       recordGroupNotification
     )
     assert.deepEqual(groupNotifications, [targetId])
+    const nativeGroup = await db
+      .prepare(`SELECT * FROM vault_group WHERE org_id = ? AND external_id = ?`)
+      .bind(orgId, "engineering")
+      .first()
+    assert.equal(nativeGroup.name, "Engineering")
+    await assert.rejects(
+      reconcileVaultDirectory(
+        env,
+        snapshot([
+          groupUser,
+          {
+            ...scimUser,
+            id: crypto.randomUUID(),
+            userName: "conflict@example.test",
+            groups: [{ value: "engineering", display: "Different name" }],
+          },
+        ])
+      ),
+      /Conflicting SCIM group names/
+    )
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_identity WHERE org_id = ?`
+          )
+          .bind(orgId)
+          .first()
+      ).n,
+      1
+    )
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_group_grant WHERE membership_id = ? AND group_id = ?`
+          )
+          .bind(linked.membership_id, nativeGroup.id)
+          .first()
+      ).n,
+      1
+    )
+    const groupOnlyCollectionId = crypto.randomUUID()
+    await db
+      .prepare(
+        `INSERT INTO vault_collection (id,org_id,name,created_at,updated_at) VALUES (?,?,?,?,?)`
+      )
+      .bind(groupOnlyCollectionId, orgId, "Group only", now, now)
+      .run()
+    assert.ok(
+      await saveVaultGroup(env, orgId, {
+        id: nativeGroup.id,
+        name: "Engineering",
+        accessAll: false,
+        externalId: "engineering",
+        collections: [
+          {
+            id: groupOnlyCollectionId,
+            readOnly: true,
+            hidePasswords: false,
+            manage: false,
+          },
+        ],
+        users: [linked.membership_id],
+      })
+    )
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_group_grant WHERE membership_id = ? AND group_id = ?`
+          )
+          .bind(linked.membership_id, nativeGroup.id)
+          .first()
+      ).n,
+      1
+    )
+    const groupVisible = async () =>
+      (
+        await listVaultCollections(env, orgId, {
+          id: linked.membership_id,
+          accessAll: false,
+        })
+      ).some((collection) => collection.id === groupOnlyCollectionId)
+    assert.equal(await groupVisible(), true)
     assert.deepEqual(
       (
         await db
@@ -213,6 +300,18 @@ test("SCIM sync links only new members and revokes only directory owned access",
       recordGroupNotification
     )
     assert.deepEqual(groupNotifications, [targetId])
+    assert.equal(await groupVisible(), false)
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_group_grant WHERE membership_id = ?`
+          )
+          .bind(linked.membership_id)
+          .first()
+      ).n,
+      0
+    )
     assert.deepEqual(
       (
         await db
@@ -225,6 +324,22 @@ test("SCIM sync links only new members and revokes only directory owned access",
       [manualCollectionId]
     )
     await reconcileVaultDirectory(env, snapshot([groupUser]))
+    assert.equal(await groupVisible(), true)
+    assert.equal(
+      await setMemberGroups(env, orgId, linked.membership_id, [nativeGroup.id]),
+      true
+    )
+    assert.equal(
+      (
+        await db
+          .prepare(
+            `SELECT count(*) AS n FROM vault_directory_group_grant WHERE membership_id = ?`
+          )
+          .bind(linked.membership_id)
+          .first()
+      ).n,
+      0
+    )
     assert.equal(
       await setOrgMemberCollections(env, orgId, linked.membership_id, [
         { id: mappedCollectionId, readOnly: true, hidePasswords: false },
@@ -233,6 +348,7 @@ test("SCIM sync links only new members and revokes only directory owned access",
       true
     )
     await reconcileVaultDirectory(env, snapshot([{ ...groupUser, groups: [] }]))
+    assert.equal(await groupVisible(), true)
     assert.deepEqual(
       (
         await db

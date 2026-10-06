@@ -365,19 +365,28 @@ export const vaultCollectionMember = sqliteTable(
   ]
 )
 
-export const vaultGroup = sqliteTable("vault_group", {
-  id: text("id").primaryKey(),
-  orgId: text("org_id")
-    .notNull()
-    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  accessAll: integer("access_all", { mode: "boolean" })
-    .notNull()
-    .default(false),
-  externalId: text("external_id"),
-  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
-})
+export const vaultGroup = sqliteTable(
+  "vault_group",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    accessAll: integer("access_all", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    externalId: text("external_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_group_org_external_unique").on(
+      table.orgId,
+      table.externalId
+    ),
+  ]
+)
 
 export const vaultGroupMember = sqliteTable(
   "vault_group_member",
@@ -395,6 +404,27 @@ export const vaultGroupMember = sqliteTable(
       table.membershipId
     ),
     index("vault_group_member_membership_idx").on(table.membershipId),
+  ]
+)
+
+// Directory sync removes only group memberships it created. Explicit admin
+// assignments take ownership by deleting the matching marker.
+export const vaultDirectoryGroupGrant = sqliteTable(
+  "vault_directory_group_grant",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => vaultGroup.id, { onDelete: "cascade" }),
+    membershipId: text("membership_id")
+      .notNull()
+      .references(() => vaultMembership.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("vault_directory_group_grant_unique").on(
+      table.groupId,
+      table.membershipId
+    ),
+    index("vault_directory_group_grant_membership_idx").on(table.membershipId),
   ]
 )
 

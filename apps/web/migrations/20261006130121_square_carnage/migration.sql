@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `vault_group_org_external_unique` ON `vault_group` (`org_id`,`external_id`);

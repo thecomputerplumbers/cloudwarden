@@ -5,8 +5,12 @@ import {
   vaultCollection,
   vaultCollectionMember,
   vaultDirectoryCollectionGrant,
+  vaultDirectoryGroupGrant,
   vaultDirectoryIdentity,
+  vaultGroup,
+  vaultGroupMember,
   vaultMembership,
+  vaultOrganization,
   vaultUser,
 } from "../db/schema/vault"
 import { createVaultStubUser } from "./bitwarden-auth"
@@ -69,6 +73,34 @@ export async function reconcileVaultDirectory(
       throw new Error("Duplicate collection directory ID")
     collectionByGroup.set(collection.externalId, collection.id)
   }
+  const existingGroups = await db
+    .select({ id: vaultGroup.id, externalId: vaultGroup.externalId })
+    .from(vaultGroup)
+    .where(eq(vaultGroup.orgId, orgId))
+    .all()
+  const groupByExternal = new Map<string, string>()
+  for (const group of existingGroups) {
+    if (!group.externalId) continue
+    if (groupByExternal.has(group.externalId))
+      throw new Error("Duplicate group directory ID")
+    groupByExternal.set(group.externalId, group.id)
+  }
+  const directoryGroups = new Map<string, string>()
+  for (const user of users) {
+    if (!user.active) continue
+    for (const group of user.groups ?? []) {
+      const priorName = directoryGroups.get(group.id)
+      if (
+        priorName &&
+        priorName !== group.name &&
+        priorName !== group.id &&
+        group.name !== group.id
+      )
+        throw new Error("Conflicting SCIM group names")
+      if (!priorName || priorName === group.id)
+        directoryGroups.set(group.id, group.name)
+    }
+  }
   const known = await db
     .select()
     .from(vaultDirectoryIdentity)
@@ -80,9 +112,28 @@ export async function reconcileVaultDirectory(
   const beforeRecipients = new Set(
     await organizationNotificationTargets(env, orgId, null)
   )
-  const collectionChangedUsers = new Set<string>()
+  const accessChangedUsers = new Set<string>()
 
   try {
+    for (const [externalId, name] of directoryGroups) {
+      if (groupByExternal.has(externalId)) continue
+      const groupId = crypto.randomUUID()
+      await db.insert(vaultGroup).values({
+        id: groupId,
+        orgId,
+        name: name.slice(0, 100),
+        accessAll: false,
+        externalId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      groupByExternal.set(externalId, groupId)
+      await db
+        .update(vaultOrganization)
+        .set({ updatedAt: now })
+        .where(eq(vaultOrganization.id, orgId))
+        .run()
+    }
     // Revoke links whose identity disappeared, was disabled, or changed email.
     // The role condition protects owners even if an operator later changes one.
     for (const identity of known) {
@@ -321,7 +372,7 @@ export async function reconcileVaultDirectory(
       const desired = new Set(
         user?.active && member.status !== 3
           ? (user.groups?.flatMap((group) => {
-              const collectionId = collectionByGroup.get(group)
+              const collectionId = collectionByGroup.get(group.id)
               return collectionId ? [collectionId] : []
             }) ?? [])
           : []
@@ -360,7 +411,7 @@ export async function reconcileVaultDirectory(
               )
             ),
         ])
-        collectionChangedUsers.add(member.userId)
+        accessChangedUsers.add(member.userId)
       }
       for (const collectionId of desired) {
         const assignment = await db
@@ -381,7 +432,7 @@ export async function reconcileVaultDirectory(
             readOnly: false,
             hidePasswords: false,
           })
-          collectionChangedUsers.add(member.userId)
+          accessChangedUsers.add(member.userId)
           continue
         }
         await db.batch([
@@ -397,7 +448,71 @@ export async function reconcileVaultDirectory(
             membershipId: identity.membershipId,
           }),
         ])
-        collectionChangedUsers.add(member.userId)
+        accessChangedUsers.add(member.userId)
+      }
+      const desiredGroups = new Set(
+        user?.active && member.status !== 3
+          ? (user.groups?.map((group) => groupByExternal.get(group.id)!) ?? [])
+          : []
+      )
+      const ownedGroups = await db
+        .select({ groupId: vaultDirectoryGroupGrant.groupId })
+        .from(vaultDirectoryGroupGrant)
+        .where(eq(vaultDirectoryGroupGrant.membershipId, identity.membershipId))
+        .all()
+      const ownedGroupIds = new Set(ownedGroups.map((grant) => grant.groupId))
+      for (const grant of ownedGroups) {
+        if (desiredGroups.has(grant.groupId)) continue
+        await db.batch([
+          db
+            .delete(vaultDirectoryGroupGrant)
+            .where(
+              and(
+                eq(
+                  vaultDirectoryGroupGrant.membershipId,
+                  identity.membershipId
+                ),
+                eq(vaultDirectoryGroupGrant.groupId, grant.groupId)
+              )
+            ),
+          db
+            .delete(vaultGroupMember)
+            .where(
+              and(
+                eq(vaultGroupMember.membershipId, identity.membershipId),
+                eq(vaultGroupMember.groupId, grant.groupId)
+              )
+            ),
+        ])
+        accessChangedUsers.add(member.userId)
+      }
+      for (const groupId of desiredGroups) {
+        const assigned = await db
+          .select({ groupId: vaultGroupMember.groupId })
+          .from(vaultGroupMember)
+          .where(
+            and(
+              eq(vaultGroupMember.membershipId, identity.membershipId),
+              eq(vaultGroupMember.groupId, groupId)
+            )
+          )
+          .get()
+        if (assigned) continue
+        await db.batch([
+          db.insert(vaultGroupMember).values({
+            groupId,
+            membershipId: identity.membershipId,
+          }),
+          ...(ownedGroupIds.has(groupId)
+            ? []
+            : [
+                db.insert(vaultDirectoryGroupGrant).values({
+                  groupId,
+                  membershipId: identity.membershipId,
+                }),
+              ]),
+        ])
+        accessChangedUsers.add(member.userId)
       }
     }
   } finally {
@@ -408,16 +523,21 @@ export async function reconcileVaultDirectory(
       const changed =
         beforeRecipients.size !== afterRecipients.size ||
         [...beforeRecipients].some((id) => !afterRecipients.has(id))
-      if (changed || collectionChangedUsers.size) {
+      if (changed || accessChangedUsers.size) {
+        await db
+          .update(vaultOrganization)
+          .set({ updatedAt: new Date() })
+          .where(eq(vaultOrganization.id, orgId))
+          .run()
         const recipients = changed
           ? [
               ...new Set([
                 ...beforeRecipients,
                 ...afterRecipients,
-                ...collectionChangedUsers,
+                ...accessChangedUsers,
               ]),
             ]
-          : [...collectionChangedUsers]
+          : [...accessChangedUsers]
         for (let index = 0; index < recipients.length; index += 20)
           await Promise.all(recipients.slice(index, index + 20).map(notifyUser))
       }
