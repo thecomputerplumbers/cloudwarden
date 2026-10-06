@@ -273,6 +273,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultSendDownloadToken).run()
       tx.delete(schema.vaultSendToken).run()
       tx.delete(schema.vaultSend).run()
+      tx.delete(schema.vaultCipherArchive).run()
       tx.delete(schema.vaultCipher).run()
       tx.delete(schema.vaultFolder).run()
       tx.delete(schema.setting)
@@ -355,7 +356,72 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       latest = Math.max(latest, folder.updatedAt.getTime())
     for (const send of sends)
       latest = Math.max(latest, send.updatedAt.getTime())
+    const archiveRevision = this.db
+      .select({ updatedAt: schema.setting.updatedAt })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:archive-revision"))
+      .get()
+    if (archiveRevision)
+      latest = Math.max(latest, archiveRevision.updatedAt.getTime())
     return latest
+  }
+
+  async getVaultCipherArchivedAt(id: string, userId: string) {
+    this.assertVaultActive()
+    return (
+      this.db
+        .select({ archivedAt: schema.vaultCipherArchive.archivedAt })
+        .from(schema.vaultCipherArchive)
+        .where(
+          and(
+            eq(schema.vaultCipherArchive.cipherId, id),
+            eq(schema.vaultCipherArchive.userId, userId)
+          )
+        )
+        .get()?.archivedAt ?? null
+    )
+  }
+
+  async setVaultCipherArchived(id: string, userId: string, archived: boolean) {
+    this.assertVaultActive()
+    this.assertCipherNotSharing(id)
+    const cipher = this.db
+      .select()
+      .from(schema.vaultCipher)
+      .where(eq(schema.vaultCipher.id, id))
+      .get()
+    if (!cipher || cipher.deletedAt) return null
+    const now = new Date()
+    this.db.transaction((tx) => {
+      if (archived)
+        tx.insert(schema.vaultCipherArchive)
+          .values({ cipherId: id, userId, archivedAt: now })
+          .onConflictDoUpdate({
+            target: [
+              schema.vaultCipherArchive.cipherId,
+              schema.vaultCipherArchive.userId,
+            ],
+            set: { archivedAt: now },
+          })
+          .run()
+      else
+        tx.delete(schema.vaultCipherArchive)
+          .where(
+            and(
+              eq(schema.vaultCipherArchive.cipherId, id),
+              eq(schema.vaultCipherArchive.userId, userId)
+            )
+          )
+          .run()
+      tx.insert(schema.setting)
+        .values({ key: "vault:archive-revision", value: "1", updatedAt: now })
+        .onConflictDoUpdate({
+          target: schema.setting.key,
+          set: { updatedAt: now },
+        })
+        .run()
+    })
+    return cipher
   }
 
   async listVaultSends() {
@@ -731,6 +797,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultAttachment)
         .where(eq(schema.vaultAttachment.cipherId, id))
         .run()
+      tx.delete(schema.vaultCipherArchive)
+        .where(eq(schema.vaultCipherArchive.cipherId, id))
+        .run()
       tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
     })
   }
@@ -773,6 +842,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultAttachment)
         .where(eq(schema.vaultAttachment.cipherId, id))
         .run()
+      tx.delete(schema.vaultCipherArchive)
+        .where(eq(schema.vaultCipherArchive.cipherId, id))
+        .run()
       tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
     })
   }
@@ -805,6 +877,9 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       for (const id of ids) {
         tx.delete(schema.vaultAttachment)
           .where(eq(schema.vaultAttachment.cipherId, id))
+          .run()
+        tx.delete(schema.vaultCipherArchive)
+          .where(eq(schema.vaultCipherArchive.cipherId, id))
           .run()
         tx.delete(schema.vaultCipher).where(eq(schema.vaultCipher.id, id)).run()
       }

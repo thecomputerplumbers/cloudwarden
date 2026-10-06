@@ -20,8 +20,11 @@ prelogin, password login, master password and PBKDF2 or Argon2id setting changes
 refresh tokens, profile and asymmetric key updates, personal vault sync,
 verified account email changes with client rewrapped keys,
 personal ciphers, folders, encrypted text and file Sends with public password
-and access limits, and encrypted attachments stored in private R2. Send content
-and access counters live in the owner's Durable Object; D1 maps public Send IDs
+and access limits, and encrypted attachments stored in private R2. Cipher
+archive and unarchive routes support single items and batches. Archive dates
+are stored per user, so archiving a shared cipher does not archive it for other
+organization members. Reads and writes check current collection access. Send
+content and access counters live in the owner's Durable Object; D1 maps public Send IDs
 to that object. File Send uploads are currently capped at 20 MB. It also
 supports authenticator app TOTP enrollment, login challenges,
 single-use recovery codes, and disabling the factor. Optional email two-factor

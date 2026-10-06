@@ -600,6 +600,36 @@ const createdCipher = await authorized("/api/ciphers", "POST", {
 })
 assert.equal(createdCipher.status, 200)
 const cipherId = createdCipher.body.id
+assert.equal(createdCipher.body.archivedDate, null)
+const archivedCipher = await authorized(
+  `/api/ciphers/${cipherId}/archive`,
+  "PUT"
+)
+assert.equal(archivedCipher.status, 200)
+assert.ok(Date.parse(archivedCipher.body.archivedDate))
+assert.equal(
+  (await authorized("/api/sync")).body.ciphers.find(
+    (item) => item.id === cipherId
+  ).archivedDate,
+  archivedCipher.body.archivedDate
+)
+const unarchivedCipher = await authorized(
+  `/api/ciphers/${cipherId}/unarchive`,
+  "PUT"
+)
+assert.equal(unarchivedCipher.status, 200)
+assert.equal(unarchivedCipher.body.archivedDate, null)
+const bulkArchived = await authorized("/api/ciphers/archive", "PUT", {
+  ids: [cipherId],
+})
+assert.equal(bulkArchived.status, 200)
+assert.equal(bulkArchived.body.object, "list")
+assert.ok(Date.parse(bulkArchived.body.data[0].archivedDate))
+const bulkUnarchived = await authorized("/api/ciphers/unarchive", "PUT", {
+  ids: [cipherId],
+})
+assert.equal(bulkUnarchived.status, 200)
+assert.equal(bulkUnarchived.body.data[0].archivedDate, null)
 
 const sync = await authorized("/api/sync")
 assert.equal(sync.status, 200)
@@ -1709,6 +1739,33 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
 )
+const memberArchived = await otherAuthorized(
+  `/api/ciphers/${sharedId}/archive`,
+  undefined,
+  "PUT"
+)
+assert.equal(memberArchived.status, 200)
+assert.ok(Date.parse(memberArchived.body.archivedDate))
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}`)).body.archivedDate,
+  null
+)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.ciphers.find(
+    (cipher) => cipher.id === sharedId
+  ).archivedDate,
+  memberArchived.body.archivedDate
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/ciphers/${sharedId}/unarchive`,
+      undefined,
+      "PUT"
+    )
+  ).body.archivedDate,
+  null
+)
 const memberSharedLink = (
   await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
 ).body.attachments[0].url
@@ -1751,6 +1808,11 @@ assert.deepEqual(
 )
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}/archive`, undefined, "PUT"))
+    .status,
   404
 )
 assert.equal((await fetch(memberSharedLink)).status, 404)

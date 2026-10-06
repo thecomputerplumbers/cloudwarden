@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core"
 
 // One AppDatabase instance is selected by each vault user ID. A user's
 // encrypted items and folders are serialized in that user's Durable Object.
@@ -10,6 +10,16 @@ export const vaultCipher = sqliteTable("vault_cipher", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 })
+
+export const vaultCipherArchive = sqliteTable(
+  "vault_cipher_archive",
+  {
+    cipherId: text("cipher_id").notNull(),
+    userId: text("user_id").notNull(),
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.cipherId, table.userId] })]
+)
 
 export const vaultFolder = sqliteTable("vault_folder", {
   id: text("id").primaryKey(),

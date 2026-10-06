@@ -575,7 +575,9 @@ async function cipherResponse(
     sshKey: field(data, "sshKey") ?? null,
     folderId: field(data, "folderId") ?? null,
     favorite: field(data, "favorite") === true,
-    archivedDate: field(data, "archivedDate") ?? null,
+    archivedDate:
+      (await vault.getVaultCipherArchivedAt(row.id, userId))?.toISOString() ??
+      null,
     edit: true,
     viewPassword: true,
     permissions: { delete: true, restore: true },
@@ -3785,6 +3787,82 @@ export async function handleBitwarden(
         return response()
       }
     }
+  }
+  const archiveMatch =
+    /^\/api\/ciphers(?:\/([0-9a-f-]{36}))?\/(archive|unarchive)$/.exec(path)
+  if (archiveMatch && method === "PUT") {
+    const singleId = archiveMatch[1]
+    const archived = archiveMatch[2] === "archive"
+    const body = singleId ? null : await bodyOf(request)
+    const rawIds = body && field(body, "ids")
+    const ids = singleId ? [singleId] : rawIds
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > 100 ||
+      ids.some(
+        (id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)
+      ) ||
+      new Set(ids).size !== ids.length
+    )
+      return failure("Invalid cipher IDs")
+    const selected = [] as {
+      id: string
+      targetVault: Awaited<
+        ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>
+      >
+      organization?: { id: string; collectionIds: string[] }
+    }[]
+    for (const id of ids as string[]) {
+      const locator = await getOrgCipherLocator(env, id)
+      if (locator) {
+        const member = await getVaultMembership(env, locator.orgId, user.id)
+        if (!member) return failure("Cipher not found", 404)
+        const allowed = new Set(
+          (await listVaultCollections(env, locator.orgId, member)).map(
+            (row) => row.id
+          )
+        )
+        const visible = locator.collectionIds.filter((collectionId) =>
+          allowed.has(collectionId)
+        )
+        if (!visible.length) return failure("Cipher not found", 404)
+        const targetVault = await env.APP_DATABASE.getByName(
+          `org:${locator.orgId}`
+        )
+        const cipher = await targetVault.getVaultCipher(id)
+        if (!cipher || cipher.deletedAt) return failure("Cipher not found", 404)
+        selected.push({
+          id,
+          targetVault,
+          organization: { id: locator.orgId, collectionIds: visible },
+        })
+      } else {
+        const cipher = await vault.getVaultCipher(id)
+        if (!cipher || cipher.deletedAt) return failure("Cipher not found", 404)
+        selected.push({ id, targetVault: vault })
+      }
+    }
+    const responses = []
+    for (const target of selected) {
+      const row = await target.targetVault.setVaultCipherArchived(
+        target.id,
+        user.id,
+        archived
+      )
+      if (!row) return failure("Cipher not found", 404)
+      responses.push(
+        await cipherResponse(
+          row,
+          target.targetVault,
+          user.id,
+          origin,
+          target.organization
+        )
+      )
+    }
+    await publishVaultNotification(env, { type: 5, userId: user.id })
+    return json(singleId ? responses[0] : list(responses))
   }
   const cipherMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore|\/partial)?$/.exec(
