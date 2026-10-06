@@ -208,7 +208,10 @@ export async function initializeVaultPassword(
     key: string
     privateKey: string
     publicKey: string
+    kdf: number
     kdfIterations: number
+    kdfMemory: number | null
+    kdfParallelism: number | null
     name?: string
     emailVerified?: boolean
   }
@@ -222,7 +225,10 @@ export async function initializeVaultPassword(
       key: input.key,
       privateKey: input.privateKey,
       publicKey: input.publicKey,
+      kdf: input.kdf,
       kdfIterations: input.kdfIterations,
+      kdfMemory: input.kdfMemory,
+      kdfParallelism: input.kdfParallelism,
       ...(input.name ? { name: input.name } : {}),
       ...(input.emailVerified ? { emailVerified: true } : {}),
       updatedAt: new Date(),
@@ -337,7 +343,12 @@ export async function updateVaultPassword(
   request: Request,
   newPassword: string,
   newKey: string,
-  kdf: { type: number; iterations: number } | null
+  kdf: {
+    type: number
+    iterations: number
+    memory: number | null
+    parallelism: number | null
+  } | null
 ) {
   const db = drizzle(env.DB)
   const salt = randomToken()
@@ -350,6 +361,8 @@ export async function updateVaultPassword(
       key: newKey,
       kdf: kdf?.type ?? user.kdf,
       kdfIterations: kdf?.iterations ?? user.kdfIterations,
+      kdfMemory: kdf ? kdf.memory : user.kdfMemory,
+      kdfParallelism: kdf ? kdf.parallelism : user.kdfParallelism,
       securityStamp: nextSecurityStamp,
       updatedAt: new Date(),
     })

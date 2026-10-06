@@ -218,6 +218,63 @@ function integerField(body: Body, name: string) {
   return undefined
 }
 
+type VaultKdfSettings = {
+  type: number
+  iterations: number
+  memory: number | null
+  parallelism: number | null
+}
+
+function validatedKdf(
+  type: number | undefined,
+  iterations: number | undefined,
+  memory: number | undefined,
+  parallelism: number | undefined
+): VaultKdfSettings | null {
+  if (!Number.isSafeInteger(iterations) || iterations! > 2_000_000) return null
+  if (type === 0 && iterations! >= 100_000)
+    return { type, iterations: iterations!, memory: null, parallelism: null }
+  if (
+    type === 1 &&
+    iterations! >= 1 &&
+    Number.isSafeInteger(memory) &&
+    memory! >= 15 &&
+    memory! <= 1024 &&
+    Number.isSafeInteger(parallelism) &&
+    parallelism! >= 1 &&
+    parallelism! <= 16
+  )
+    return {
+      type,
+      iterations: iterations!,
+      memory: memory!,
+      parallelism: parallelism!,
+    }
+  return null
+}
+
+function nestedKdf(value: unknown): VaultKdfSettings | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const settings = value as Body
+  return validatedKdf(
+    numberField(settings, "kdfType") ?? numberField(settings, "kdf"),
+    numberField(settings, "iterations") ??
+      numberField(settings, "kdfIterations"),
+    numberField(settings, "memory") ?? numberField(settings, "kdfMemory"),
+    numberField(settings, "parallelism") ??
+      numberField(settings, "kdfParallelism")
+  )
+}
+
+function sameKdf(a: VaultKdfSettings, b: VaultKdfSettings) {
+  return (
+    a.type === b.type &&
+    a.iterations === b.iterations &&
+    a.memory === b.memory &&
+    a.parallelism === b.parallelism
+  )
+}
+
 function collectionIdsField(body: Body) {
   const value = field(body, "collectionIds")
   return Array.isArray(value) &&
@@ -1161,9 +1218,7 @@ export async function handleBitwarden(
       | Body
       | undefined
     const unlock = field(body, "masterPasswordUnlock") as Body | undefined
-    const kdfSettings = (authentication && field(authentication, "kdf")) as
-      | Body
-      | undefined
+    const kdfSettings = authentication && field(authentication, "kdf")
     const legacyHash = stringField(body, "masterPasswordHash")
     const hash =
       (authentication &&
@@ -1175,12 +1230,16 @@ export async function handleBitwarden(
         (stringField(unlock, "masterKeyWrappedUserKey") ??
           stringField(unlock, "key"))) ??
       stringField(body, "key")
-    const kdf =
-      (kdfSettings && numberField(kdfSettings, "kdfType")) ??
-      numberField(body, "kdf")
-    const iterations =
-      (kdfSettings && numberField(kdfSettings, "iterations")) ??
-      numberField(body, "kdfIterations")
+    const kdf = kdfSettings
+      ? nestedKdf(kdfSettings)
+      : validatedKdf(
+          numberField(body, "kdf"),
+          numberField(body, "kdfIterations"),
+          numberField(body, "kdfMemory"),
+          numberField(body, "kdfParallelism")
+        )
+    const unlockKdf = unlock && field(unlock, "kdf")
+    const parsedUnlockKdf = unlockKdf ? nestedKdf(unlockKdf) : null
     if (
       !email ||
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
@@ -1188,10 +1247,8 @@ export async function handleBitwarden(
       hash.length > 1024 ||
       !key ||
       key.length > 20_000 ||
-      kdf !== 0 ||
-      !iterations ||
-      iterations < 100_000 ||
-      iterations > 2_000_000 ||
+      !kdf ||
+      (unlockKdf && (!parsedUnlockKdf || !sameKdf(kdf, parsedUnlockKdf))) ||
       (authentication &&
         normalizeEmail(email) !== stringField(authentication, "salt")) ||
       (unlock && normalizeEmail(email) !== stringField(unlock, "salt"))
@@ -1223,7 +1280,10 @@ export async function handleBitwarden(
           key,
           privateKey,
           publicKey,
-          kdfIterations: iterations,
+          kdf: kdf.type,
+          kdfIterations: kdf.iterations,
+          kdfMemory: kdf.memory,
+          kdfParallelism: kdf.parallelism,
           name,
           emailVerified: true,
         })
@@ -1236,8 +1296,10 @@ export async function handleBitwarden(
           key,
           privateKey: keys && stringField(keys, "encryptedPrivateKey"),
           publicKey: keys && stringField(keys, "publicKey"),
-          kdf,
-          kdfIterations: iterations,
+          kdf: kdf.type,
+          kdfIterations: kdf.iterations,
+          kdfMemory: kdf.memory ?? undefined,
+          kdfParallelism: kdf.parallelism ?? undefined,
           emailVerified: !!invitation || (verification?.verified ?? false),
         })
       }
@@ -1782,10 +1844,14 @@ export async function handleBitwarden(
     const privateKey = keys && stringField(keys, "encryptedPrivateKey")
     const publicKey = keys && stringField(keys, "publicKey")
     const kdf =
-      body && (integerField(body, "kdf") ?? integerField(body, "kdfType"))
-    const iterations =
       body &&
-      (integerField(body, "kdfIterations") ?? integerField(body, "iterations"))
+      validatedKdf(
+        integerField(body, "kdf") ?? integerField(body, "kdfType"),
+        integerField(body, "kdfIterations") ?? integerField(body, "iterations"),
+        integerField(body, "kdfMemory") ?? integerField(body, "memory"),
+        integerField(body, "kdfParallelism") ??
+          integerField(body, "parallelism")
+      )
     if (
       !hash ||
       hash.length > 1024 ||
@@ -1795,10 +1861,7 @@ export async function handleBitwarden(
       privateKey.length > 20_000 ||
       !publicKey ||
       publicKey.length > 20_000 ||
-      kdf !== 0 ||
-      !iterations ||
-      iterations < 100_000 ||
-      iterations > 2_000_000
+      !kdf
     )
       return failure("Invalid password setup")
     const initialized = await initializeVaultPassword(env, user.id, {
@@ -1806,7 +1869,10 @@ export async function handleBitwarden(
       key,
       privateKey,
       publicKey,
-      kdfIterations: iterations,
+      kdf: kdf.type,
+      kdfIterations: kdf.iterations,
+      kdfMemory: kdf.memory,
+      kdfParallelism: kdf.parallelism,
     })
     return initialized
       ? json({ object: "set-password", captchaBypassToken: "" })
@@ -1845,7 +1911,7 @@ export async function handleBitwarden(
     const unlock = body && field(body, "unlockData")
     let nextPassword: string | undefined
     let nextKey: string | undefined
-    let kdf: { type: number; iterations: number } | null = null
+    let kdf: VaultKdfSettings | null = null
     if (
       authentication &&
       typeof authentication === "object" &&
@@ -1856,36 +1922,19 @@ export async function handleBitwarden(
     ) {
       const auth = authentication as Body
       const wrap = unlock as Body
-      const authKdf = field(auth, "kdf") as Body | undefined
-      const wrapKdf = field(wrap, "kdf") as Body | undefined
-      const authType =
-        authKdf &&
-        (numberField(authKdf, "kdfType") ?? numberField(authKdf, "kdf"))
-      const wrapType =
-        wrapKdf &&
-        (numberField(wrapKdf, "kdfType") ?? numberField(wrapKdf, "kdf"))
-      const authIterations =
-        authKdf &&
-        (numberField(authKdf, "iterations") ??
-          numberField(authKdf, "kdfIterations"))
-      const wrapIterations =
-        wrapKdf &&
-        (numberField(wrapKdf, "iterations") ??
-          numberField(wrapKdf, "kdfIterations"))
+      const authKdf = nestedKdf(field(auth, "kdf"))
+      const wrapKdf = nestedKdf(field(wrap, "kdf"))
       if (
         stringField(auth, "salt") !== user.email ||
         stringField(wrap, "salt") !== user.email ||
-        authType !== wrapType ||
-        authIterations !== wrapIterations ||
-        authType !== 0 ||
-        !authIterations ||
-        authIterations < 100_000 ||
-        authIterations > 2_000_000
+        !authKdf ||
+        !wrapKdf ||
+        !sameKdf(authKdf, wrapKdf)
       )
         return failure("Invalid KDF settings")
       nextPassword = stringField(auth, "masterPasswordAuthenticationHash")
       nextKey = stringField(wrap, "masterKeyWrappedUserKey")
-      kdf = { type: authType, iterations: authIterations }
+      kdf = authKdf
     } else if (path === "/api/accounts/password") {
       nextPassword = body && stringField(body, "newMasterPasswordHash")
       nextKey = body && stringField(body, "key")

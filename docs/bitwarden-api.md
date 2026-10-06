@@ -16,7 +16,7 @@ a local HTTPS Worker; a trusted HTTPS deployment has not been tested.
 
 Current routes cover server configuration, invite-based legacy account
 registration, the web vault's start/finish registration flow with a short-lived signed token,
-prelogin, password login, master password and PBKDF2 setting changes, rotating
+prelogin, password login, master password and PBKDF2 or Argon2id setting changes, rotating
 refresh tokens, profile and asymmetric key updates, personal vault sync,
 personal ciphers, folders, encrypted text and file Sends with public password
 and access limits, and encrypted attachments stored in private R2. Send content

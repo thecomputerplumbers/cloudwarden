@@ -341,6 +341,129 @@ const tokenRequest = (username, password, secondFactor = {}, clientIp) =>
     }),
   })
 
+const argonEmail = `argon-${crypto.randomUUID()}@example.test`
+const argonRegistrationToken = await registrationTokenFor(
+  argonEmail,
+  "Argon Test"
+)
+const argonSettings = {
+  kdfType: 1,
+  iterations: 6,
+  memory: 32,
+  parallelism: 4,
+}
+const argonRegistration = {
+  email: argonEmail,
+  emailVerificationToken: argonRegistrationToken,
+  masterPasswordAuthentication: {
+    salt: argonEmail,
+    kdf: argonSettings,
+    masterPasswordAuthenticationHash: "argon-client-derived-secret",
+  },
+  masterPasswordUnlock: {
+    salt: argonEmail,
+    kdf: argonSettings,
+    masterKeyWrappedUserKey: "2.argon-encrypted-key",
+  },
+  userAsymmetricKeys: {
+    encryptedPrivateKey: "2.argon-private-key",
+    publicKey: "argon-public-key",
+  },
+}
+assert.equal(
+  (
+    await post("/identity/accounts/register/finish", {
+      ...argonRegistration,
+      masterPasswordUnlock: {
+        ...argonRegistration.masterPasswordUnlock,
+        kdf: { ...argonSettings, memory: 16 },
+      },
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (await post("/identity/accounts/register/finish", argonRegistration)).status,
+  200
+)
+const argonPrelogin = await post("/identity/accounts/prelogin", {
+  email: argonEmail,
+})
+assert.equal(argonPrelogin.body.kdf, 1)
+assert.equal(argonPrelogin.body.kdfIterations, 6)
+assert.equal(argonPrelogin.body.kdfMemory, 32)
+assert.equal(argonPrelogin.body.kdfParallelism, 4)
+const argonLogin = await tokenRequest(
+  argonEmail,
+  "argon-client-derived-secret",
+  {},
+  "203.0.113.220"
+)
+assert.equal(argonLogin.status, 200)
+const argonTokens = await argonLogin.json()
+const argonKdfChange = (unlockKdf) =>
+  post(
+    "/api/accounts/kdf",
+    {
+      masterPasswordHash: "argon-client-derived-secret",
+      authenticationData: {
+        salt: argonEmail,
+        kdf: { kdfType: 0, iterations: 600_000 },
+        masterPasswordAuthenticationHash: "argon-new-secret",
+      },
+      unlockData: {
+        salt: argonEmail,
+        kdf: unlockKdf,
+        masterKeyWrappedUserKey: "2.argon-new-key",
+      },
+    },
+    argonTokens.access_token
+  )
+assert.equal((await argonKdfChange(argonSettings)).status, 400)
+assert.equal(
+  (await argonKdfChange({ kdfType: 0, iterations: 600_000 })).status,
+  200
+)
+const argonAfterChange = await post("/identity/accounts/prelogin", {
+  email: argonEmail,
+})
+assert.equal(argonAfterChange.body.kdf, 0)
+assert.equal(argonAfterChange.body.kdfMemory, null)
+assert.equal(argonAfterChange.body.kdfParallelism, null)
+assert.equal(
+  (await tokenRequest(argonEmail, "argon-new-secret", {}, "203.0.113.220"))
+    .status,
+  200
+)
+assert.equal(
+  (
+    await post(
+      "/api/accounts/kdf",
+      {
+        masterPasswordHash: "argon-new-secret",
+        authenticationData: {
+          salt: argonEmail,
+          kdf: argonSettings,
+          masterPasswordAuthenticationHash: "argon-final-secret",
+        },
+        unlockData: {
+          salt: argonEmail,
+          kdf: argonSettings,
+          masterKeyWrappedUserKey: "2.argon-final-key",
+        },
+      },
+      argonTokens.access_token
+    )
+  ).status,
+  200
+)
+const argonFinalPrelogin = await post("/identity/accounts/prelogin", {
+  email: argonEmail,
+})
+assert.equal(argonFinalPrelogin.body.kdf, 1)
+assert.equal(argonFinalPrelogin.body.kdfMemory, 32)
+assert.equal(argonFinalPrelogin.body.kdfParallelism, 4)
+
 assert.equal((await tokenRequest(email, "wrong")).status, 400)
 const login = await tokenRequest(email, "client-derived-secret")
 assert.equal(login.status, 200)
