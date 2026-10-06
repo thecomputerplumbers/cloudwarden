@@ -5,6 +5,7 @@ import {
   beginVaultDeletion,
   createVaultUser,
   createVaultStubUser,
+  currentVaultDeviceId,
   findVaultUser,
   findVaultUserById,
   initializeVaultPassword,
@@ -105,6 +106,15 @@ import {
 } from "./bitwarden-email"
 import { completeVaultShare, startVaultShare } from "./bitwarden-share"
 import { personalApiKey, userForPersonalApiKey } from "./bitwarden-api-key"
+import {
+  answerAuthRequest,
+  authRequestForCode,
+  authRequestResponse,
+  claimAuthRequestLogin,
+  createAuthRequest,
+  getAuthRequest,
+  pendingAuthRequests,
+} from "./bitwarden-auth-request"
 import {
   consumeProtectedOtp,
   requestProtectedOtp,
@@ -525,6 +535,8 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/accounts/") ||
     path === "/api/devices" ||
     path.startsWith("/api/devices/") ||
+    path === "/api/auth-requests" ||
+    path.startsWith("/api/auth-requests/") ||
     path === "/api/two-factor" ||
     path.startsWith("/api/two-factor/") ||
     path === "/api/sends" ||
@@ -824,6 +836,89 @@ export async function handleBitwarden(
         ? await knownVaultDevice(env, owner.id, owner.securityStamp, deviceId)
         : false
     )
+  }
+
+  if (path === "/api/auth-requests" && method === "POST") {
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    const deviceId = body && stringField(body, "deviceIdentifier")
+    const accessCode = body && stringField(body, "accessCode")
+    const publicKey = body && stringField(body, "publicKey")
+    const deviceType = Number(request.headers.get("Device-Type"))
+    if (
+      !email ||
+      email.length > 254 ||
+      !deviceId ||
+      deviceId.length > 200 ||
+      !accessCode ||
+      accessCode.length < 6 ||
+      accessCode.length > 200 ||
+      !publicKey ||
+      publicKey.length > 20_000 ||
+      !Number.isInteger(deviceType) ||
+      deviceType < 0 ||
+      deviceType > 26
+    )
+      return failure("Invalid auth request")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    if (
+      !(await limiter.consumeRateLimit(`auth-request:${ip}`, 10, 15 * 60_000))
+        .allowed
+    )
+      return failure("Too many auth requests", 429)
+    const owner = await findVaultUser(env, email)
+    if (!owner || !owner.emailVerified)
+      return failure("Account unavailable", 404)
+    if (
+      !(
+        await limiter.consumeRateLimit(
+          `auth-request-user:${owner.id}`,
+          5,
+          15 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many auth requests", 429)
+    const row = await createAuthRequest(env, {
+      userId: owner.id,
+      requestDeviceId: deviceId,
+      deviceType,
+      requestIp: ip,
+      accessCode,
+      publicKey,
+    })
+    return json({
+      ...(await authRequestResponse(env, row)),
+      requestApproved: false,
+    })
+  }
+
+  const authRequestResponseMatch = path.match(
+    /^\/api\/auth-requests\/([0-9a-f-]{36})\/response$/i
+  )
+  if (authRequestResponseMatch && method === "GET") {
+    const code = new URL(request.url).searchParams.get("code")
+    const deviceType = Number(request.headers.get("Device-Type"))
+    if (!code || code.length > 200 || !Number.isInteger(deviceType))
+      return failure("Invalid auth request", 400)
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    if (
+      !(await limiter.consumeRateLimit(`auth-response:${ip}`, 60, 60_000))
+        .allowed
+    )
+      return failure("Too many auth request lookups", 429)
+    const row = await authRequestForCode(
+      env,
+      authRequestResponseMatch[1]!,
+      code,
+      ip,
+      deviceType
+    )
+    return row
+      ? json(await authRequestResponse(env, row, true))
+      : failure("Auth request not found", 404)
   }
 
   if (path === "/api/alive" && method === "GET") return json(true)
@@ -1289,14 +1384,39 @@ export async function handleBitwarden(
     const deviceId = stringField(body, "device_identifier")
     const deviceType = stringField(body, "device_type") ?? "unknown"
     const clientId = stringField(body, "client_id") ?? "unknown"
+    const authRequestId = stringField(body, "authrequest")
     if (!username || !password || !deviceId || deviceId.length > 200)
       return failure("Missing credentials")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
-    const allowed = await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)
+    const allowed = await limiter.consumeRateLimit(
+      `${authRequestId ? "auth-login" : "login"}:${ip}`,
+      20,
+      60_000
+    )
     if (!allowed.allowed) return failure("Too many login attempts", 429)
     const user = await findVaultUser(env, username)
-    if (!(await verifyVaultPassword(user, password)) || !user)
+    const authRequest =
+      authRequestId && /^[0-9a-f-]{36}$/i.test(authRequestId)
+        ? await authRequestForCode(
+            env,
+            authRequestId,
+            password,
+            ip,
+            Number(deviceType)
+          )
+        : null
+    if (
+      !user ||
+      (authRequestId
+        ? !authRequest ||
+          !authRequest.approved ||
+          authRequest.userId !== user.id ||
+          authRequest.requestDeviceId !== deviceId ||
+          authRequest.authenticatedAt ||
+          authRequest.createdAt.getTime() <= Date.now() - 5 * 60_000
+        : !(await verifyVaultPassword(user, password)))
+    )
       return failure("Username or password is incorrect", 400)
     const factors = await enabledTwoFactors(env, user.id)
     if (factors.totp || factors.email) {
@@ -1319,6 +1439,11 @@ export async function handleBitwarden(
       )
       if (!valid) return failure("Invalid two-factor code", 400)
     }
+    if (
+      authRequest &&
+      !(await claimAuthRequestLogin(env, authRequest, user.id, deviceId))
+    )
+      return json({ error: "invalid_grant" }, 400)
     return json(
       tokenResponse(
         user,
@@ -1332,6 +1457,51 @@ export async function handleBitwarden(
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+
+  if (
+    (path === "/api/auth-requests" || path === "/api/auth-requests/pending") &&
+    method === "GET"
+  ) {
+    const rows = await pendingAuthRequests(env, user.id)
+    return json(
+      list(await Promise.all(rows.map((row) => authRequestResponse(env, row))))
+    )
+  }
+  const authRequestMatch = path.match(
+    /^\/api\/auth-requests\/([0-9a-f-]{36})$/i
+  )
+  if (authRequestMatch && method === "GET") {
+    const row = await getAuthRequest(env, user.id, authRequestMatch[1]!)
+    return row
+      ? json(await authRequestResponse(env, row))
+      : failure("Auth request not found", 404)
+  }
+  if (authRequestMatch && method === "PUT") {
+    const body = await bodyOf(request)
+    const approved = body && field(body, "requestApproved")
+    const key = body && stringField(body, "key")
+    const passwordHash = body && stringField(body, "masterPasswordHash")
+    if (
+      !body ||
+      typeof approved !== "boolean" ||
+      stringField(body, "deviceIdentifier") !==
+        (await currentVaultDeviceId(env, request, user)) ||
+      (approved && (!key || key.length > 20_000)) ||
+      (passwordHash && passwordHash.length > 1024)
+    )
+      return failure("Invalid auth request response")
+    const row = await answerAuthRequest(env, user.id, authRequestMatch[1]!, {
+      approved,
+      encryptedKey: approved ? key! : "",
+      masterPasswordHash: approved ? (passwordHash ?? null) : null,
+    })
+    return row
+      ? json({
+          ...(await authRequestResponse(env, row)),
+          requestApproved: approved,
+        })
+      : failure("Auth request not found", 404)
+  }
 
   if (
     (path === "/api/devices" || path.startsWith("/api/devices/identifier/")) &&

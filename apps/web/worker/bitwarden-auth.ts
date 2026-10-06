@@ -710,3 +710,37 @@ export async function knownVaultDevice(
     .limit(1)
     .get())
 }
+
+export async function currentVaultDeviceId(
+  env: CloudflareEnv,
+  request: Request,
+  user: VaultUser
+) {
+  const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
+    request.headers.get("Authorization") ?? ""
+  )?.[1]
+  if (!bearer) return null
+  const hash = await tokenHash(bearer)
+  const now = new Date()
+  const session = await drizzle(env.DB)
+    .select({ deviceId: vaultSession.deviceId })
+    .from(vaultSession)
+    .where(
+      and(
+        eq(vaultSession.userId, user.id),
+        eq(vaultSession.securityStamp, user.securityStamp),
+        or(
+          and(
+            eq(vaultSession.accessHash, hash),
+            gt(vaultSession.accessExpiresAt, now)
+          ),
+          and(
+            eq(vaultSession.previousAccessHash, hash),
+            gt(vaultSession.previousAccessExpiresAt, now)
+          )
+        )
+      )
+    )
+    .get()
+  return session?.deviceId ?? null
+}

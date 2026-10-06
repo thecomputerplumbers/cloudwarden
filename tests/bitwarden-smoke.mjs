@@ -279,6 +279,129 @@ assert.equal(
   false
 )
 
+const requestingDeviceId = crypto.randomUUID()
+const authAccessCode = "123456789012"
+const authRequest = await call("/api/auth-requests", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Device-Type": "14" },
+  body: JSON.stringify({
+    email,
+    deviceIdentifier: requestingDeviceId,
+    accessCode: authAccessCode,
+    publicKey: "device-public-key",
+  }),
+})
+assert.equal(authRequest.status, 200)
+assert.equal(authRequest.body.requestApproved, false)
+const authRequestId = authRequest.body.id
+assert.equal(
+  (await authorized("/api/auth-requests/pending")).body.data[0].id,
+  authRequestId
+)
+assert.equal(
+  (
+    await call(`/api/auth-requests/${authRequestId}/response?code=wrong`, {
+      headers: { "Device-Type": "14" },
+    })
+  ).status,
+  404
+)
+assert.equal(
+  (
+    await authorized(`/api/auth-requests/${authRequestId}`, "PUT", {
+      deviceIdentifier: requestingDeviceId,
+      requestApproved: true,
+      key: "2.encrypted-auth-key",
+    })
+  ).status,
+  400
+)
+const approval = await authorized(
+  `/api/auth-requests/${authRequestId}`,
+  "PUT",
+  {
+    deviceIdentifier: loginDeviceId,
+    requestApproved: true,
+    key: "2.encrypted-auth-key",
+    masterPasswordHash: "2.encrypted-master-hash",
+  }
+)
+assert.equal(approval.status, 200)
+assert.equal(approval.body.requestApproved, true)
+const authResponse = await call(
+  `/api/auth-requests/${authRequestId}/response?code=${authAccessCode}`,
+  { headers: { "Device-Type": "14" } }
+)
+assert.equal(authResponse.status, 200)
+assert.equal(authResponse.body.key, "2.encrypted-auth-key")
+assert.equal(authResponse.body.masterPasswordHash, "2.encrypted-master-hash")
+assert.equal(
+  (
+    await call(
+      `/api/auth-requests/${authRequestId}/response?code=${authAccessCode}`,
+      { headers: { "Device-Type": "13" } }
+    )
+  ).status,
+  404
+)
+const authRequestLogin = () =>
+  fetch(`${origin}/identity/connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "password",
+      client_id: "web",
+      scope: "api offline_access",
+      username: email,
+      password: authAccessCode,
+      authrequest: authRequestId,
+      device_identifier: requestingDeviceId,
+      device_type: "14",
+    }),
+  })
+const approvedLogin = await authRequestLogin()
+assert.equal(approvedLogin.status, 200)
+const approvedTokens = await approvedLogin.json()
+assert.ok(approvedTokens.access_token)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${approvedTokens.access_token}` },
+    })
+  ).status,
+  200
+)
+assert.equal((await authRequestLogin()).status, 400)
+assert.equal(
+  (await authorized("/api/auth-requests/pending")).body.data.length,
+  0
+)
+const rejectedRequest = await call("/api/auth-requests", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Device-Type": "14" },
+  body: JSON.stringify({
+    email,
+    deviceIdentifier: crypto.randomUUID(),
+    accessCode: "another-secret",
+    publicKey: "another-public-key",
+  }),
+})
+assert.equal(rejectedRequest.status, 200)
+assert.equal(
+  (
+    await authorized(`/api/auth-requests/${rejectedRequest.body.id}`, "PUT", {
+      deviceIdentifier: loginDeviceId,
+      requestApproved: false,
+      key: "",
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await authorized(`/api/auth-requests/${rejectedRequest.body.id}`)).status,
+  404
+)
+
 assert.equal(
   (
     await authorized("/api/accounts/api-key", "POST", {

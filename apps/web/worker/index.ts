@@ -19,6 +19,7 @@ import {
   pruneOrgImports,
 } from "./bitwarden-org-import"
 import { pruneProtectedOtps } from "./bitwarden-protected-otp"
+import { pruneAuthRequests } from "./bitwarden-auth-request"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -77,6 +78,11 @@ export default {
       await pruneProtectedOtps(env)
     } catch {
       console.error("Protected-action code cleanup will retry")
+    }
+    try {
+      await pruneAuthRequests(env)
+    } catch {
+      console.error("Auth request cleanup will retry")
     }
     for (const organization of await deletingOrganizations(env)) {
       try {

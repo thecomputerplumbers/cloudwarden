@@ -94,6 +94,29 @@ export const vaultProtectedOtp = sqliteTable("vault_protected_otp", {
   attempts: integer("attempts").notNull().default(0),
 })
 
+export const vaultAuthRequest = sqliteTable(
+  "vault_auth_request",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    requestDeviceId: text("request_device_id").notNull(),
+    deviceType: integer("device_type").notNull(),
+    requestIp: text("request_ip").notNull(),
+    accessCodeHash: text("access_code_hash").notNull(),
+    publicKey: text("public_key").notNull(),
+    encryptedKey: text("encrypted_key"),
+    sealedMasterPasswordHash: text("sealed_master_password_hash"),
+    approved: integer("approved", { mode: "boolean" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    responseAt: integer("response_at", { mode: "timestamp_ms" }),
+    authenticatedAt: integer("authenticated_at", { mode: "timestamp_ms" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("vault_auth_request_user_idx").on(table.userId)]
+)
+
 export const vaultSsoFlow = sqliteTable("vault_sso_flow", {
   id: text("id").primaryKey(),
   clientState: text("client_state").notNull(),

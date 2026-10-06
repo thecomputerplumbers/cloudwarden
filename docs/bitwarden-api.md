@@ -204,7 +204,8 @@ has not changed.
 The bundled Vaultwarden web vault 2026.7.0 was exercised in isolated Chrome
 against a disposable HTTPS Wrangler Worker. Account creation, automatic sign-in,
 loading the vault, creating an encrypted login item, and viewing it succeeded.
-The client still requests `/api/auth-requests/pending`, which currently returns
-404; device approval has not been implemented. The upstream bundle also links
+The client requests `/api/auth-requests/pending`; Cloudwarden now serves that
+route and the device approval exchange, but the browser flow has not yet been
+rechecked against this change. The upstream bundle also links
 to `/css/vaultwarden.css` without shipping that stylesheet; the main styles
 load and the tested screens rendered.
