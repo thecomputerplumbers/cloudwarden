@@ -2,10 +2,15 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/thecomputerplumbers/cloudwarden)
 
-Cloudflare's deploy button does not fully support monorepos. Cloudwarden is
-public but uses workspace packages and keeps its Wrangler configuration in
-`apps/web`; follow the [deployment procedure](docs/deployment.md) for a working
-deployment.
+The button creates a new GitHub repository and a production Worker in your
+Cloudflare account. It provisions D1 and R2, applies the migrations, and deploys
+the built vault. Enter a unique `BETTER_AUTH_SECRET` of at least 32 characters,
+set `APP_URL` to the Worker's HTTPS origin, and use an `EMAIL_FROM` address
+verified for Cloudflare Email Service. The root `wrangler.jsonc` is the button
+template; `apps/web/wrangler.jsonc` is for the separately managed staging and
+production environments. To use a custom hostname, attach it to the new Worker
+and add the same custom domain route to the cloned repository's root
+`wrangler.jsonc` so future builds preserve it.
 
 Cloudwarden is based on the vinext and Cloudflare Workers monorepo starter generated from the shadcn `b0` preset:
 
