@@ -75,6 +75,27 @@ export const vaultSession = sqliteTable(
   ]
 )
 
+export const vaultDevice = sqliteTable(
+  "vault_device",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    deviceId: text("device_id").notNull(),
+    deviceType: integer("device_type").notNull(),
+    deviceName: text("device_name").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_device_user_device_unique").on(
+      table.userId,
+      table.deviceId
+    ),
+  ]
+)
+
 export const vaultApiKey = sqliteTable("vault_api_key", {
   userId: text("user_id")
     .primaryKey()

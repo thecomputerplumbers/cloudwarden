@@ -279,8 +279,23 @@ assert.equal(
   false
 )
 
-const requestingDeviceId = crypto.randomUUID()
+const requestingDeviceId = loginDeviceId
 const authAccessCode = "123456789012"
+assert.equal(
+  (
+    await call("/api/auth-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Device-Type": "14" },
+      body: JSON.stringify({
+        email,
+        deviceIdentifier: crypto.randomUUID(),
+        accessCode: authAccessCode,
+        publicKey: "device-public-key",
+      }),
+    })
+  ).status,
+  404
+)
 const authRequest = await call("/api/auth-requests", {
   method: "POST",
   headers: { "Content-Type": "application/json", "Device-Type": "14" },
@@ -309,7 +324,7 @@ assert.equal(
 assert.equal(
   (
     await authorized(`/api/auth-requests/${authRequestId}`, "PUT", {
-      deviceIdentifier: requestingDeviceId,
+      deviceIdentifier: crypto.randomUUID(),
       requestApproved: true,
       key: "2.encrypted-auth-key",
     })
@@ -381,7 +396,7 @@ const rejectedRequest = await call("/api/auth-requests", {
   headers: { "Content-Type": "application/json", "Device-Type": "14" },
   body: JSON.stringify({
     email,
-    deviceIdentifier: crypto.randomUUID(),
+    deviceIdentifier: loginDeviceId,
     accessCode: "another-secret",
     publicKey: "another-public-key",
   }),
@@ -2198,7 +2213,7 @@ assert.equal(
       },
     })
   ).body,
-  false
+  true
 )
 assert.equal(
   (

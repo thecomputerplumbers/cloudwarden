@@ -11,7 +11,8 @@ import {
   initializeVaultPassword,
   issueVaultSession,
   knownVaultDevice,
-  listVaultDeviceSessions,
+  knownVaultDeviceType,
+  listVaultDevices,
   normalizeEmail,
   refreshVaultSession,
   resetVaultSecurityStamp,
@@ -831,11 +832,7 @@ export async function handleBitwarden(
     )
       return failure("Too many device lookups", 429)
     const owner = await findVaultUser(env, email)
-    return json(
-      owner
-        ? await knownVaultDevice(env, owner.id, owner.securityStamp, deviceId)
-        : false
-    )
+    return json(owner ? await knownVaultDevice(env, owner.id, deviceId) : false)
   }
 
   if (path === "/api/auth-requests" && method === "POST") {
@@ -870,6 +867,8 @@ export async function handleBitwarden(
     const owner = await findVaultUser(env, email)
     if (!owner || !owner.emailVerified)
       return failure("Account unavailable", 404)
+    if (!(await knownVaultDeviceType(env, owner.id, deviceId, deviceType)))
+      return failure("Auth request not found", 404)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -1507,7 +1506,7 @@ export async function handleBitwarden(
     (path === "/api/devices" || path.startsWith("/api/devices/identifier/")) &&
     method === "GET"
   ) {
-    const rows = await listVaultDeviceSessions(env, user.id, user.securityStamp)
+    const rows = await listVaultDevices(env, user.id)
     const devices = new Map<
       string,
       {
@@ -1524,23 +1523,12 @@ export async function handleBitwarden(
       }
     >()
     for (const row of rows) {
-      const previous = devices.get(row.deviceId)
-      const createdAt =
-        row.createdAt ??
-        new Date(row.refreshExpiresAt.getTime() - 30 * 24 * 60 * 60_000)
-      if (previous) {
-        if (createdAt.toISOString() < previous.creationDate)
-          previous.creationDate = createdAt.toISOString()
-        previous.name = row.deviceName
-        previous.type = Number(row.deviceType) || 0
-        continue
-      }
       devices.set(row.deviceId, {
         id: row.deviceId,
         name: row.deviceName,
-        type: Number(row.deviceType) || 0,
+        type: row.deviceType,
         identifier: row.deviceId,
-        creationDate: createdAt.toISOString(),
+        creationDate: row.createdAt.toISOString(),
         devicePendingAuthRequest: null,
         isTrusted: false,
         encryptedPublicKey: null,

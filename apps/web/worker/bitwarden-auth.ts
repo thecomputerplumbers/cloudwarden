@@ -4,6 +4,7 @@ import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 import {
   vaultApiKey,
   vaultCipherTransfer,
+  vaultDevice,
   vaultOrgImport,
   vaultMembership,
   vaultSession,
@@ -494,6 +495,26 @@ export async function issueVaultSession(
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
     })
     .run()
+  await drizzle(env.DB)
+    .insert(vaultDevice)
+    .values({
+      id: `${user.id}:${deviceId}`,
+      userId: user.id,
+      deviceId,
+      deviceType: Number(deviceType) || 0,
+      deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
+      createdAt: new Date(now),
+      updatedAt: new Date(now),
+    })
+    .onConflictDoUpdate({
+      target: vaultDevice.id,
+      set: {
+        deviceType: Number(deviceType) || 0,
+        deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
+        updatedAt: new Date(now),
+      },
+    })
+    .run()
   return { access, refresh, expiresIn: ACCESS_LIFETIME_MS / 1000 }
 }
 
@@ -640,40 +661,12 @@ export async function authenticatedVaultUser(
   return user && session.securityStamp === user.securityStamp ? user : null
 }
 
-export async function listVaultDeviceSessions(
-  env: CloudflareEnv,
-  userId: string,
-  securityStamp: string
-) {
-  const db = drizzle(env.DB)
-  const currentKey = await db
-    .select({ secretHash: vaultApiKey.secretHash })
-    .from(vaultApiKey)
-    .where(eq(vaultApiKey.userId, userId))
-    .get()
-  return db
-    .select({
-      deviceId: vaultSession.deviceId,
-      deviceName: vaultSession.deviceName,
-      deviceType: vaultSession.deviceType,
-      createdAt: vaultSession.createdAt,
-      refreshExpiresAt: vaultSession.refreshExpiresAt,
-    })
-    .from(vaultSession)
-    .where(
-      and(
-        eq(vaultSession.userId, userId),
-        eq(vaultSession.securityStamp, securityStamp),
-        gt(vaultSession.refreshExpiresAt, new Date()),
-        currentKey
-          ? or(
-              eq(vaultSession.apiKey, false),
-              eq(vaultSession.apiKeyHash, currentKey.secretHash)
-            )
-          : eq(vaultSession.apiKey, false)
-      )
-    )
-    .orderBy(vaultSession.createdAt)
+export async function listVaultDevices(env: CloudflareEnv, userId: string) {
+  return drizzle(env.DB)
+    .select()
+    .from(vaultDevice)
+    .where(eq(vaultDevice.userId, userId))
+    .orderBy(vaultDevice.createdAt)
     .limit(1000)
     .all()
 }
@@ -681,33 +674,33 @@ export async function listVaultDeviceSessions(
 export async function knownVaultDevice(
   env: CloudflareEnv,
   userId: string,
-  securityStamp: string,
   deviceId: string
 ) {
-  const db = drizzle(env.DB)
-  const currentKey = await db
-    .select({ secretHash: vaultApiKey.secretHash })
-    .from(vaultApiKey)
-    .where(eq(vaultApiKey.userId, userId))
-    .get()
-  return !!(await db
-    .select({ id: vaultSession.id })
-    .from(vaultSession)
+  return !!(await drizzle(env.DB)
+    .select({ id: vaultDevice.id })
+    .from(vaultDevice)
+    .where(
+      and(eq(vaultDevice.userId, userId), eq(vaultDevice.deviceId, deviceId))
+    )
+    .get())
+}
+
+export async function knownVaultDeviceType(
+  env: CloudflareEnv,
+  userId: string,
+  deviceId: string,
+  deviceType: number
+) {
+  return !!(await drizzle(env.DB)
+    .select({ id: vaultDevice.id })
+    .from(vaultDevice)
     .where(
       and(
-        eq(vaultSession.userId, userId),
-        eq(vaultSession.deviceId, deviceId),
-        eq(vaultSession.securityStamp, securityStamp),
-        gt(vaultSession.refreshExpiresAt, new Date()),
-        currentKey
-          ? or(
-              eq(vaultSession.apiKey, false),
-              eq(vaultSession.apiKeyHash, currentKey.secretHash)
-            )
-          : eq(vaultSession.apiKey, false)
+        eq(vaultDevice.userId, userId),
+        eq(vaultDevice.deviceId, deviceId),
+        eq(vaultDevice.deviceType, deviceType)
       )
     )
-    .limit(1)
     .get())
 }
 
