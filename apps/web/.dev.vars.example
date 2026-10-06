@@ -1,5 +1,6 @@
 APP_URL=http://localhost:3000
 EMAIL_FROM=cloudwarden@example.com
+SIGNUPS_ALLOWED=true
 SIGNUPS_VERIFY=false
 # Set a unique BETTER_AUTH_SECRET outside local development.
 # Cloudflare simulates EMAIL locally; never enable remote email in automated tests.

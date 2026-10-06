@@ -14,8 +14,8 @@ cached under `apps/web/.cache/` for repeat builds. The web vault requires HTTPS
 even on localhost. Signup and basic vault use passed in isolated Chrome against
 a local HTTPS Worker; a trusted HTTPS deployment has not been tested.
 
-Current routes cover server configuration, legacy account registration,
-the web vault's start/finish registration flow with a short-lived signed token,
+Current routes cover server configuration, invite-based legacy account
+registration, the web vault's start/finish registration flow with a short-lived signed token,
 prelogin, password login, master password and PBKDF2 setting changes, rotating
 refresh tokens, profile and asymmetric key updates, personal vault sync,
 personal ciphers, folders, encrypted text and file Sends with public password
