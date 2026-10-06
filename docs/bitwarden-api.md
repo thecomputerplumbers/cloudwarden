@@ -60,7 +60,9 @@ then confirm the membership using the client-wrapped organization key. Pending
 members have no vault access. Confirmed members see only assigned collections;
 removal revokes access on the next request. The current invitation flow does not
 send email, create accounts, or expose an acceptance screen, and regular members
-have read-only shared item access.
+have read-only shared item access. Owners and admins can view member details
+and change a regular member's collection assignments. Removing an assignment
+immediately blocks shared cipher and attachment reads through that collection.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.
@@ -78,7 +80,7 @@ members still require owner confirmation with a client-wrapped organization
 key. Unregistered identities remain pending in D1 and are considered again on
 the next scheduled run after account creation. No invitation email is sent,
 and SCIM group-to-collection mapping is not implemented; new members start
-without collection access. Configure the URL, token, and organization ID as
+without collection access until an owner assigns collections. Configure the URL, token, and organization ID as
 Worker secrets in the intended environment. The token is sent only to the
 configured HTTPS source, with redirects disabled.
 

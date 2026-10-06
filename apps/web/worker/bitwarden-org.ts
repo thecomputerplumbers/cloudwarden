@@ -83,6 +83,67 @@ export async function listOrgMembers(env: CloudflareEnv, orgId: string) {
     .all()
 }
 
+export async function orgMemberCollections(
+  env: CloudflareEnv,
+  memberId: string
+) {
+  return drizzle(env.DB)
+    .select({
+      id: vaultCollectionMember.collectionId,
+      readOnly: vaultCollectionMember.readOnly,
+      hidePasswords: vaultCollectionMember.hidePasswords,
+    })
+    .from(vaultCollectionMember)
+    .where(eq(vaultCollectionMember.membershipId, memberId))
+    .all()
+}
+
+export async function setOrgMemberCollections(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string,
+  collections: { id: string; readOnly: boolean; hidePasswords: boolean }[]
+) {
+  const db = drizzle(env.DB)
+  const member = await db
+    .select()
+    .from(vaultMembership)
+    .where(
+      and(
+        eq(vaultMembership.id, memberId),
+        eq(vaultMembership.orgId, orgId),
+        eq(vaultMembership.role, 2)
+      )
+    )
+    .get()
+  if (!member) return false
+  if (
+    collections.length > 50 ||
+    new Set(collections.map((item) => item.id)).size !== collections.length
+  )
+    return false
+  for (const collection of collections)
+    if (!(await getVaultCollection(env, orgId, collection.id))) return false
+  await db.batch([
+    db
+      .update(vaultMembership)
+      .set({ accessAll: false })
+      .where(eq(vaultMembership.id, memberId)),
+    db
+      .delete(vaultCollectionMember)
+      .where(eq(vaultCollectionMember.membershipId, memberId)),
+    ...collections.map((collection) =>
+      db.insert(vaultCollectionMember).values({
+        collectionId: collection.id,
+        membershipId: memberId,
+        readOnly: collection.readOnly,
+        hidePasswords: collection.hidePasswords,
+      })
+    ),
+  ])
+  return true
+}
+
 export async function inviteOrgMember(
   env: CloudflareEnv,
   orgId: string,

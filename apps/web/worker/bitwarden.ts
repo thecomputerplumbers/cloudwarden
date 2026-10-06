@@ -60,12 +60,14 @@ import {
   inviteOrgMember,
   listOrgCipherLocators,
   listOrgMembers,
+  orgMemberCollections,
   listVaultCollections,
   listVaultOrganizations,
   organizationResponse,
   profileOrganizationResponse,
   removeOrgMember,
   setOrgCipherCollections,
+  setOrgMemberCollections,
   validOrgCollections,
   updateVaultCollection,
   updateVaultOrganization,
@@ -1266,17 +1268,19 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       const members = await listOrgMembers(env, orgId)
       return json(
         list(
-          members.map(({ membership: member, user: account }) => ({
-            id: member.id,
-            userId: account.id,
-            email: account.email,
-            name: account.name,
-            type: member.role,
-            status: member.status,
-            accessAll: member.accessAll,
-            collections: [],
-            object: "organizationUserUserDetails",
-          }))
+          await Promise.all(
+            members.map(async ({ membership: member, user: account }) => ({
+              id: member.id,
+              userId: account.id,
+              email: account.email,
+              name: account.name,
+              type: member.role,
+              status: member.status,
+              accessAll: member.accessAll,
+              collections: await orgMemberCollections(env, member.id),
+              object: "organizationUserUserDetails",
+            }))
+          )
         )
       )
     }
@@ -1337,6 +1341,64 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       return new Response(null, { status: 200 })
     }
     const memberId = memberMatch[2]
+    if (memberId && !memberMatch[3] && method === "GET") {
+      const member = (await listOrgMembers(env, orgId)).find(
+        ({ membership: row }) => row.id === memberId
+      )
+      if (!member) return failure("Member not found", 404)
+      return json({
+        id: member.membership.id,
+        userId: member.user.id,
+        email: member.user.email,
+        name: member.user.name,
+        type: member.membership.role,
+        status: member.membership.status,
+        accessAll: member.membership.accessAll,
+        collections: await orgMemberCollections(env, memberId),
+        object: "organizationUserUserDetails",
+      })
+    }
+    if (
+      memberId &&
+      !memberMatch[3] &&
+      (method === "PUT" || method === "POST")
+    ) {
+      const body = await bodyOf(request)
+      const rawCollections = body && field(body, "collections")
+      const groups = body && field(body, "groups")
+      if (
+        (body && integerField(body, "type") !== 2) ||
+        !Array.isArray(rawCollections) ||
+        (groups !== undefined && (!Array.isArray(groups) || groups.length > 0))
+      )
+        return failure("Invalid member settings")
+      const collections = rawCollections.map((item) => {
+        if (!item || typeof item !== "object") return null
+        const entry = item as Body
+        const id = stringField(entry, "id")
+        return id && /^[0-9a-f-]{36}$/.test(id)
+          ? {
+              id,
+              readOnly: field(entry, "readOnly") === true,
+              hidePasswords: field(entry, "hidePasswords") === true,
+            }
+          : null
+      })
+      if (collections.some((entry) => !entry))
+        return failure("Invalid member collections")
+      return (await setOrgMemberCollections(
+        env,
+        orgId,
+        memberId,
+        collections as {
+          id: string
+          readOnly: boolean
+          hidePasswords: boolean
+        }[]
+      ))
+        ? new Response(null, { status: 200 })
+        : failure("Member or collection not found", 404)
+    }
     if (memberId && memberMatch[3] === "confirm" && method === "POST") {
       const body = await bodyOf(request)
       const key = body && stringField(body, "key")

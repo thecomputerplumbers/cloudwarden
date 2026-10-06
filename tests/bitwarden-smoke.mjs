@@ -525,6 +525,56 @@ const spoofedSharedLink = memberSharedLink.replace(
 )
 assert.notEqual(spoofedSharedLink, memberSharedLink)
 assert.equal((await fetch(spoofedSharedLink)).status, 404)
+const memberDetail = await authorized(
+  `/api/organizations/${orgId}/users/${invitee.id}`
+)
+assert.deepEqual(
+  memberDetail.body.collections.map((entry) => entry.id),
+  [secondCollection.body.id]
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/users/${invitee.id}`,
+      { type: 2, collections: [] },
+      "PUT"
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [],
+    })
+  ).status,
+  200
+)
+assert.deepEqual(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.collections,
+  []
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal((await fetch(memberSharedLink)).status, 404)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [
+        { id: secondCollection.body.id, readOnly: true, hidePasswords: false },
+      ],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  200
+)
 const movedShared = await authorized(
   `/api/ciphers/${sharedId}/collections_v2`,
   "PUT",
