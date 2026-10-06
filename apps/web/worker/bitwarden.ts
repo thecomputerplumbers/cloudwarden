@@ -4,6 +4,7 @@ import {
   createVaultUser,
   findVaultUser,
   findVaultUserById,
+  initializeVaultPassword,
   issueVaultSession,
   normalizeEmail,
   refreshVaultSession,
@@ -42,6 +43,13 @@ import {
   issueRegistrationToken,
   verifyRegistrationToken,
 } from "./bitwarden-register"
+import {
+  consumeVaultSso,
+  finishVaultSsoCallback,
+  prevalidateVaultSso,
+  redeemVaultSso,
+  startVaultSso,
+} from "./bitwarden-sso"
 import {
   collectionResponse,
   beginOrgDeletion,
@@ -185,7 +193,7 @@ function profile(
     id: user.id,
     name: user.name,
     email: user.email,
-    emailVerified: false,
+    emailVerified: user.emailVerified,
     premium: true,
     premiumFromOrganization: false,
     culture: "en-US",
@@ -209,6 +217,7 @@ function tokenResponse(
   user: VaultUser,
   tokens: { access: string; refresh: string; expiresIn: number }
 ) {
+  const hasMasterPassword = !!user.passwordHash
   const accountKeys =
     user.privateKey && user.publicKey
       ? {
@@ -226,7 +235,7 @@ function tokenResponse(
     expires_in: tokens.expiresIn,
     token_type: "Bearer",
     scope: "api offline_access",
-    Key: user.key,
+    ...(user.key ? { Key: user.key } : {}),
     PrivateKey: user.privateKey,
     AccountKeys: accountKeys,
     Kdf: user.kdf,
@@ -236,18 +245,20 @@ function tokenResponse(
     ResetMasterPassword: false,
     ForcePasswordReset: false,
     UserDecryptionOptions: {
-      HasMasterPassword: true,
-      MasterPasswordUnlock: {
-        Kdf: {
-          KdfType: user.kdf,
-          Iterations: user.kdfIterations,
-          Memory: user.kdfMemory,
-          Parallelism: user.kdfParallelism,
-        },
-        MasterKeyEncryptedUserKey: user.key,
-        MasterKeyWrappedUserKey: user.key,
-        Salt: user.email,
-      },
+      HasMasterPassword: hasMasterPassword,
+      MasterPasswordUnlock: hasMasterPassword
+        ? {
+            Kdf: {
+              KdfType: user.kdf,
+              Iterations: user.kdfIterations,
+              Memory: user.kdfMemory,
+              Parallelism: user.kdfParallelism,
+            },
+            MasterKeyEncryptedUserKey: user.key,
+            MasterKeyWrappedUserKey: user.key,
+            Salt: user.email,
+          }
+        : null,
       Object: "userDecryptionOptions",
     },
   }
@@ -671,6 +682,39 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(new Date().toISOString())
   if (path === "/api/version" && method === "GET") return json("2026.2.0")
 
+  if (path === "/api/organizations/domain/sso/verified" && method === "POST") {
+    const sso = env as CloudflareEnv & {
+      SSO_IDENTIFIER?: string
+      SSO_CALLBACK_URL?: string
+    }
+    const identifier = sso.SSO_IDENTIFIER
+    return json(
+      list(
+        identifier && sso.SSO_CALLBACK_URL
+          ? [
+              {
+                organizationIdentifier: identifier,
+                organizationName: identifier,
+                domainName: new URL(sso.SSO_CALLBACK_URL).hostname,
+              },
+            ]
+          : []
+      )
+    )
+  }
+
+  if (path === "/identity/sso/prevalidate" && method === "GET")
+    return prevalidateVaultSso(request, env)
+  if (path === "/identity/connect/authorize" && method === "GET") {
+    try {
+      return await startVaultSso(request, env)
+    } catch {
+      return failure("SSO provider is unavailable", 503)
+    }
+  }
+  if (path === "/identity/connect/oidc-signin" && method === "GET")
+    return finishVaultSsoCallback(request, env)
+
   if (
     (path === "/identity/accounts/prelogin" ||
       path === "/identity/accounts/prelogin/password" ||
@@ -837,6 +881,74 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
           })
         : json({ error: "invalid_grant" }, 400)
     }
+    if (grant === "authorization_code") {
+      const code = stringField(body, "code")
+      const verifier = stringField(body, "code_verifier")
+      const deviceId = stringField(body, "device_identifier")
+      const deviceType = stringField(body, "device_type") ?? "unknown"
+      const clientId = stringField(body, "client_id") ?? "web"
+      if (!code || !verifier || !deviceId || deviceId.length > 200)
+        return failure("Invalid SSO token request")
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
+        return failure("Too many login attempts", 429)
+      let sso: Awaited<ReturnType<typeof redeemVaultSso>>
+      try {
+        sso = await redeemVaultSso(env, code, verifier)
+      } catch {
+        return json({ error: "invalid_grant" }, 400)
+      }
+      const ssoUser = sso.user
+      const factor = await getTotp(env, ssoUser.id)
+      if (factor) {
+        const factorCode = stringField(body, "two_factor_token")
+        const provider = integerField(body, "two_factor_provider") ?? 0
+        if (!factorCode)
+          return json(
+            {
+              error: "invalid_grant",
+              error_description: "Two factor required.",
+              TwoFactorProviders: ["0"],
+              TwoFactorProviders2: { "0": null },
+              MasterPasswordPolicy: { Object: "masterPasswordPolicy" },
+            },
+            400
+          )
+        if (
+          !(
+            await limiter.consumeRateLimit(`totp:${ssoUser.id}`, 15, 5 * 60_000)
+          ).allowed
+        )
+          return failure("Too many two-factor attempts", 429)
+        const valid =
+          provider === 0
+            ? await verifyTotpLogin(env, factor, factorCode)
+            : provider === 8
+              ? await redeemTotpRecoveryCode(env, ssoUser.id, factorCode)
+              : false
+        if (!valid) return failure("Invalid two-factor code", 400)
+      }
+      if (!(await consumeVaultSso(env, code, ssoUser.id)))
+        return json({ error: "invalid_grant" }, 400)
+      return json(
+        tokenResponse(
+          ssoUser,
+          await issueVaultSession(
+            env,
+            ssoUser,
+            deviceId,
+            clientId,
+            deviceType,
+            {
+              issuer: (env as CloudflareEnv & { SSO_AUTHORITY: string })
+                .SSO_AUTHORITY,
+              refreshToken: sso.refreshToken,
+            }
+          )
+        )
+      )
+    }
     if (grant === "send_access") {
       const accessId = stringField(body, "send_id")
       if (!accessId) return failure("Send ID is required")
@@ -928,6 +1040,45 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+
+  if (path === "/api/accounts/set-password" && method === "POST") {
+    const body = await bodyOf(request)
+    const keys = body && (field(body, "keys") as Body | undefined)
+    const hash = body && stringField(body, "masterPasswordHash")
+    const key = body && stringField(body, "key")
+    const privateKey = keys && stringField(keys, "encryptedPrivateKey")
+    const publicKey = keys && stringField(keys, "publicKey")
+    const kdf =
+      body && (integerField(body, "kdf") ?? integerField(body, "kdfType"))
+    const iterations =
+      body &&
+      (integerField(body, "kdfIterations") ?? integerField(body, "iterations"))
+    if (
+      !hash ||
+      hash.length > 1024 ||
+      !key ||
+      key.length > 20_000 ||
+      !privateKey ||
+      privateKey.length > 20_000 ||
+      !publicKey ||
+      publicKey.length > 20_000 ||
+      kdf !== 0 ||
+      !iterations ||
+      iterations < 100_000 ||
+      iterations > 2_000_000
+    )
+      return failure("Invalid password setup")
+    const initialized = await initializeVaultPassword(env, user.id, {
+      masterPasswordHash: hash,
+      key,
+      privateKey,
+      publicKey,
+      kdfIterations: iterations,
+    })
+    return initialized
+      ? json({ object: "set-password", captchaBypassToken: "" })
+      : failure("Account is already initialized", 409)
+  }
 
   if (
     (path === "/api/accounts/delete" && method === "POST") ||

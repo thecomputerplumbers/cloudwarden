@@ -33,6 +33,31 @@ const config = await call("/api/config")
 assert.equal(config.status, 200)
 assert.equal(config.body.environment.identity, `${origin}/identity`)
 assert.equal(config.body.settings.disableUserRegistration, false)
+const ssoPrevalidate = await call(
+  "/identity/sso/prevalidate?domainHint=thecomputerplumbers"
+)
+assert.equal(ssoPrevalidate.status, 200)
+assert.equal(typeof ssoPrevalidate.body.token, "string")
+assert.equal(
+  (await call("/identity/sso/prevalidate?domainHint=unknown")).status,
+  404
+)
+assert.equal(
+  (
+    await fetch(
+      `${origin}/identity/connect/authorize?client_id=web&domain_hint=thecomputerplumbers`
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await post("/api/organizations/domain/sso/verified", {
+      email: "member@example.test",
+    })
+  ).body.data[0].organizationIdentifier,
+  "thecomputerplumbers"
+)
 
 const email = `vault-${crypto.randomUUID()}@example.test`
 const registration = await post("/identity/accounts/register", {

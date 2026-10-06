@@ -10,6 +10,7 @@ import { handleBitwarden, isBitwardenPath } from "./bitwarden"
 import { deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
+import { pruneVaultSsoFlows } from "./bitwarden-sso"
 import { cleanupOrgDeletion, deletingOrganizations } from "./bitwarden-org"
 
 export default {
@@ -36,6 +37,11 @@ export default {
     })
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv) {
+    try {
+      await pruneVaultSsoFlows(env)
+    } catch {
+      console.error("SSO flow cleanup will retry")
+    }
     try {
       await reconcileVaultDirectory(env)
     } catch {

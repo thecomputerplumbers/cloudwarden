@@ -34,6 +34,21 @@ against the current session on every request. Access tokens expire after one
 hour and refresh tokens after 30 days. Issuing tokens requires the
 `BETTER_AUTH_SECRET` signing secret.
 
+Optional OIDC sign-in for the bundled web vault uses the fork's confidential
+provider client. Configure `SSO_AUTHORITY` as the exact issuer,
+`SSO_CLIENT_ID`, `SSO_CLIENT_SECRET`, `SSO_IDENTIFIER`, and
+`SSO_CALLBACK_URL` as the exact registered HTTPS callback. The browser flow
+requires S256 PKCE, a signed prevalidation token, a short-lived browser binding
+cookie, and a verified provider ID token with a matching nonce. Only verified
+email identities may create or associate accounts. A new SSO account starts
+without encryption keys; `/api/accounts/set-password` lets the authenticated
+client supply its locally encrypted keys and client-derived password hash.
+Password registration remains separately controlled by `SIGNUPS_ALLOWED`.
+SSO refresh tokens are encrypted in D1 and redeemed with the provider when a
+Cloudwarden session refreshes. The current SSO flow is implemented for the web
+vault's `web` and `browser` client types; native mobile, desktop, and CLI SSO
+flows still need implementation and testing.
+
 Organization creation stores client-encrypted organization keys, an owner
 membership, and a default collection in D1. Profile and sync expose the current
 member's wrapped key and available collections. Collection reads and writes

@@ -2,6 +2,12 @@ import { drizzle } from "drizzle-orm/d1"
 import { and, eq, isNotNull, isNull, ne, sql } from "drizzle-orm"
 
 import { vaultMembership, vaultSession, vaultUser } from "../db/schema/vault"
+import {
+  discoverVaultOidc,
+  openVaultOidcRefresh,
+  refreshVaultOidc,
+  sealVaultOidcRefresh,
+} from "./bitwarden-oidc"
 
 export type VaultUser = typeof vaultUser.$inferSelect
 
@@ -50,7 +56,7 @@ async function accessToken(
         premium: true,
         name: user.name,
         email: user.email,
-        email_verified: false,
+        email_verified: user.emailVerified,
         sstamp: user.securityStamp,
         device: deviceId,
         devicetype: deviceType,
@@ -149,6 +155,42 @@ export async function createVaultUser(
   }
   await db.insert(vaultUser).values(user).run()
   return user
+}
+
+export async function initializeVaultPassword(
+  env: CloudflareEnv,
+  userId: string,
+  input: {
+    masterPasswordHash: string
+    key: string
+    privateKey: string
+    publicKey: string
+    kdfIterations: number
+  }
+) {
+  const salt = randomToken()
+  return drizzle(env.DB)
+    .update(vaultUser)
+    .set({
+      passwordHash: await hashClientPassword(input.masterPasswordHash, salt),
+      passwordSalt: salt,
+      key: input.key,
+      privateKey: input.privateKey,
+      publicKey: input.publicKey,
+      kdfIterations: input.kdfIterations,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(vaultUser.id, userId),
+        eq(vaultUser.passwordHash, ""),
+        eq(vaultUser.key, ""),
+        isNull(vaultUser.privateKey),
+        isNull(vaultUser.deletingAt)
+      )
+    )
+    .returning()
+    .get()
 }
 
 export async function findVaultUser(env: CloudflareEnv, email: string) {
@@ -312,7 +354,8 @@ export async function issueVaultSession(
   user: VaultUser,
   deviceId: string,
   clientId: string,
-  deviceType: string
+  deviceType: string,
+  sso?: { issuer: string; refreshToken: string }
 ) {
   const access = await accessToken(env, user, deviceId, clientId, deviceType)
   const refresh = randomToken()
@@ -327,6 +370,13 @@ export async function issueVaultSession(
       clientId,
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(refresh),
+      ssoIssuer: sso?.issuer ?? null,
+      ssoRefreshToken: sso
+        ? await sealVaultOidcRefresh(
+            env.BETTER_AUTH_SECRET ?? "",
+            sso.refreshToken
+          )
+        : null,
       accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
     })
@@ -334,7 +384,11 @@ export async function issueVaultSession(
   return { access, refresh, expiresIn: ACCESS_LIFETIME_MS / 1000 }
 }
 
-export async function refreshVaultSession(env: CloudflareEnv, refresh: string) {
+export async function refreshVaultSession(
+  env: CloudflareEnv,
+  refresh: string,
+  fetcher: typeof fetch = fetch
+) {
   const db = drizzle(env.DB)
   const oldHash = await tokenHash(refresh)
   const session = await db
@@ -349,6 +403,42 @@ export async function refreshVaultSession(env: CloudflareEnv, refresh: string) {
     .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
     .get()
   if (!user) return null
+  let nextSsoRefresh = session.ssoRefreshToken
+  if (session.ssoIssuer) {
+    const config = env as CloudflareEnv & {
+      SSO_AUTHORITY?: string
+      SSO_CLIENT_ID?: string
+      SSO_CLIENT_SECRET?: string
+    }
+    if (
+      !session.ssoRefreshToken ||
+      !config.SSO_CLIENT_ID ||
+      !config.SSO_CLIENT_SECRET ||
+      config.SSO_AUTHORITY !== session.ssoIssuer
+    )
+      return null
+    try {
+      const provider = await discoverVaultOidc(config.SSO_AUTHORITY, fetcher)
+      const refreshed = await refreshVaultOidc(
+        provider,
+        {
+          clientId: config.SSO_CLIENT_ID,
+          clientSecret: config.SSO_CLIENT_SECRET,
+          refreshToken: await openVaultOidcRefresh(
+            env.BETTER_AUTH_SECRET ?? "",
+            session.ssoRefreshToken
+          ),
+        },
+        fetcher
+      )
+      nextSsoRefresh = await sealVaultOidcRefresh(
+        env.BETTER_AUTH_SECRET ?? "",
+        refreshed
+      )
+    } catch {
+      return null
+    }
+  }
   const access = await accessToken(
     env,
     user,
@@ -363,6 +453,7 @@ export async function refreshVaultSession(env: CloudflareEnv, refresh: string) {
     .set({
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(nextRefresh),
+      ssoRefreshToken: nextSsoRefresh,
       accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
     })

@@ -13,6 +13,9 @@ export const vaultUser = sqliteTable(
   {
     id: text("id").primaryKey(),
     email: text("email").notNull(),
+    emailVerified: integer("email_verified", { mode: "boolean" })
+      .notNull()
+      .default(false),
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
     passwordSalt: text("password_salt").notNull(),
@@ -43,6 +46,8 @@ export const vaultSession = sqliteTable(
     clientId: text("client_id").notNull().default("unknown"),
     accessHash: text("access_hash").notNull(),
     refreshHash: text("refresh_hash").notNull(),
+    ssoIssuer: text("sso_issuer"),
+    ssoRefreshToken: text("sso_refresh_token"),
     accessExpiresAt: integer("access_expires_at", {
       mode: "timestamp_ms",
     }).notNull(),
@@ -53,6 +58,46 @@ export const vaultSession = sqliteTable(
   (table) => [
     uniqueIndex("vault_session_access_unique").on(table.accessHash),
     uniqueIndex("vault_session_refresh_unique").on(table.refreshHash),
+  ]
+)
+
+export const vaultSsoFlow = sqliteTable("vault_sso_flow", {
+  id: text("id").primaryKey(),
+  clientState: text("client_state").notNull(),
+  clientChallenge: text("client_challenge").notNull(),
+  clientRedirect: text("client_redirect").notNull(),
+  providerVerifier: text("provider_verifier").notNull(),
+  nonce: text("nonce").notNull(),
+  bindingHash: text("binding_hash").notNull(),
+  providerCode: text("provider_code"),
+  providerRefreshToken: text("provider_refresh_token"),
+  userId: text("user_id").references(() => vaultUser.id, {
+    onDelete: "set null",
+  }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  usedAt: integer("used_at", { mode: "timestamp_ms" }),
+})
+
+export const vaultSsoIdentity = sqliteTable(
+  "vault_sso_identity",
+  {
+    id: text("id").primaryKey(),
+    issuer: text("issuer").notNull(),
+    subject: text("subject").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => vaultUser.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("vault_sso_identity_subject_unique").on(
+      table.issuer,
+      table.subject
+    ),
+    uniqueIndex("vault_sso_identity_user_unique").on(
+      table.issuer,
+      table.userId
+    ),
   ]
 )
 

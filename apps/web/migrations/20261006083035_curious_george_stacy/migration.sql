@@ -1,0 +1,1 @@
+ALTER TABLE `vault_user` ADD `email_verified` integer DEFAULT false NOT NULL;
