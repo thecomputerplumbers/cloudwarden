@@ -179,6 +179,10 @@ deletion advance the cipher revision so clients see changes on their next sync.
 Generated download links use the canonical `APP_URL` origin. An earlier CLI run
 also covered item editing, folders, trash, and restore. These checks do not
 cover every client or API route.
+The same CLI version also accepted a newly issued personal API key over a
+disposable local HTTPS Worker and retained a locked account session. API-key
+login does not unlock a vault by itself; the test account used placeholder
+encrypted keys, so this check did not exercise client-side decryption.
 
 The account revision endpoint includes organization Durable Object revisions,
 so edits to shared ciphers trigger a client sync even when the personal vault
