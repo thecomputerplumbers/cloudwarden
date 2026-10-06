@@ -77,7 +77,7 @@
         {
           "binding": "DB",
           "database_name": "cloudwarden-staging",
-          "database_id": "REPLACE_WITH_YOUR_STAGING_D1_DATABASE_ID",
+          "database_id": "26b65cc7-3fc4-4987-8617-7ddc42442e2e",
           "migrations_dir": "migrations",
           "migrations_pattern": "migrations/*/migration.sql",
         },
