@@ -95,6 +95,38 @@ assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
+const attachmentInit = await authorized(
+  `/api/ciphers/${cipherId}/attachment/v2`,
+  "POST",
+  { fileName: "2.encrypted-file-name", fileSize: 4, key: "2.encrypted-key" }
+)
+assert.equal(attachmentInit.status, 200)
+const attachmentId = attachmentInit.body.attachmentId
+const upload = new FormData()
+upload.append("data", new File([new Uint8Array([1, 2, 3, 4])], "encrypted.bin"))
+const uploaded = await fetch(`${origin}/api${attachmentInit.body.url}`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${tokens.access_token}` },
+  body: upload,
+})
+assert.equal(uploaded.status, 204)
+const attachedCipher = await authorized(`/api/ciphers/${cipherId}`)
+assert.equal(attachedCipher.body.attachments[0].id, attachmentId)
+const download = await fetch(attachedCipher.body.attachments[0].url)
+assert.equal(download.status, 200)
+assert.deepEqual(
+  new Uint8Array(await download.arrayBuffer()),
+  new Uint8Array([1, 2, 3, 4])
+)
+assert.equal(
+  (
+    await fetch(
+      `${origin}/attachments/${cipherId}/${attachmentId}?token=invalid`
+    )
+  ).status,
+  404
+)
+
 const updatedCipher = await authorized(`/api/ciphers/${cipherId}`, "PUT", {
   type: 1,
   name: "2.updated-name",
@@ -130,6 +162,16 @@ assert.equal(
   (await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate,
   null
 )
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/${cipherId}/attachment/${attachmentId}`,
+      "DELETE"
+    )
+  ).status,
+  200
+)
+assert.equal((await fetch(attachedCipher.body.attachments[0].url)).status, 404)
 assert.match((await authorized("/api/accounts/revision-date")).body, /^20/)
 
 const refreshed = await fetch(`${origin}/identity/connect/token`, {

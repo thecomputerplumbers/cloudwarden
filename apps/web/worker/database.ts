@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers"
-import { and, eq } from "drizzle-orm"
+import { and, eq, lt } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/durable-sqlite"
 import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 
@@ -96,6 +96,11 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return {
       ciphers: this.db.select().from(schema.vaultCipher).all(),
       folders: this.db.select().from(schema.vaultFolder).all(),
+      attachments: this.db
+        .select()
+        .from(schema.vaultAttachment)
+        .where(eq(schema.vaultAttachment.uploaded, true))
+        .all(),
     }
   }
 
@@ -295,5 +300,146 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       }
     }
     return true
+  }
+
+  async createVaultAttachment(input: {
+    id: string
+    cipherId: string
+    fileName: string
+    key: string | null
+    size: number
+  }) {
+    if (
+      !input.fileName ||
+      input.fileName.length > 10_000 ||
+      !Number.isSafeInteger(input.size) ||
+      input.size < 0 ||
+      input.size > 20_000_000
+    )
+      throw new Error("Invalid attachment")
+    if (!(await this.getVaultCipher(input.cipherId)))
+      throw new Error("Cipher not found")
+    return this.db
+      .insert(schema.vaultAttachment)
+      .values({ ...input, uploaded: false, createdAt: new Date() })
+      .returning()
+      .get()
+  }
+
+  async getVaultAttachment(id: string, cipherId: string) {
+    return (
+      this.db
+        .select()
+        .from(schema.vaultAttachment)
+        .where(
+          and(
+            eq(schema.vaultAttachment.id, id),
+            eq(schema.vaultAttachment.cipherId, cipherId)
+          )
+        )
+        .get() ?? null
+    )
+  }
+
+  async listVaultAttachments(cipherId: string) {
+    return this.db
+      .select()
+      .from(schema.vaultAttachment)
+      .where(
+        and(
+          eq(schema.vaultAttachment.cipherId, cipherId),
+          eq(schema.vaultAttachment.uploaded, true)
+        )
+      )
+      .all()
+  }
+
+  async completeVaultAttachment(id: string, cipherId: string) {
+    return !!this.db
+      .update(schema.vaultAttachment)
+      .set({ uploaded: true })
+      .where(
+        and(
+          eq(schema.vaultAttachment.id, id),
+          eq(schema.vaultAttachment.cipherId, cipherId),
+          eq(schema.vaultAttachment.uploaded, false)
+        )
+      )
+      .returning({ id: schema.vaultAttachment.id })
+      .get()
+  }
+
+  async deleteVaultAttachment(id: string, cipherId: string) {
+    this.db
+      .delete(schema.vaultAttachmentToken)
+      .where(eq(schema.vaultAttachmentToken.attachmentId, id))
+      .run()
+    return !!this.db
+      .delete(schema.vaultAttachment)
+      .where(
+        and(
+          eq(schema.vaultAttachment.id, id),
+          eq(schema.vaultAttachment.cipherId, cipherId)
+        )
+      )
+      .returning({ id: schema.vaultAttachment.id })
+      .get()
+  }
+
+  async issueVaultAttachmentToken(id: string, cipherId: string) {
+    const attachment = await this.getVaultAttachment(id, cipherId)
+    if (!attachment?.uploaded) return null
+    const bytes = crypto.getRandomValues(new Uint8Array(32))
+    const token = btoa(String.fromCharCode(...bytes))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "")
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(token)
+    )
+    const hash = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("")
+    this.db
+      .delete(schema.vaultAttachmentToken)
+      .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
+      .run()
+    this.db
+      .insert(schema.vaultAttachmentToken)
+      .values({
+        hash,
+        attachmentId: id,
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+      })
+      .run()
+    return token
+  }
+
+  async validateVaultAttachmentToken(
+    id: string,
+    cipherId: string,
+    token: string
+  ) {
+    if (!/^[-_A-Za-z0-9]{43}$/.test(token)) return false
+    const attachment = await this.getVaultAttachment(id, cipherId)
+    if (!attachment?.uploaded) return false
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(token)
+    )
+    const hash = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("")
+    const grant = this.db
+      .select()
+      .from(schema.vaultAttachmentToken)
+      .where(eq(schema.vaultAttachmentToken.hash, hash))
+      .get()
+    return (
+      !!grant &&
+      grant.attachmentId === id &&
+      grant.expiresAt.getTime() > Date.now()
+    )
   }
 }

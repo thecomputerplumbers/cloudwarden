@@ -125,8 +125,41 @@ function tokenResponse(
   }
 }
 
-function cipherResponse(row: CipherRow) {
+async function attachmentResponse(
+  vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
+  attachment: {
+    id: string
+    cipherId: string
+    fileName: string
+    key: string | null
+    size: number
+  },
+  userId: string,
+  origin: string
+) {
+  const token = await vault.issueVaultAttachmentToken(
+    attachment.id,
+    attachment.cipherId
+  )
+  if (!token) throw new Error("Attachment became unavailable")
+  return {
+    id: attachment.id,
+    url: `${origin}/attachments/${attachment.cipherId}/${attachment.id}?token=${userId}.${token}`,
+    fileName: attachment.fileName,
+    size: String(attachment.size),
+    key: attachment.key,
+    object: "attachment",
+  }
+}
+
+async function cipherResponse(
+  row: CipherRow,
+  vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
+  userId: string,
+  origin: string
+) {
   const data = JSON.parse(row.payload) as Body
+  const attachments = await vault.listVaultAttachments(row.id)
   return {
     object: "cipherDetails",
     id: row.id,
@@ -137,7 +170,13 @@ function cipherResponse(row: CipherRow) {
     reprompt: numberField(data, "reprompt") ?? 0,
     organizationId: null,
     key: field(data, "key") ?? null,
-    attachments: null,
+    attachments: attachments.length
+      ? await Promise.all(
+          attachments.map((attachment) =>
+            attachmentResponse(vault, attachment, userId, origin)
+          )
+        )
+      : null,
     organizationUseTotp: true,
     collectionIds: [],
     name: stringField(data, "name"),
@@ -173,6 +212,7 @@ function list(data: unknown[]) {
 
 export function isBitwardenPath(path: string) {
   return (
+    path.startsWith("/attachments/") ||
     path.startsWith("/identity/") ||
     path === "/api/config" ||
     path === "/api/alive" ||
@@ -192,6 +232,33 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const url = new URL(request.url)
   const path = url.pathname.toLowerCase()
   const method = request.method.toUpperCase()
+
+  const downloadMatch =
+    /^\/attachments\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/.exec(path)
+  if (downloadMatch && method === "GET") {
+    const [userId, token] = (url.searchParams.get("token") ?? "").split(".")
+    if (!userId || !token || !/^[0-9a-f-]{36}$/.test(userId))
+      return failure("Attachment not found", 404)
+    const vault = await env.APP_DATABASE.getByName(`vault:${userId}`)
+    const authorized = await vault.validateVaultAttachmentToken(
+      downloadMatch[2]!,
+      downloadMatch[1]!,
+      token
+    )
+    if (!authorized) return failure("Attachment not found", 404)
+    const object = await env.VAULT_ATTACHMENTS.get(
+      `${userId}/${downloadMatch[1]}/${downloadMatch[2]}`
+    )
+    if (!object) return failure("Attachment not found", 404)
+    return new Response(object.body, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(object.size),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
+    })
+  }
 
   if (path === "/api/config" && method === "GET") {
     const origin = url.origin
@@ -366,7 +433,11 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       folders: data.folders.map(folderResponse),
       collections: [],
       policies: [],
-      ciphers: data.ciphers.map(cipherResponse),
+      ciphers: await Promise.all(
+        data.ciphers.map((cipher) =>
+          cipherResponse(cipher, vault, user.id, url.origin)
+        )
+      ),
       domains: {
         equivalentDomains: [],
         globalEquivalentDomains: [],
@@ -392,7 +463,15 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
 
   if (path === "/api/ciphers" && method === "GET") {
     const data = await vault.listVault()
-    return json(list(data.ciphers.map(cipherResponse)))
+    return json(
+      list(
+        await Promise.all(
+          data.ciphers.map((cipher) =>
+            cipherResponse(cipher, vault, user.id, url.origin)
+          )
+        )
+      )
+    )
   }
   if (
     (path === "/api/ciphers" || path === "/api/ciphers/create") &&
@@ -408,7 +487,107 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       return failure("Folder not found", 404)
     const id = crypto.randomUUID()
     const stored = await vault.putVaultCipher(id, JSON.stringify(body))
-    return json(cipherResponse(stored.cipher!), 201)
+    return json(
+      await cipherResponse(stored.cipher!, vault, user.id, url.origin),
+      201
+    )
+  }
+
+  const attachmentMatch =
+    /^\/api\/ciphers\/([0-9a-f-]{36})\/attachment(?:\/([0-9a-f-]{36}|v2))?(?:\/delete)?$/.exec(
+      path
+    )
+  if (attachmentMatch) {
+    const cipherId = attachmentMatch[1]!
+    const attachmentId = attachmentMatch[2]
+    const cipher = await vault.getVaultCipher(cipherId)
+    if (!cipher || cipher.deletedAt) return failure("Cipher not found", 404)
+    if (attachmentId === "v2" && method === "POST") {
+      const body = await bodyOf(request)
+      const fileName = body && stringField(body, "fileName")
+      const key = body && stringField(body, "key")
+      const rawSize = body && field(body, "fileSize")
+      const size = Number(rawSize)
+      if (
+        !fileName ||
+        !key ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > 20_000_000
+      )
+        return failure("Invalid attachment")
+      const id = crypto.randomUUID()
+      await vault.createVaultAttachment({ id, cipherId, fileName, key, size })
+      return json({
+        object: "attachment-fileUpload",
+        attachmentId: id,
+        url: `/ciphers/${cipherId}/attachment/${id}`,
+        fileUploadType: 0,
+        cipherResponse: await cipherResponse(
+          cipher,
+          vault,
+          user.id,
+          url.origin
+        ),
+      })
+    }
+    if (!attachmentId && method === "POST") {
+      const form = await request.formData()
+      const data = form.get("data")
+      if (!(data instanceof File) || data.size > 20_000_000)
+        return failure("Invalid attachment")
+      const key = form.get("key")
+      const id = crypto.randomUUID()
+      await vault.createVaultAttachment({
+        id,
+        cipherId,
+        fileName: data.name,
+        key: typeof key === "string" ? key : null,
+        size: data.size,
+      })
+      await env.VAULT_ATTACHMENTS.put(
+        `${user.id}/${cipherId}/${id}`,
+        data.stream()
+      )
+      if (!(await vault.completeVaultAttachment(id, cipherId)))
+        return failure("Attachment upload failed", 503)
+      return json(await cipherResponse(cipher, vault, user.id, url.origin))
+    }
+    if (attachmentId && attachmentId !== "v2") {
+      const attachment = await vault.getVaultAttachment(attachmentId, cipherId)
+      if (!attachment) return failure("Attachment not found", 404)
+      if (method === "POST" && !path.endsWith("/delete")) {
+        if (attachment.uploaded)
+          return failure("Attachment already uploaded", 409)
+        const form = await request.formData()
+        const data = form.get("data")
+        if (!(data instanceof File) || data.size !== attachment.size)
+          return failure("Attachment size mismatch")
+        await env.VAULT_ATTACHMENTS.put(
+          `${user.id}/${cipherId}/${attachmentId}`,
+          data.stream()
+        )
+        if (!(await vault.completeVaultAttachment(attachmentId, cipherId)))
+          return failure("Attachment upload failed", 503)
+        return new Response(null, { status: 204 })
+      }
+      if (method === "GET")
+        return attachment.uploaded
+          ? json(
+              await attachmentResponse(vault, attachment, user.id, url.origin)
+            )
+          : failure("Attachment not found", 404)
+      if (
+        method === "DELETE" ||
+        (method === "POST" && path.endsWith("/delete"))
+      ) {
+        await env.VAULT_ATTACHMENTS.delete(
+          `${user.id}/${cipherId}/${attachmentId}`
+        )
+        await vault.deleteVaultAttachment(attachmentId, cipherId)
+        return json(await cipherResponse(cipher, vault, user.id, url.origin))
+      }
+    }
   }
   const cipherMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore|\/partial)?$/.exec(
@@ -419,13 +598,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (method === "GET") {
       const cipher = await vault.getVaultCipher(id)
       return cipher
-        ? json(cipherResponse(cipher))
+        ? json(await cipherResponse(cipher, vault, user.id, url.origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/restore") && method === "PUT") {
       const restored = await vault.restoreVaultCipher(id)
       return restored
-        ? json(cipherResponse(restored))
+        ? json(await cipherResponse(restored, vault, user.id, url.origin))
         : failure("Cipher not found", 404)
     }
     if (path.endsWith("/partial") && (method === "PUT" || method === "POST")) {
@@ -446,7 +625,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(cipherResponse(stored.cipher!))
+        : json(await cipherResponse(stored.cipher!, vault, user.id, url.origin))
     }
     if ((method === "PUT" || method === "POST") && !path.endsWith("/delete")) {
       const body = await bodyOf(request)
@@ -465,7 +644,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
-        : json(cipherResponse(stored.cipher!))
+        : json(await cipherResponse(stored.cipher!, vault, user.id, url.origin))
     }
     if (method === "DELETE" || path.endsWith("/delete")) {
       const result = await vault.trashVaultCipher(id)

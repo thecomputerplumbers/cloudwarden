@@ -42,6 +42,13 @@ export function initialize(directory, options) {
       database_id: id,
     },
   ]
+  const attachments = (suffix) => [
+    {
+      ...config.r2_buckets[0],
+      bucket_name: `${slug}-attachments${suffix}`,
+      preview_bucket_name: `${slug}-attachments${suffix}-preview`,
+    },
+  ]
   editJson(resolve(directory, "package.json"), [[["name"], slug]])
   editJson(resolve(directory, "apps/web/config/product.json"), [
     [["name"], name],
@@ -53,12 +60,14 @@ export function initialize(directory, options) {
     [["account_id"], accountId],
     [["vars"], { APP_URL: origin, EMAIL_FROM: emailFrom }],
     [["d1_databases"], database("", productionDbId)],
+    [["r2_buckets"], attachments("")],
     [
       ["env", "staging"],
       {
         name: `${slug}-staging`,
         vars: { APP_URL: stagingOrigin, EMAIL_FROM: emailFrom },
         d1_databases: database("-staging", stagingDbId),
+        r2_buckets: attachments("-staging"),
         durable_objects: config.durable_objects,
         send_email: config.send_email,
       },
@@ -74,6 +83,8 @@ export function initialize(directory, options) {
   return [
     `pnpm --filter web exec wrangler d1 create ${slug}`,
     `pnpm --filter web exec wrangler d1 create ${slug}-staging`,
+    `pnpm --filter web exec wrangler r2 bucket create ${slug}-attachments`,
+    `pnpm --filter web exec wrangler r2 bucket create ${slug}-attachments-staging`,
     "Put each returned database_id in its matching wrangler.jsonc environment.",
     "Configure a verified Cloudflare Email Service sender for each environment.",
     "Set BETTER_AUTH_SECRET separately with wrangler secret put; add --env staging for staging.",

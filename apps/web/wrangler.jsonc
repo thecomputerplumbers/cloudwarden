@@ -25,6 +25,13 @@
       "migrations_pattern": "migrations/*/migration.sql",
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "VAULT_ATTACHMENTS",
+      "bucket_name": "cloudwarden-attachments",
+      "preview_bucket_name": "cloudwarden-attachments-preview",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {

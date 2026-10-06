@@ -18,3 +18,19 @@ export const vaultFolder = sqliteTable("vault_folder", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 })
+
+export const vaultAttachment = sqliteTable("vault_attachment", {
+  id: text("id").primaryKey(),
+  cipherId: text("cipher_id").notNull(),
+  fileName: text("file_name").notNull(),
+  key: text("key"),
+  size: integer("size").notNull(),
+  uploaded: integer("uploaded", { mode: "boolean" }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultAttachmentToken = sqliteTable("vault_attachment_token", {
+  hash: text("hash").primaryKey(),
+  attachmentId: text("attachment_id").notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+})

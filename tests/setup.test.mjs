@@ -47,6 +47,11 @@ test("new-project setup isolates environments and preserves existing local secre
     "APP_DATABASE"
   )
   assert.equal(config.env.staging.send_email[0].name, "EMAIL")
+  assert.equal(config.r2_buckets[0].bucket_name, "example-studio-attachments")
+  assert.equal(
+    config.env.staging.r2_buckets[0].bucket_name,
+    "example-studio-attachments-staging"
+  )
   assert.equal(
     readJson(join(root, "apps/web/config/product.json")).name,
     options.name
