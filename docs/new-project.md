@@ -10,7 +10,7 @@ pnpm project:init
 mise run format
 pnpm cf:typegen
 pnpm db:seed
-pnpm doctor
+pnpm run doctor
 mise run dev
 ```
 
@@ -42,8 +42,8 @@ Stop the dev server before `pnpm db:reset --yes`. This removes only
 migrations. It cannot target a remote database and rejects extra flags. Run the
 seed command again to restore fixtures. Isolated smoke-test state is separate.
 
-`pnpm doctor` checks local bindings, configuration and migrated tables.
-`pnpm doctor staging` or `pnpm doctor production` checks the target configuration
+`pnpm run doctor` checks local bindings, configuration and migrated tables.
+`pnpm run doctor staging` or `pnpm run doctor production` checks the target configuration
 and remote secret names, without printing values. Email-domain verification is
 still checked in the Cloudflare dashboard.
 

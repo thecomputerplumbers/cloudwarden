@@ -43,8 +43,8 @@ environment. It runs the isolated smoke tests first. You can run the same releas
 command locally from a clean, committed checkout:
 
 ```sh
-pnpm deploy staging
-pnpm deploy production
+pnpm run deploy staging
+pnpm run deploy production
 ```
 
 The command validates target configuration/secret inventory, code checks, and

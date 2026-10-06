@@ -50,8 +50,8 @@ returned D1 ID in `apps/web/wrangler.jsonc`, then set `BETTER_AUTH_SECRET` with
 `wrangler secret put BETTER_AUTH_SECRET --env staging`. [Wrangler creates the
 Worker](https://developers.cloudflare.com/workers/wrangler/commands/workers/#secret-put)
 when setting its first secret; that operation deploys a placeholder version.
-Then `pnpm doctor staging` can inspect the secret inventory and
-`pnpm deploy staging` can migrate and deploy the built application. A local
+Then `pnpm run doctor staging` can inspect the secret inventory and
+`pnpm run deploy staging` can migrate and deploy the built application. A local
 preflight on 2026-10-06 found the GitHub repository, D1 ID, staging Worker, and
 Worker secret absent; it did not mutate remote state.
 

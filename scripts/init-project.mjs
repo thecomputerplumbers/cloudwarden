@@ -105,7 +105,7 @@ export function initialize(directory, options) {
     "Put each returned database_id in its matching wrangler.jsonc environment.",
     "Configure a verified Cloudflare Email Service sender for each environment.",
     "Set BETTER_AUTH_SECRET separately with wrangler secret put; add --env staging for staging.",
-    "pnpm db:migrate:local && pnpm db:seed && pnpm doctor",
+    "pnpm db:migrate:local && pnpm db:seed && pnpm run doctor",
     "See docs/deployment.md for GitHub environments and deployment.",
   ]
 }

@@ -10,7 +10,7 @@ import {
 } from "./project-lib.mjs"
 const environment = process.argv[2]
 if (!["staging", "production"].includes(environment))
-  throw new Error("Usage: pnpm deploy staging|production")
+  throw new Error("Usage: pnpm run deploy staging|production")
 const config = targetConfig(environment)
 function run(command, args, env = { ...process.env, CLOUDFLARE_ENV: "" }) {
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env })

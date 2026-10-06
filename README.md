@@ -180,7 +180,7 @@ The project enables `workers.dev`, preview URLs, source maps, and Worker observa
 ```sh
 pnpm --filter web exec wrangler login
 pnpm --filter web db:migrate    # apply D1 migrations to the remote database
-pnpm deploy staging # or production, after configuring both environments
+pnpm run deploy staging # or production, after configuring both environments
 ```
 
 The first deployment creates the `AppDatabase` Durable Object class with SQLite storage through Wrangler's declarative `exports` configuration. D1 migrations are applied separately, with Wrangler, before the deploy — the Durable Object replays its own on construction.
