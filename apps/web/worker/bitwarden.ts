@@ -116,6 +116,7 @@ import {
   getAuthRequest,
   pendingAuthRequests,
 } from "./bitwarden-auth-request"
+import { publishVaultNotification } from "./bitwarden-notifications"
 import {
   consumeProtectedOtp,
   requestProtectedOtp,
@@ -887,6 +888,12 @@ export async function handleBitwarden(
       accessCode,
       publicKey,
     })
+    await publishVaultNotification(env, {
+      type: 15,
+      userId: owner.id,
+      id: row.id,
+      contextId: deviceId,
+    })
     return json({
       ...(await authRequestResponse(env, row)),
       requestApproved: false,
@@ -1494,6 +1501,20 @@ export async function handleBitwarden(
       encryptedKey: approved ? key! : "",
       masterPasswordHash: approved ? (passwordHash ?? null) : null,
     })
+    if (row && approved) {
+      await publishVaultNotification(env, {
+        type: 16,
+        userId: user.id,
+        id: row.id,
+        contextId: stringField(body, "deviceIdentifier"),
+      })
+      await publishVaultNotification(env, {
+        type: 16,
+        userId: user.id,
+        id: row.id,
+        anonymous: true,
+      })
+    }
     return row
       ? json({
           ...(await authRequestResponse(env, row)),
@@ -1572,6 +1593,7 @@ export async function handleBitwarden(
     if (!(await validateProtectedAction(env, user, body)))
       return failure("Invalid reauthentication", 403)
     await resetVaultSecurityStamp(env, user.id)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
     return new Response(null, { status: 200 })
   }
 
@@ -1588,6 +1610,8 @@ export async function handleBitwarden(
       user.id,
       path === "/api/accounts/rotate-api-key"
     )
+    if (path === "/api/accounts/rotate-api-key")
+      await publishVaultNotification(env, { type: 5, userId: user.id })
     return json({
       apiKey,
       revisionDate: user.updatedAt.toISOString(),
@@ -1645,6 +1669,7 @@ export async function handleBitwarden(
       return failure("Transfer or delete owned organizations first", 409)
     if (!(await beginVaultDeletion(env, user.id, user.passwordHash)))
       return failure("Account deletion already started", 409)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
     try {
       const complete = await cleanupVaultDeletion(env, user.id)
       return new Response(null, { status: complete ? 200 : 202 })
@@ -1725,6 +1750,8 @@ export async function handleBitwarden(
       nextKey,
       kdf
     )
+    if (updated)
+      await publishVaultNotification(env, { type: 5, userId: user.id })
     return updated
       ? new Response(null, { status: 200 })
       : failure("Account changed", 409)
@@ -1807,6 +1834,7 @@ export async function handleBitwarden(
       return failure("Too many email code attempts", 429)
     if (!(await confirmEmailEnrollment(env, user.id, email, code, request)))
       return failure("Invalid email code")
+    await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({ email, enabled: true, object: "twoFactorEmail" })
   }
   if (path === "/api/two-factor/get-authenticator" && method === "POST") {
@@ -1836,6 +1864,7 @@ export async function handleBitwarden(
     if (step === null) return failure("Invalid authenticator code")
     if (!(await enableTotp(env, user.id, key.toUpperCase(), step, request)))
       return failure("Invalid authenticator key")
+    await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({
       enabled: true,
       key: key.toUpperCase(),
@@ -1869,6 +1898,7 @@ export async function handleBitwarden(
       if (!(await getEmailTwoFactor(env, user.id))?.email)
         return failure("Two-factor authentication is disabled", 404)
       await disableEmailTwoFactor(env, user.id, request)
+      await publishVaultNotification(env, { type: 11, userId: user.id })
       return json({ enabled: false, type: 1, object: "twoFactorProvider" })
     }
     const factor = await getTotp(env, user.id)
@@ -1877,6 +1907,7 @@ export async function handleBitwarden(
     if (path === "/api/two-factor/authenticator" && key !== factor.secret)
       return failure("Invalid authenticator key", 403)
     await disableTotp(env, user.id, request)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
     return json({ enabled: false, type: 0, object: "twoFactorProvider" })
   }
 
@@ -1902,6 +1933,7 @@ export async function handleBitwarden(
     const name = body && stringField(body, "name")
     if (!name || name.length > 50) return failure("Invalid profile name")
     const updated = await updateVaultProfile(env, user.id, name)
+    await publishVaultNotification(env, { type: 5, userId: user.id })
     return json(
       profile(
         updated,
@@ -1923,6 +1955,7 @@ export async function handleBitwarden(
     )
       return failure("Invalid account keys")
     await updateVaultKeys(env, user.id, privateKey, publicKey)
+    await publishVaultNotification(env, { type: 5, userId: user.id })
     return json({ privateKey, publicKey, object: "keys" })
   }
   if (path === "/api/accounts/revision-date" && method === "GET") {

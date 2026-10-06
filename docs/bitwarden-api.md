@@ -67,6 +67,14 @@ identifier supplied in headers. Device records survive session expiry and
 security-stamp reset, while the reset revokes all existing sessions. Device
 approval requests require a previously registered device with a matching type.
 
+The notification hub accepts authenticated SignalR MessagePack WebSockets on
+`/notifications/hub` and an IP-bound pending device request on
+`/notifications/anonymous-hub`. A hibernating Durable Object keeps the sockets,
+limits their lifetime and count, and sends device approval, personal vault sync,
+and logout events. Before delivery, the Worker checks the account's current
+sessions so revoked sessions are closed. Organization changes are not yet
+broadcast to every member; clients can still discover them through sync.
+
 Personal vault import accepts the web client's encrypted folders, ciphers, and
 folder relationships in one Durable Object transaction; existing folder IDs
 are reused when they belong to the account. Browser CSV import and unencrypted
@@ -173,7 +181,7 @@ request cannot repopulate it after cleanup.
 This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
 two-factor providers and remembered
-devices, account recovery, and notifications still need
+devices, account recovery, and complete notification coverage still need
 implementation. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 

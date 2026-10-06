@@ -8,6 +8,107 @@ const storage = process.argv[3]
 assert.ok(origin?.startsWith("http://localhost:"))
 assert.ok(storage?.startsWith("/tmp/starter-review."))
 
+async function nextSocketMessage(socket) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Notification socket timed out")),
+      5_000
+    )
+    socket.addEventListener(
+      "message",
+      (event) => {
+        clearTimeout(timeout)
+        resolve(new Uint8Array(event.data))
+      },
+      { once: true }
+    )
+  })
+}
+
+async function notificationSocket(path) {
+  const socket = new WebSocket(origin.replace(/^http/, "ws") + path)
+  socket.binaryType = "arraybuffer"
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Notification connection timed out")),
+      5_000
+    )
+    socket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timeout)
+        resolve()
+      },
+      { once: true }
+    )
+    socket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timeout)
+        reject(new Error("Notification connection failed"))
+      },
+      { once: true }
+    )
+  })
+  const handshake = nextSocketMessage(socket)
+  socket.send('{"protocol":"messagepack","version":1}\x1e')
+  assert.deepEqual([...(await handshake)], [0x7b, 0x7d, 0x1e])
+  return socket
+}
+
+function decodeNotificationFrame(bytes) {
+  let cursor = 0
+  let length = 0
+  let shift = 0
+  while (true) {
+    const part = bytes[cursor++]
+    assert.notEqual(part, undefined)
+    length |= (part & 0x7f) << shift
+    if (!(part & 0x80)) break
+    shift += 7
+  }
+  const end = cursor + length
+  const decoder = new TextDecoder()
+  const read = () => {
+    const marker = bytes[cursor++]
+    if (marker === 0xc0) return null
+    if (marker === 0xcc) return bytes[cursor++]
+    if (marker === 0xd7) {
+      assert.equal(bytes[cursor++], 0xff)
+      const timestamp = new DataView(
+        bytes.buffer,
+        bytes.byteOffset + cursor,
+        8
+      ).getBigUint64(0)
+      cursor += 8
+      return new Date(
+        Number(timestamp & ((1n << 34n) - 1n)) * 1000 +
+          Number(timestamp >> 34n) / 1_000_000
+      )
+    }
+    if (marker <= 0x7f) return marker
+    if ((marker & 0xf0) === 0x90)
+      return Array.from({ length: marker & 0x0f }, read)
+    if ((marker & 0xf0) === 0x80) {
+      const result = {}
+      for (let index = 0; index < (marker & 0x0f); index++)
+        result[read()] = read()
+      return result
+    }
+    let size
+    if ((marker & 0xe0) === 0xa0) size = marker & 0x1f
+    else if (marker === 0xd9) size = bytes[cursor++]
+    else if (marker === 0xda) size = (bytes[cursor++] << 8) | bytes[cursor++]
+    else throw new Error(`Unsupported MessagePack marker: ${marker}`)
+    const value = decoder.decode(bytes.subarray(cursor, cursor + size))
+    cursor += size
+    return value
+  }
+  const value = read()
+  assert.equal(cursor, end)
+  return value
+}
+
 async function invitationMail(email, subject) {
   for (let attempt = 0; attempt < 30; attempt++) {
     const messages = readFileSync(`${storage}/worker.log`, "utf8")
@@ -281,6 +382,20 @@ assert.equal(
 
 const requestingDeviceId = loginDeviceId
 const authAccessCode = "123456789012"
+await assert.rejects(
+  notificationSocket("/notifications/hub?access_token=invalid"),
+  /Notification connection failed/
+)
+await assert.rejects(
+  notificationSocket(
+    `/notifications/anonymous-hub?token=${crypto.randomUUID()}`
+  ),
+  /Notification connection failed/
+)
+const userNotification = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(currentAccessToken)}`
+)
+const requestedNotification = nextSocketMessage(userNotification)
 assert.equal(
   (
     await call("/api/auth-requests", {
@@ -309,6 +424,24 @@ const authRequest = await call("/api/auth-requests", {
 assert.equal(authRequest.status, 200)
 assert.equal(authRequest.body.requestApproved, false)
 const authRequestId = authRequest.body.id
+const requestedFrame = await requestedNotification
+assert.deepEqual(decodeNotificationFrame(requestedFrame), [
+  1,
+  {},
+  null,
+  "ReceiveMessage",
+  [
+    {
+      ContextId: requestingDeviceId,
+      Type: 15,
+      Payload: { Id: authRequestId, UserId: sync.body.profile.id },
+    },
+  ],
+])
+const anonymousNotification = await notificationSocket(
+  `/notifications/anonymous-hub?token=${authRequestId}`
+)
+const approvedNotification = nextSocketMessage(anonymousNotification)
 assert.equal(
   (await authorized("/api/auth-requests/pending")).body.data[0].id,
   authRequestId
@@ -343,6 +476,41 @@ const approval = await authorized(
 )
 assert.equal(approval.status, 200)
 assert.equal(approval.body.requestApproved, true)
+const approvedFrame = await approvedNotification
+assert.deepEqual(decodeNotificationFrame(approvedFrame), [
+  1,
+  {},
+  null,
+  "AuthRequestResponseRecieved",
+  [
+    {
+      Type: 16,
+      Payload: { Id: authRequestId, UserId: sync.body.profile.id },
+      UserId: sync.body.profile.id,
+    },
+  ],
+])
+anonymousNotification.close()
+userNotification.close()
+const syncNotificationSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(currentAccessToken)}`
+)
+const syncNotification = nextSocketMessage(syncNotificationSocket)
+assert.equal(
+  (
+    await authorized(`/api/folders/${createdFolder.body.id}`, "PUT", {
+      name: "2.updated-folder-name",
+    })
+  ).status,
+  200
+)
+const syncFrame = await syncNotification
+const syncEvent = decodeNotificationFrame(syncFrame)
+assert.equal(syncEvent[3], "ReceiveMessage")
+assert.equal(syncEvent[4][0].Type, 5)
+assert.equal(syncEvent[4][0].Payload.UserId, sync.body.profile.id)
+assert.ok(syncEvent[4][0].Payload.Date instanceof Date)
+syncNotificationSocket.close()
 const authResponse = await call(
   `/api/auth-requests/${authRequestId}/response?code=${authAccessCode}`,
   { headers: { "Device-Type": "14" } }
@@ -2188,6 +2356,10 @@ assert.equal(
   403
 )
 const revokedAccessToken = currentAccessToken
+const revokedNotificationSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(revokedAccessToken)}`
+)
+const logoutNotification = nextSocketMessage(revokedNotificationSocket)
 assert.equal(
   (
     await authorized("/api/accounts/security-stamp", "POST", {
@@ -2196,6 +2368,8 @@ assert.equal(
   ).status,
   200
 )
+assert.equal(decodeNotificationFrame(await logoutNotification)[4][0].Type, 11)
+revokedNotificationSocket.close()
 assert.equal(
   (
     await call("/api/sync", {

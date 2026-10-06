@@ -7,7 +7,7 @@ export { AppDatabase } from "./database"
 import { auth } from "../lib/auth"
 import { handleMcp } from "../mcp/handler"
 import { handleBitwarden, isBitwardenPath } from "./bitwarden"
-import { deletingVaultUsers } from "./bitwarden-auth"
+import { authenticatedVaultUser, deletingVaultUsers } from "./bitwarden-auth"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import { reconcileVaultDirectory } from "./bitwarden-directory-sync"
 import { pruneVaultSsoFlows } from "./bitwarden-sso"
@@ -20,12 +20,37 @@ import {
 } from "./bitwarden-org-import"
 import { pruneProtectedOtps } from "./bitwarden-protected-otp"
 import { pruneAuthRequests } from "./bitwarden-auth-request"
+import {
+  handleVaultNotification,
+  publishVaultNotification,
+} from "./bitwarden-notifications"
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     return observeRequest(request, async () => {
       const path = new URL(request.url).pathname
-      if (isBitwardenPath(path)) return handleBitwarden(request, env)
+      if (
+        path === "/notifications/hub" ||
+        path === "/notifications/anonymous-hub"
+      )
+        return handleVaultNotification(request, env)
+      if (isBitwardenPath(path)) {
+        const vaultMutation =
+          !["GET", "HEAD"].includes(request.method) &&
+          (path.startsWith("/api/ciphers") ||
+            path.startsWith("/api/folders") ||
+            path.startsWith("/api/sends"))
+        const user = vaultMutation
+          ? await authenticatedVaultUser(env, request)
+          : null
+        const response = await handleBitwarden(request, env)
+        if (user && response.ok)
+          await publishVaultNotification(env, {
+            type: 5,
+            userId: user.id,
+          })
+        return response
+      }
       if (
         (!product.features.mcp &&
           (path === "/mcp" ||

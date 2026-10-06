@@ -5,6 +5,11 @@ import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 
 import migrations from "../drizzle/migrations.js"
 import * as schema from "./schema"
+import {
+  notificationFrame,
+  notificationPing,
+  type VaultNotification,
+} from "./bitwarden-notifications"
 
 type VaultShare = {
   orgId: string
@@ -45,6 +50,116 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     ctx.blockConcurrencyWhile(async () => {
       await migrate(this.db, migrations)
     })
+  }
+
+  async fetch(request: Request) {
+    const url = new URL(request.url)
+    const path = url.pathname
+    if (
+      (path !== "/notifications/hub" &&
+        path !== "/notifications/anonymous-hub") ||
+      request.headers.get("Upgrade")?.toLowerCase() !== "websocket"
+    )
+      return new Response("Not found", { status: 404 })
+    const maximum = path === "/notifications/anonymous-hub" ? 25 : 100
+    if (this.ctx.getWebSockets().length >= maximum)
+      return new Response("Too many connections", { status: 429 })
+    const expiresAt = Number(url.searchParams.get("expiresAt"))
+    if (
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt <= Date.now() ||
+      expiresAt > Date.now() + 60 * 60_000
+    )
+      return new Response("Invalid connection lifetime", { status: 400 })
+    const pair = new WebSocketPair()
+    const client = pair[0]
+    const server = pair[1]
+    this.ctx.acceptWebSocket(server)
+    server.serializeAttachment({
+      kind: path === "/notifications/hub" ? "user" : "anonymous",
+      expiresAt,
+      sessionId: request.headers.get("X-Cloudwarden-Session-Id"),
+    })
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(Date.now() + 15_000)
+    return new Response(null, { status: 101, webSocket: client })
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+    if (typeof message === "string") {
+      try {
+        const initial = JSON.parse(
+          message.endsWith(String.fromCharCode(30))
+            ? message.slice(0, -1)
+            : message
+        ) as {
+          protocol?: string
+          version?: number
+        }
+        if (initial.protocol === "messagepack" && initial.version === 1) {
+          socket.send(new Uint8Array([0x7b, 0x7d, 0x1e]))
+          return
+        }
+      } catch {
+        // Ignore unsupported SignalR messages.
+      }
+    }
+  }
+
+  async webSocketClose(socket: WebSocket, code: number, reason: string) {
+    socket.close(code, reason)
+  }
+
+  async alarm() {
+    const sockets = this.ctx.getWebSockets()
+    for (const socket of sockets) {
+      const attachment = socket.deserializeAttachment() as {
+        expiresAt?: number
+      } | null
+      if (!attachment?.expiresAt || attachment.expiresAt <= Date.now()) {
+        socket.close(1000, "Session expired")
+        continue
+      }
+      try {
+        socket.send(notificationPing)
+      } catch {
+        socket.close(1011, "Send failed")
+      }
+    }
+    if (this.ctx.getWebSockets().length)
+      await this.ctx.storage.setAlarm(Date.now() + 15_000)
+  }
+
+  async publishVaultNotification(event: VaultNotification) {
+    const frame = notificationFrame(event)
+    const kind = event.anonymous ? "anonymous" : "user"
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as {
+        kind?: string
+        expiresAt?: number
+        sessionId?: string | null
+      } | null
+      if (attachment?.kind !== kind) continue
+      if (!attachment.expiresAt || attachment.expiresAt <= Date.now()) {
+        socket.close(1000, "Session expired")
+        continue
+      }
+      if (
+        kind === "user" &&
+        event.type !== 11 &&
+        (!attachment.sessionId ||
+          !event.activeSessionIds?.includes(attachment.sessionId))
+      ) {
+        socket.close(1000, "Session revoked")
+        continue
+      }
+      try {
+        socket.send(frame)
+      } catch {
+        socket.close(1011, "Send failed")
+      }
+      if (event.type === 11) socket.close(1000, "Signed out")
+    }
   }
 
   async consumeRateLimit(key: string, limit: number, windowMs: number) {
