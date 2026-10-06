@@ -45,7 +45,9 @@ and edit shared ciphers. Shared attachments use private R2 objects under an
 organization prefix; download links recheck the requester's current collection
 access, and organization deletion removes those objects. Owners and admins can
 change a shared cipher's collection assignments; the new mapping takes effect
-for reads and attachment links immediately. Moving personal ciphers into an
+for reads and attachment links immediately. Attachment tokens are bound to the
+requesting user in the Durable Object; changing the user ID in a download URL
+cannot transfer access. Moving personal ciphers into an
 organization is not yet supported.
 Organization metadata and public-key reads, owner edits, and global collection
 listing are available for client administration screens.

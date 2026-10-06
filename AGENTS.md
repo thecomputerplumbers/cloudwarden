@@ -31,6 +31,9 @@ Shared encrypted ciphers live in an organization Durable Object selected from
 a D1 locator. Check confirmed organization membership and collection access
 from D1 before reading or mutating that object. Clients cannot select an
 arbitrary organization's object. Keep collection assignments in D1.
+Shared attachment download tokens must be bound to the member they were issued
+for and recheck live collection access. A user ID embedded in a URL is not an
+authorization proof.
 
 Drizzle 1.x RC drives both, with one config each:
 

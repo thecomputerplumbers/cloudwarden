@@ -691,7 +691,11 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .get()
   }
 
-  async issueVaultAttachmentToken(id: string, cipherId: string) {
+  async issueVaultAttachmentToken(
+    id: string,
+    cipherId: string,
+    userId: string
+  ) {
     this.assertVaultActive()
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return null
@@ -716,6 +720,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .values({
         hash,
         attachmentId: id,
+        userId,
         expiresAt: new Date(Date.now() + 5 * 60_000),
       })
       .run()
@@ -725,7 +730,8 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   async validateVaultAttachmentToken(
     id: string,
     cipherId: string,
-    token: string
+    token: string,
+    userId: string
   ) {
     this.assertVaultActive()
     if (!/^[-_A-Za-z0-9]{43}$/.test(token)) return false
@@ -746,6 +752,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return (
       !!grant &&
       grant.attachmentId === id &&
+      grant.userId === userId &&
       grant.expiresAt.getTime() > Date.now()
     )
   }

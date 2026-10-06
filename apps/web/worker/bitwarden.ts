@@ -266,7 +266,8 @@ async function attachmentResponse(
 ) {
   const token = await vault.issueVaultAttachmentToken(
     attachment.id,
-    attachment.cipherId
+    attachment.cipherId,
+    userId
   )
   if (!token) throw new Error("Attachment became unavailable")
   return {
@@ -625,7 +626,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const authorized = await vault.validateVaultAttachmentToken(
       downloadMatch[2]!,
       downloadMatch[1]!,
-      token
+      token,
+      userId
     )
     if (!authorized) return failure("Attachment not found", 404)
     const object = await env.VAULT_ATTACHMENTS.get(

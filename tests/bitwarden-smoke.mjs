@@ -519,6 +519,12 @@ const memberSharedLink = (
   await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
 ).body.attachments[0].url
 assert.equal((await fetch(memberSharedLink)).status, 200)
+const spoofedSharedLink = memberSharedLink.replace(
+  `${orgId}:${otherUserId}.`,
+  `${orgId}:${orgSync.body.profile.id}.`
+)
+assert.notEqual(spoofedSharedLink, memberSharedLink)
+assert.equal((await fetch(spoofedSharedLink)).status, 404)
 const movedShared = await authorized(
   `/api/ciphers/${sharedId}/collections_v2`,
   "PUT",

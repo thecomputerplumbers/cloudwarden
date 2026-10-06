@@ -1,0 +1,1 @@
+ALTER TABLE `vault_attachment_token` ADD `user_id` text;

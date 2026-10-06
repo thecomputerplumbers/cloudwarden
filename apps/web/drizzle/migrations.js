@@ -3,6 +3,7 @@ import m0001 from './20261006062817_striped_spencer_smythe/migration.sql';
 import m0002 from './20261006063712_adorable_dazzler/migration.sql';
 import m0003 from './20261006071208_loving_johnny_storm/migration.sql';
 import m0004 from './20261006071729_daffy_phil_sheldon/migration.sql';
+import m0005 from './20261006080047_fast_lucky_pierre/migration.sql';
 
   export default {
     migrations: {
@@ -10,7 +11,8 @@ import m0004 from './20261006071729_daffy_phil_sheldon/migration.sql';
 "20261006062817_striped_spencer_smythe": m0001,
 "20261006063712_adorable_dazzler": m0002,
 "20261006071208_loving_johnny_storm": m0003,
-"20261006071729_daffy_phil_sheldon": m0004
+"20261006071729_daffy_phil_sheldon": m0004,
+"20261006080047_fast_lucky_pierre": m0005
 }
   }
   

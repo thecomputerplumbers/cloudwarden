@@ -32,6 +32,7 @@ export const vaultAttachment = sqliteTable("vault_attachment", {
 export const vaultAttachmentToken = sqliteTable("vault_attachment_token", {
   hash: text("hash").primaryKey(),
   attachmentId: text("attachment_id").notNull(),
+  userId: text("user_id"),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
 })
 
