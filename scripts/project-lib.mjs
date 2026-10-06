@@ -33,7 +33,10 @@ export function targetConfig(
     ? { ...config, ...config.env?.staging }
     : config
 }
-export function wranglerArgs(environment) {
+export function wranglerArgs(
+  environment,
+  config = readJson(resolve(root, "apps/web/wrangler.jsonc"))
+) {
   if (environment === "staging" && !config.env?.staging)
     throw new Error("Configure the staging environment with pnpm project:init")
   return environment === "staging" ? ["--env", "staging"] : []

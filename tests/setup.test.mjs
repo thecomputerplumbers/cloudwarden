@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { initialize } from "../scripts/init-project.mjs"
-import { readJson, targetConfig } from "../scripts/project-lib.mjs"
+import {
+  readJson,
+  targetConfig,
+  wranglerArgs,
+} from "../scripts/project-lib.mjs"
 const options = {
   name: "Example Studio",
   slug: "example-studio",
@@ -38,6 +42,8 @@ test("new-project setup isolates environments and preserves existing local secre
     secret = readFileSync(join(root, "apps/web/.dev.vars"), "utf8")
   assert.equal(config.name, options.slug)
   assert.equal(config.env.staging.name, `${options.slug}-staging`)
+  assert.deepEqual(wranglerArgs("staging", config), ["--env", "staging"])
+  assert.deepEqual(wranglerArgs("production", config), [])
   assert.notEqual(
     config.d1_databases[0].database_id,
     config.env.staging.d1_databases[0].database_id
@@ -74,4 +80,5 @@ test("setup rejects unsafe targets before changing files", (t) => {
     assert.throws(() => initialize(root, { ...options, ...changes }))
   assert.equal(readFileSync(join(root, "package.json"), "utf8"), before)
   assert.throws(() => targetConfig("staging", {}), /staging/i)
+  assert.throws(() => wranglerArgs("staging", {}), /staging/i)
 })
