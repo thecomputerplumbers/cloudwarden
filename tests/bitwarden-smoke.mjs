@@ -1452,6 +1452,17 @@ assert.equal(
   (await authorized(`/api/organizations/${orgId}/public-key`)).body.publicKey,
   "organization-public-key"
 )
+assert.equal((await authorized("/api/plans")).body.data.length, 2)
+for (const billingPath of [
+  "metadata",
+  "vnext/warnings",
+  "vnext/self-host/metadata",
+])
+  assert.equal(
+    (await authorized(`/api/organizations/${orgId}/billing/${billingPath}`))
+      .status,
+    200
+  )
 const renamedOrganization = await authorized(
   `/api/organizations/${orgId}`,
   "PUT",

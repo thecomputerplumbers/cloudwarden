@@ -706,6 +706,7 @@ export function isBitwardenPath(path: string) {
     path === "/api/alive" ||
     path === "/api/now" ||
     path === "/api/version" ||
+    path === "/api/plans" ||
     path === "/api/sync" ||
     path === "/api/collections" ||
     path === "/api/organizations" ||
@@ -1133,6 +1134,22 @@ export async function handleBitwarden(
   if (path === "/api/now" && method === "GET")
     return json(new Date().toISOString())
   if (path === "/api/version" && method === "GET") return json("2026.2.0")
+  // The web vault loads plans before it will show the organization form.
+  if (path === "/api/plans" && method === "GET")
+    return json(
+      list(
+        [0, 1].map((product) => ({
+          object: "plan",
+          type: 0,
+          product,
+          name: "Free",
+          nameLocalizationKey: "planNameFree",
+          bitwardenProduct: product,
+          maxUsers: 0,
+          descriptionLocalizationKey: "planDescFree",
+        }))
+      )
+    )
 
   if (path === "/api/organizations/domain/sso/verified" && method === "POST") {
     const sso = env as CloudflareEnv & {
@@ -2618,6 +2635,28 @@ export async function handleBitwarden(
       publicKey: publicKey ?? null,
     })
     return json(organizationResponse(created.org))
+  }
+  // Billing is not part of the vault; these keep the web vault's organization
+  // pages from failing on a 404.
+  const orgBillingMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/billing\/(metadata|vnext\/warnings|vnext\/self-host\/metadata)$/.exec(
+      path
+    )
+  if (orgBillingMatch && method === "GET") {
+    if (!(await getVaultMembership(env, orgBillingMatch[1]!, user.id)))
+      return failure("Organization not found", 404)
+    if (orgBillingMatch[2] === "metadata") return json(list([]))
+    if (orgBillingMatch[2] === "vnext/warnings")
+      return json({
+        freeTrial: null,
+        inactiveSubscription: null,
+        resellerRenewal: null,
+        taxId: null,
+      })
+    return json({
+      isOnSecretsManagerStandalone: false,
+      organizationOccupiedSeats: 0,
+    })
   }
   const orgExportMatch = /^\/api\/organizations\/([0-9a-f-]{36})\/export$/.exec(
     path
