@@ -1,0 +1,1 @@
+ALTER TABLE `vault_sso_flow` ADD `client_id` text;

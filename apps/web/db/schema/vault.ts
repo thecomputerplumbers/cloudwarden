@@ -186,6 +186,7 @@ export const vaultAuthRequest = sqliteTable(
 
 export const vaultSsoFlow = sqliteTable("vault_sso_flow", {
   id: text("id").primaryKey(),
+  clientId: text("client_id"),
   clientState: text("client_state").notNull(),
   clientChallenge: text("client_challenge").notNull(),
   clientRedirect: text("client_redirect").notNull(),

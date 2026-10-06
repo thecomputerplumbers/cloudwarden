@@ -31,6 +31,7 @@ export async function GET() {
     await getDb().run(
       sql`select user_id, access_code_hash, expires_at from vault_auth_request limit 0`
     )
+    await getDb().run(sql`select client_id from vault_sso_flow limit 0`)
     await getDb().run(
       sql`select user_id, recovery_code from vault_webauthn_factor limit 0`
     )

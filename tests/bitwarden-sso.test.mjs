@@ -172,13 +172,22 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
       "client-state"
     )
     await assert.rejects(
-      sso.redeemVaultSso(env, flowId, "wrong-verifier", fetcher),
+      sso.redeemVaultSso(
+        env,
+        flowId,
+        "wrong-verifier",
+        "web",
+        connector,
+        fetcher
+      ),
       /Invalid SSO exchange/
     )
     const exchange = await sso.redeemVaultSso(
       env,
       flowId,
       clientVerifier,
+      "web",
+      connector,
       fetcher
     )
     const user = exchange.user
@@ -187,7 +196,16 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
     assert.equal(user.emailVerified, true)
     assert.equal(user.passwordHash, "")
     assert.equal(
-      (await sso.redeemVaultSso(env, flowId, clientVerifier, fetcher)).user.id,
+      (
+        await sso.redeemVaultSso(
+          env,
+          flowId,
+          clientVerifier,
+          "web",
+          connector,
+          fetcher
+        )
+      ).user.id,
       user.id
     )
     const setup = await auth.initializeVaultPassword(env, user.id, {
@@ -251,9 +269,98 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
       null
     )
     await assert.rejects(
-      sso.redeemVaultSso(env, flowId, clientVerifier, fetcher),
+      sso.redeemVaultSso(
+        env,
+        flowId,
+        clientVerifier,
+        "web",
+        connector,
+        fetcher
+      ),
       /Invalid SSO exchange/
     )
+    for (const [clientId, redirect] of [
+      ["desktop", "bitwarden://sso-callback"],
+      ["mobile", "bitwarden://sso-callback"],
+      ["cli", "http://localhost:4321"],
+    ]) {
+      const nativeUrl = new URL(startUrl)
+      nativeUrl.searchParams.set("client_id", clientId)
+      nativeUrl.searchParams.set("redirect_uri", redirect)
+      const started = await sso.startVaultSso(
+        new Request(nativeUrl),
+        env,
+        fetcher
+      )
+      assert.equal(started.status, 302)
+      const nativeAuthorization = new URL(started.headers.get("Location"))
+      providerNonce = nativeAuthorization.searchParams.get("nonce")
+      const nativeFlowId = nativeAuthorization.searchParams.get("state")
+      const nativeCallback = new URL(callback)
+      nativeCallback.searchParams.set("state", nativeFlowId)
+      nativeCallback.searchParams.set("code", "provider-code")
+      const nativeFinished = await sso.finishVaultSsoCallback(
+        new Request(nativeCallback, {
+          headers: { Cookie: started.headers.get("Set-Cookie").split(";")[0] },
+        }),
+        env
+      )
+      assert.equal(nativeFinished.status, 302)
+      const nativeDestination = new URL(nativeFinished.headers.get("Location"))
+      assert.equal(nativeDestination.protocol, new URL(redirect).protocol)
+      assert.equal(nativeDestination.searchParams.get("code"), nativeFlowId)
+      await assert.rejects(
+        sso.redeemVaultSso(
+          env,
+          nativeFlowId,
+          clientVerifier,
+          "web",
+          redirect,
+          fetcher
+        ),
+        /Invalid SSO exchange/
+      )
+      await assert.rejects(
+        sso.redeemVaultSso(
+          env,
+          nativeFlowId,
+          clientVerifier,
+          clientId,
+          connector,
+          fetcher
+        ),
+        /Invalid SSO exchange/
+      )
+      assert.equal(
+        (
+          await sso.redeemVaultSso(
+            env,
+            nativeFlowId,
+            clientVerifier,
+            clientId,
+            redirect,
+            fetcher
+          )
+        ).user.id,
+        user.id
+      )
+      assert.equal(await sso.consumeVaultSso(env, nativeFlowId, user.id), true)
+    }
+    for (const [clientId, redirect] of [
+      ["web", "https://evil.example.test/sso-connector.html"],
+      ["desktop", "bitwarden://evil-callback"],
+      ["cli", "http://127.0.0.1:4321"],
+      ["cli", "http://localhost:12345"],
+      ["unknown", connector],
+    ]) {
+      const unsafeUrl = new URL(startUrl)
+      unsafeUrl.searchParams.set("client_id", clientId)
+      unsafeUrl.searchParams.set("redirect_uri", redirect)
+      assert.equal(
+        (await sso.startVaultSso(new Request(unsafeUrl), env, fetcher)).status,
+        400
+      )
+    }
   } finally {
     await vite?.close()
     await proxy?.dispose()

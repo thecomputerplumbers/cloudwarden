@@ -37,6 +37,25 @@ type SsoConfig = {
 const encoder = new TextEncoder()
 const lifetimeMs = 10 * 60_000
 
+function clientRedirect(
+  clientId: string | null,
+  requested: string | null,
+  vaultOrigin: string
+) {
+  if (clientId === "web" || clientId === "browser") {
+    const expected = `${vaultOrigin}/sso-connector.html`
+    return requested === expected ? expected : null
+  }
+  if (clientId === "desktop" || clientId === "mobile")
+    return requested === "bitwarden://sso-callback" ? requested : null
+  if (
+    clientId === "cli" &&
+    /^http:\/\/localhost:[0-9]{4}$/.test(requested ?? "")
+  )
+    return requested
+  return null
+}
+
 function configuration(env: CloudflareEnv): SsoConfig | null {
   const config = env as SsoEnv
   if (
@@ -170,11 +189,15 @@ export async function startVaultSso(
   const clientId = params.get("client_id")
   const state = params.get("state")
   const challenge = params.get("code_challenge")
-  const clientRedirect = `${config.vaultOrigin}/sso-connector.html`
+  const redirect = clientRedirect(
+    clientId,
+    params.get("redirect_uri"),
+    config.vaultOrigin
+  )
   if (
-    (clientId !== "web" && clientId !== "browser") ||
+    !clientId ||
+    !redirect ||
     params.get("domain_hint") !== config.identifier ||
-    params.get("redirect_uri") !== clientRedirect ||
     params.get("code_challenge_method") !== "S256" ||
     !state ||
     state.length > 2048 ||
@@ -196,9 +219,10 @@ export async function startVaultSso(
     .insert(vaultSsoFlow)
     .values({
       id,
+      clientId,
       clientState: state,
       clientChallenge: challenge,
-      clientRedirect,
+      clientRedirect: redirect,
       providerVerifier: verifier,
       nonce,
       bindingHash: await tokenHash(binding),
@@ -288,6 +312,8 @@ export async function redeemVaultSso(
   env: CloudflareEnv,
   code: string,
   clientVerifier: string,
+  clientId: string,
+  redirectUri: string | null,
   fetcher: typeof fetch = fetch
 ): Promise<{ user: VaultUser; refreshToken: string }> {
   const config = configuration(env)
@@ -309,6 +335,8 @@ export async function redeemVaultSso(
     !flow?.providerCode ||
     flow.usedAt ||
     flow.createdAt.getTime() + lifetimeMs < Date.now() ||
+    flow.clientId !== clientId ||
+    (redirectUri !== null && flow.clientRedirect !== redirectUri) ||
     flow.clientChallenge !== (await ssoChallenge(clientVerifier))
   )
     throw new Error("Invalid SSO exchange")

@@ -1385,7 +1385,13 @@ export async function handleBitwarden(
         return failure("Too many login attempts", 429)
       let sso: Awaited<ReturnType<typeof redeemVaultSso>>
       try {
-        sso = await redeemVaultSso(env, code, verifier)
+        sso = await redeemVaultSso(
+          env,
+          code,
+          verifier,
+          clientId,
+          stringField(body, "redirect_uri") ?? null
+        )
       } catch {
         return json({ error: "invalid_grant" }, 400)
       }

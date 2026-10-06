@@ -113,9 +113,12 @@ without encryption keys; `/api/accounts/set-password` lets the authenticated
 client supply its locally encrypted keys and client-derived password hash.
 Password registration remains separately controlled by `SIGNUPS_ALLOWED`.
 SSO refresh tokens are encrypted in D1 and redeemed with the provider when a
-Cloudwarden session refreshes. The current SSO flow is implemented for the web
-vault's `web` and `browser` client types; native mobile, desktop, and CLI SSO
-flows still need implementation and testing.
+Cloudwarden session refreshes. The SSO redirect flow accepts the web vault's
+`web` and `browser` clients, the fixed `bitwarden://sso-callback` return URL for
+desktop and mobile, and a four-digit `http://localhost` callback for the CLI.
+The authorization code is bound to the client type and PKCE challenge. Native
+redirects have protocol tests, but desktop, mobile, and CLI SSO sign-in have not
+yet been exercised end to end against a real provider.
 
 Organization creation stores client-encrypted organization keys, an owner
 membership, and a default collection in D1. Profile and sync expose the current
