@@ -164,7 +164,7 @@ try {
   const recoveryTarget = JSON.stringify({
     kind: "account",
     id: "11111111-1111-1111-1111-111111111111",
-    at: new Date().toISOString(),
+    at: new Date(Date.now() - 60_000).toISOString(),
   })
   const unauthenticated = await fetch(recoveryUrl, {
     method: "POST",
@@ -191,7 +191,9 @@ try {
     invalidTarget.status !== 400 ||
     missingTarget.status !== 404
   )
-    throw new Error("Recovery operator gate failed")
+    throw new Error(
+      `Recovery operator gate failed: ${unauthenticated.status}, ${wrongToken.status}, ${invalidTarget.status}, ${missingTarget.status}`
+    )
   console.log("Maintenance mode blocked vault reads and writes")
   console.log("Recovery operator endpoint rejected unauthenticated requests")
   passed = true

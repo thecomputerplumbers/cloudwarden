@@ -55,7 +55,7 @@
   "upload_source_maps": true,
   "account_id": "865d0c927a18e87c0a0701b8d1f18ee9",
   "vars": {
-    "APP_URL": "https://cloudwarden.thecomputerplumbers.com",
+    "APP_URL": "https://vault.thecomputerplumbers.com",
     "EMAIL_FROM": "cloudwarden@thecomputerplumbers.com",
   },
   "env": {
@@ -107,7 +107,7 @@
   },
   "routes": [
     {
-      "pattern": "cloudwarden.thecomputerplumbers.com",
+      "pattern": "vault.thecomputerplumbers.com",
       "custom_domain": true,
     },
   ],

@@ -1,29 +1,42 @@
 # Cloudwarden launch proposal
 
-This file records the locally prepared settings. None of these names imply that
-the matching Cloudflare resources, domain routes, GitHub repository, or mail
-sender have been created or verified.
+This file tracks the configured targets and the remaining release work. Staging
+exists in Cloudflare; the production Cloudwarden resources are not provisioned.
 
-| Setting      | Production                                    | Staging                                               |
-| ------------ | --------------------------------------------- | ----------------------------------------------------- |
-| Worker       | `cloudwarden`                                 | `cloudwarden-staging`                                 |
-| Origin       | `https://cloudwarden.thecomputerplumbers.com` | `https://cloudwarden-staging.thecomputerplumbers.com` |
-| D1 database  | `cloudwarden`                                 | `cloudwarden-staging`                                 |
-| R2 bucket    | `cloudwarden-attachments`                     | `cloudwarden-attachments-staging`                     |
-| Email sender | `cloudwarden@thecomputerplumbers.com`         | Same sender                                           |
+| Setting      | Production                              | Staging                                               |
+| ------------ | --------------------------------------- | ----------------------------------------------------- |
+| Worker       | `cloudwarden`                           | `cloudwarden-staging`                                 |
+| Origin       | `https://vault.thecomputerplumbers.com` | `https://cloudwarden-staging.thecomputerplumbers.com` |
+| D1 database  | `cloudwarden`                           | `cloudwarden-staging`                                 |
+| R2 bucket    | `cloudwarden-attachments`               | `cloudwarden-attachments-staging`                     |
+| Email sender | `cloudwarden@thecomputerplumbers.com`   | Same sender                                           |
 
-The proposed GitHub repository is `thecomputerplumbers/cloudwarden`, private.
+The GitHub repository is `thecomputerplumbers/cloudwarden`, public.
 The Wrangler configuration targets Cloudflare account
-`865d0c927a18e87c0a0701b8d1f18ee9`. D1 IDs remain placeholders. The first
-owner email address is still undecided; it is needed only for owner signup.
+`865d0c927a18e87c0a0701b8d1f18ee9`. The production D1 ID remains a
+placeholder. The first owner email address is still undecided; it is needed
+only for owner signup.
+
+`vault.thecomputerplumbers.com` currently serves the separate, active
+Vaultwarden Container with an organization and R2 checkpoints. Do not attach
+Cloudwarden to that hostname until the existing vault data has a verified
+migration or the owner explicitly chooses to discard it. Cloudwarden's mobile
+and desktop client coverage is also incomplete.
+
+On 2026-10-06, `cloudwarden-staging` was deployed with its own D1 database,
+R2 bucket, Durable Object, and Worker secret. Public DNS resolved its custom
+domain, and HTTPS `/api/health`, `/api/config`, and `/` passed via a public
+resolver. The local network's DNS cache still returned NXDOMAIN immediately
+after the deploy, so the release script's final origin check failed. Hosted
+browser and native-client flows remain to be tested.
 
 ## Before a hosted release
 
-1. Confirm the origins, sender, repository visibility, and owner email. Check
-   that the sender is permitted by Cloudflare Email Sending. Create the GitHub
-   repository, D1 databases, and R2 buckets, then replace the D1 placeholders.
-2. Set distinct `BETTER_AUTH_SECRET` Worker secrets and scoped deployment
-   credentials for staging and production. Configure the required GitHub check.
+1. Confirm the production cutover and existing data migration plan. Confirm the
+   owner email and test real delivery from the configured sender. Create the
+   production D1 database and R2 bucket, then replace its D1 placeholder.
+2. Set a distinct production `BETTER_AUTH_SECRET` and scoped deployment
+   credentials. Configure the required GitHub check.
 3. Deploy staging on a trusted HTTPS origin. Verify the health endpoint and
    Bitwarden configuration route. In the bundled web vault, create a disposable
    account and test encrypted item creation and reading, organization creation,
@@ -43,23 +56,17 @@ owner email address is still undecided; it is needed only for owner signup.
    on staging, including an attachment and encrypted vault record, and document
    the recovery point and operator steps.
 
-## First staging bootstrap
+## Staging bootstrap
 
-For a first staging release, create its D1 database and R2 bucket, insert the
+The first staging release created its D1 database and R2 bucket, inserted the
 returned D1 ID in `apps/web/wrangler.jsonc`, then set `BETTER_AUTH_SECRET` with
 `wrangler secret put BETTER_AUTH_SECRET --env staging`. [Wrangler creates the
 Worker](https://developers.cloudflare.com/workers/wrangler/commands/workers/#secret-put)
-when setting its first secret; that operation deploys a placeholder version.
-Then `pnpm run doctor staging` can inspect the secret inventory and
-`pnpm run deploy staging` can migrate and deploy the built application.
-
-A read-only preflight on 2026-10-06 confirmed access to Cloudflare account
-`865d0c927a18e87c0a0701b8d1f18ee9` and found Email Sending enabled for
-`thecomputerplumbers.com`. Actual mail delivery from the proposed address has
-not been tested. Neither proposed D1 database nor R2 bucket appeared in the
-account listings. The staging Worker and `BETTER_AUTH_SECRET` were absent, both
-proposed origins had no DNS answers, and the GitHub repository was not visible
-to the current credentials. No remote state was changed.
+when setting its first secret; that operation deployed a placeholder version.
+`pnpm run doctor staging` then passed, and `pnpm run deploy staging` migrated
+and uploaded the Worker. Its final health check failed only because this Mac's
+resolver still cached NXDOMAIN for the new hostname. Real mail delivery from
+the configured sender has not been tested.
 
 References: [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/),
 [Durable Object SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
