@@ -71,6 +71,36 @@ if (environment === "local") {
     config.d1_databases?.every((db) => /^[a-f0-9-]{36}$/.test(db.database_id)),
     `${environment} D1 database IDs`
   )
+  const bucket = config.r2_buckets?.find(
+    (binding) => binding.binding === "VAULT_ATTACHMENTS"
+  )?.bucket_name
+  if (bucket) {
+    const info = spawnSync(
+      "pnpm",
+      [
+        "--filter",
+        "web",
+        "exec",
+        "wrangler",
+        "r2",
+        "bucket",
+        "info",
+        bucket,
+        "--config",
+        "wrangler.jsonc",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLOUDFLARE_ENV: "",
+          CLOUDFLARE_ACCOUNT_ID: config.account_id,
+        },
+      }
+    )
+    check(info.status === 0, `${environment} R2 bucket ${bucket}`)
+  }
   check(
     !process.env.CLOUDFLARE_ACCOUNT_ID ||
       process.env.CLOUDFLARE_ACCOUNT_ID === config.account_id,
