@@ -161,6 +161,17 @@ export const vaultProtectedOtp = sqliteTable("vault_protected_otp", {
   attempts: integer("attempts").notNull().default(0),
 })
 
+export const vaultEmailChange = sqliteTable("vault_email_change", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => vaultUser.id, { onDelete: "cascade" }),
+  newEmail: text("new_email").notNull(),
+  codeHash: text("code_hash").notNull(),
+  sentAt: integer("sent_at", { mode: "timestamp_ms" }).notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  attempts: integer("attempts").notNull().default(0),
+})
+
 export const vaultAuthRequest = sqliteTable(
   "vault_auth_request",
   {

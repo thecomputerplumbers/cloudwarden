@@ -154,6 +154,10 @@ import {
   requestProtectedOtp,
 } from "./bitwarden-protected-otp"
 import {
+  completeVaultEmailChange,
+  requestVaultEmailChange,
+} from "./bitwarden-email-change"
+import {
   completeOrgImport,
   startOrgImport,
   type OrgImportPlan,
@@ -1848,6 +1852,86 @@ export async function handleBitwarden(
       revisionDate: user.updatedAt.toISOString(),
       object: "apiKey",
     })
+  }
+
+  if (path === "/api/accounts/email-token" && method === "POST") {
+    const body = await bodyOf(request)
+    const oldPassword = body && stringField(body, "masterPasswordHash")
+    const newEmail = body && stringField(body, "newEmail")
+    if (!oldPassword || !(await verifyVaultPassword(user, oldPassword)))
+      return failure("Invalid password", 403)
+    if (
+      !newEmail ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail) ||
+      newEmail.length > 254 ||
+      normalizeEmail(newEmail) === user.email
+    )
+      return failure("Invalid new email")
+    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    if (
+      !(
+        await limiter.consumeRateLimit(
+          `email-change:${user.id}`,
+          5,
+          60 * 60_000
+        )
+      ).allowed
+    )
+      return failure("Too many email change requests", 429)
+    const result = await requestVaultEmailChange(
+      env,
+      user,
+      normalizeEmail(newEmail)
+    )
+    if (result === "taken") return failure("Email already in use", 409)
+    if (result === "managed")
+      return failure("Change this email at your identity provider", 409)
+    if (result === "rate_limited") return failure("Try again later", 429)
+    if (result === "unavailable" || result === "delivery_failed")
+      return failure("Email change is unavailable", 503)
+    return new Response(null, { status: 200 })
+  }
+
+  if (path === "/api/accounts/email" && method === "POST") {
+    const body = await bodyOf(request)
+    const oldPassword = body && stringField(body, "masterPasswordHash")
+    const newEmail = body && stringField(body, "newEmail")
+    const newPassword = body && stringField(body, "newMasterPasswordHash")
+    const key = body && stringField(body, "key")
+    const rawToken = body && field(body, "token")
+    const code =
+      typeof rawToken === "string"
+        ? rawToken
+        : typeof rawToken === "number" && Number.isSafeInteger(rawToken)
+          ? String(rawToken).padStart(6, "0")
+          : null
+    if (!oldPassword || !(await verifyVaultPassword(user, oldPassword)))
+      return failure("Invalid password", 403)
+    if (
+      !newEmail ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail) ||
+      newEmail.length > 254 ||
+      normalizeEmail(newEmail) === user.email ||
+      !newPassword ||
+      newPassword.length > 1024 ||
+      !key ||
+      key.length > 20_000 ||
+      !code
+    )
+      return failure("Invalid email change fields")
+    const result = await completeVaultEmailChange(env, user, {
+      newEmail: normalizeEmail(newEmail),
+      code,
+      newPasswordHash: newPassword,
+      key,
+    })
+    if (result === "invalid") return failure("Invalid email change code", 400)
+    if (result === "taken") return failure("Email already in use", 409)
+    if (result === "managed")
+      return failure("Change this email at your identity provider", 409)
+    if (result === "conflict") return failure("Account changed", 409)
+    await publishVaultNotification(env, { type: 11, userId: user.id })
+    return new Response(null, { status: 200 })
   }
 
   if (path === "/api/accounts/set-password" && method === "POST") {

@@ -23,6 +23,7 @@ import {
   pruneOrgImports,
 } from "./bitwarden-org-import"
 import { pruneProtectedOtps } from "./bitwarden-protected-otp"
+import { pruneVaultEmailChanges } from "./bitwarden-email-change"
 import { pruneAuthRequests } from "./bitwarden-auth-request"
 import { handleVaultRecovery } from "./bitwarden-recovery"
 import {
@@ -224,6 +225,11 @@ export default {
       await pruneProtectedOtps(env)
     } catch {
       console.error("Protected-action code cleanup will retry")
+    }
+    try {
+      await pruneVaultEmailChanges(env)
+    } catch {
+      console.error("Email-change code cleanup will retry")
     }
     try {
       await pruneAuthRequests(env)

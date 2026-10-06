@@ -213,7 +213,10 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
       key: "2.encrypted-key",
       privateKey: "2.encrypted-private",
       publicKey: "public-key",
+      kdf: 0,
       kdfIterations: 600_000,
+      kdfMemory: null,
+      kdfParallelism: null,
     })
     assert.ok(setup)
     assert.equal(
@@ -226,9 +229,32 @@ test("SSO binds callback, verifies the provider, and bootstraps encrypted accoun
         key: "key",
         privateKey: "private",
         publicKey: "public",
+        kdf: 0,
         kdfIterations: 600_000,
+        kdfMemory: null,
+        kdfParallelism: null,
       }),
       undefined
+    )
+    const emailChange = await vite.ssrLoadModule(
+      "/worker/bitwarden-email-change.ts"
+    )
+    assert.equal(
+      await emailChange.requestVaultEmailChange(
+        { ...env, EMAIL_FROM: "vault@example.test" },
+        setup,
+        "new@example.test"
+      ),
+      "managed"
+    )
+    assert.equal(
+      await emailChange.completeVaultEmailChange(env, setup, {
+        newEmail: "new@example.test",
+        code: "123456",
+        newPasswordHash: "new-secret",
+        key: "2.new-key",
+      }),
+      "managed"
     )
     assert.equal(await sso.consumeVaultSso(env, flowId, user.id), true)
     assert.equal(await sso.consumeVaultSso(env, flowId, user.id), false)

@@ -18,6 +18,7 @@ Current routes cover server configuration, invite-based legacy account
 registration, the web vault's start/finish registration flow with a short-lived signed token,
 prelogin, password login, master password and PBKDF2 or Argon2id setting changes, rotating
 refresh tokens, profile and asymmetric key updates, personal vault sync,
+verified account email changes with client rewrapped keys,
 personal ciphers, folders, encrypted text and file Sends with public password
 and access limits, and encrypted attachments stored in private R2. Send content
 and access counters live in the owner's Durable Object; D1 maps public Send IDs
@@ -75,6 +76,15 @@ configured. `POST /api/accounts/security-stamp` requires the same
 reauthentication and revokes all account sessions. Access and refresh paths
 compare each session's stamp with the current account stamp, so an in-flight
 login issued before the change cannot restore access.
+`POST /api/accounts/email-token` sends a six-digit code to a proposed new
+address after checking the current master-password hash. The code expires in
+ten minutes, allows five attempts, and has a 30-second resend delay.
+`POST /api/accounts/email` requires that code, the current hash, and a new
+client-derived hash and wrapped key. A successful change verifies the new
+address, revokes all sessions and remembered devices, and requires sign-in
+using the new address.
+Accounts linked to SSO or an active SCIM directory identity change their
+address at that identity source; this local flow rejects those accounts.
 `GET /api/devices` and `GET /api/devices/identifier/:id` list registered
 devices; `GET /api/devices/knowndevice` checks the exact account and device
 identifier supplied in headers. Device records survive session expiry and

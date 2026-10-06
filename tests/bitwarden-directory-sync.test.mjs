@@ -60,6 +60,9 @@ test("SCIM sync links only new members and revokes only directory owned access",
     const { saveVaultGroup, setMemberGroups } = await vite.ssrLoadModule(
       "/worker/bitwarden-groups.ts"
     )
+    const { requestVaultEmailChange } = await vite.ssrLoadModule(
+      "/worker/bitwarden-email-change.ts"
+    )
     const db = proxy.env.DB
     const user = async (id, email) =>
       db
@@ -127,6 +130,14 @@ test("SCIM sync links only new members and revokes only directory owned access",
       .bind(orgId)
       .first()
     assert.equal(linked.email, "target@example.test")
+    assert.equal(
+      await requestVaultEmailChange(
+        { ...env, EMAIL_FROM: "vault@example.test" },
+        { id: targetId, email: "target@example.test" },
+        "renamed@example.test"
+      ),
+      "managed"
+    )
     const pending = await db
       .prepare(`SELECT * FROM vault_membership WHERE id = ?`)
       .bind(linked.membership_id)

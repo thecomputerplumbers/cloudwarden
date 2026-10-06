@@ -463,6 +463,99 @@ const argonFinalPrelogin = await post("/identity/accounts/prelogin", {
 assert.equal(argonFinalPrelogin.body.kdf, 1)
 assert.equal(argonFinalPrelogin.body.kdfMemory, 32)
 assert.equal(argonFinalPrelogin.body.kdfParallelism, 4)
+const changedArgonEmail = `argon-renamed-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await post(
+      "/api/accounts/email-token",
+      { masterPasswordHash: "argon-final-secret", newEmail: email },
+      argonTokens.access_token
+    )
+  ).status,
+  409
+)
+assert.equal(
+  (
+    await post(
+      "/api/accounts/email-token",
+      { masterPasswordHash: "wrong", newEmail: changedArgonEmail },
+      argonTokens.access_token
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await post(
+      "/api/accounts/email-token",
+      {
+        masterPasswordHash: "argon-final-secret",
+        newEmail: changedArgonEmail,
+      },
+      argonTokens.access_token
+    )
+  ).status,
+  200
+)
+const emailChangeMail = await invitationMail(
+  changedArgonEmail,
+  "Confirm your Cloudwarden email change"
+)
+const emailChangeCode = /email change code is (\d{6})/.exec(
+  emailChangeMail
+)?.[1]
+assert.ok(emailChangeCode)
+const emailChangeBody = {
+  masterPasswordHash: "argon-final-secret",
+  newEmail: changedArgonEmail,
+  newMasterPasswordHash: "argon-renamed-secret",
+  key: "2.argon-renamed-key",
+  token: emailChangeCode,
+}
+assert.equal(
+  (
+    await post(
+      "/api/accounts/email",
+      {
+        ...emailChangeBody,
+        token: "000000" === emailChangeCode ? "111111" : "000000",
+      },
+      argonTokens.access_token
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (await post("/api/accounts/email", emailChangeBody, argonTokens.access_token))
+    .status,
+  200
+)
+assert.equal(
+  (
+    await call("/api/accounts/profile", {
+      headers: { Authorization: `Bearer ${argonTokens.access_token}` },
+    })
+  ).status,
+  401
+)
+assert.equal(
+  (await tokenRequest(argonEmail, "argon-final-secret", {}, "203.0.113.220"))
+    .status,
+  400
+)
+const renamedPrelogin = await post("/identity/accounts/prelogin", {
+  email: changedArgonEmail,
+})
+assert.equal(renamedPrelogin.body.kdf, 1)
+assert.equal(renamedPrelogin.body.kdfMemory, 32)
+const renamedLogin = await tokenRequest(
+  changedArgonEmail,
+  "argon-renamed-secret",
+  {},
+  "203.0.113.220"
+)
+assert.equal(renamedLogin.status, 200)
+assert.equal((await renamedLogin.json()).Key, "2.argon-renamed-key")
 
 assert.equal((await tokenRequest(email, "wrong")).status, 400)
 const login = await tokenRequest(email, "client-derived-secret")
