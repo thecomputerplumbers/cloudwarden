@@ -1,0 +1,30 @@
+{
+  "name": "@workspace/stripe",
+  "version": "0.0.0",
+  "description": "Workerd-safe Stripe module: checkout, billing portal, subscriptions, verified webhooks, Drizzle tables and drop-in React controls.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@workspace/ui": "workspace:*",
+    "cn": "catalog:",
+    "drizzle-orm": "1.0.0-rc.5-5935859",
+    "lucide-react": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@workspace/typescript-config": "workspace:*",
+    "typescript": "catalog:"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./react/*": "./src/react/*.tsx",
+    "./*": "./src/*.ts"
+  }
+}

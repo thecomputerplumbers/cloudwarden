@@ -1,0 +1,19 @@
+{
+  "extends": "@workspace/typescript-config/react-library.json",
+  "compilerOptions": {
+    // Better Auth's client type references internals that cannot be named
+    // from here. Nothing consumes this package as built declarations — it is
+    // imported as source — so there is nothing to emit.
+    "types": ["node"],
+    "declaration": false,
+    "declarationMap": false,
+    "paths": {
+      "@workspace/auth": ["./src/index.ts"],
+      "@workspace/auth/*": ["./src/*"],
+      "@workspace/ui/*": ["../ui/src/*"],
+      "@workspace/ui-forms/*": ["../ui-forms/src/*"]
+    }
+  },
+  "include": ["."],
+  "exclude": ["node_modules", "dist"]
+}

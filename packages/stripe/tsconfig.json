@@ -1,0 +1,12 @@
+{
+  "extends": "@workspace/typescript-config/react-library.json",
+  "compilerOptions": {
+    "paths": {
+      "@workspace/stripe": ["./src/index.ts"],
+      "@workspace/stripe/*": ["./src/*"],
+      "@workspace/ui/*": ["../ui/src/*"]
+    }
+  },
+  "include": ["."],
+  "exclude": ["node_modules", "dist"]
+}

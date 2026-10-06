@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "endOfLine": "lf",
+  "semi": false,
+  "singleQuote": false,
+  "tabWidth": 2,
+  "trailingComma": "es5",
+  "printWidth": 80,
+  "sortPackageJson": false,
+  "sortTailwindcss": {
+    "stylesheet": "packages/ui/src/styles/globals.css",
+    "functions": ["cn", "cva"]
+  },
+  "ignorePatterns": [
+    "dist/",
+    ".vinext/",
+    ".wrangler/",
+    "**/.vinext/",
+    "**/.wrangler/",
+    "node_modules/",
+    ".next/",
+    ".turbo/",
+    "coverage/",
+    "**/drizzle/",
+    "**/worker-env.d.ts",
+    "pnpm-lock.yaml",
+    ".pnpm-store/"
+  ]
+}

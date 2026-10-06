@@ -1,0 +1,1 @@
+ALTER TABLE `stripe_subscription` ADD `revision` integer DEFAULT 0 NOT NULL;

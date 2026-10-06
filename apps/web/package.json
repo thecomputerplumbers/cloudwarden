@@ -1,0 +1,53 @@
+{
+  "name": "web",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vinext dev",
+    "build": "vinext build",
+    "start": "wrangler dev --config dist/server/wrangler.json --persist-to .wrangler/state",
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv worker-env.d.ts",
+    "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.do.config.ts",
+    "db:generate:d1": "drizzle-kit generate",
+    "db:generate:do": "drizzle-kit generate --config drizzle.do.config.ts",
+    "db:migrate": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.jsonc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vinext/cloudflare": "1.0.0",
+    "@workspace/auth": "workspace:*",
+    "@workspace/email": "workspace:*",
+    "@workspace/mcp": "workspace:*",
+    "@workspace/stripe": "workspace:*",
+    "@workspace/ui": "workspace:*",
+    "@workspace/ui-data": "workspace:*",
+    "@workspace/ui-forms": "workspace:*",
+    "@workspace/ui-shell": "workspace:*",
+    "better-auth": "^1.7.6",
+    "drizzle-orm": "1.0.0-rc.5-5935859",
+    "lucide-react": "catalog:",
+    "next": "16.3.5",
+    "next-themes": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-server-dom-webpack": "catalog:",
+    "vinext": "1.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.56.0",
+    "@tailwindcss/postcss": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitejs/plugin-rsc": "catalog:",
+    "@workspace/typescript-config": "workspace:*",
+    "drizzle-kit": "1.0.0-rc.5-5935859",
+    "typescript": "catalog:",
+    "vite": "8.3.0",
+    "wrangler": "4.135.0"
+  }
+}

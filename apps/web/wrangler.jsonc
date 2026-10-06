@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloudwarden",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-09-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "none",
+    "binding": "ASSETS",
+  },
+  "d1_databases": [
+    {
+      // Relational, queryable, reachable from the request handler: auth and
+      // billing live here. Create it once with
+      // `wrangler d1 create cloudwarden` and paste the id it prints.
+      "binding": "DB",
+      "database_name": "cloudwarden",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations",
+      // drizzle-kit writes one folder per migration rather than flat .sql
+      // files; wrangler reads that layout when pointed at it.
+      "migrations_pattern": "migrations/*/migration.sql",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "APP_DATABASE",
+        "class_name": "AppDatabase",
+      },
+    ],
+  },
+  "exports": {
+    "AppDatabase": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "send_email": [{ "name": "EMAIL" }],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "upload_source_maps": true,
+}

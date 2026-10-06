@@ -1,0 +1,36 @@
+{
+  "name": "cloudwarden",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "cf:typegen": "pnpm --filter web cf:typegen",
+    "db:generate": "pnpm --filter web db:generate",
+    "deploy": "node scripts/deploy.mjs",
+    "dev": "turbo dev",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "typecheck": "turbo typecheck",
+    "format:check": "oxfmt --check",
+    "test": "node --test tests/*.test.mjs",
+    "test:worker": "pnpm build && node tests/run-worker-smoke.mjs",
+    "project:init": "node scripts/init-project.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "db:seed": "node scripts/local-data.mjs seed",
+    "db:reset": "node scripts/local-data.mjs reset",
+    "db:migrate:local": "pnpm --filter web db:migrate:local"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*",
+    "jsonc-parser": "^3.3.1",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "turbo": "catalog:",
+    "typescript": "catalog:"
+  },
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=26 <27",
+    "pnpm": ">=12 <13"
+  }
+}

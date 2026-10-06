@@ -1,0 +1,26 @@
+{
+  "extends": "@workspace/typescript-config/nextjs.json",
+  "compilerOptions": {
+    // Better Auth's client type references library internals that cannot be
+    // named from here. Nothing emits declarations for an app — the base
+    // config turns them on for libraries — so there is nothing to lose.
+    "declaration": false,
+    "declarationMap": false,
+    "paths": {
+      "@/*": ["./*"],
+      "@workspace/mcp": ["../../packages/mcp/src/index.ts"],
+      "@workspace/email": ["../../packages/email/src/index.ts"],
+      "@workspace/ui/globals.css": ["../../packages/ui/src/styles/globals.css"],
+      "@workspace/ui/*": ["../../packages/ui/src/*"],
+      "@workspace/ui-shell/*": ["../../packages/ui-shell/src/*"],
+      "@workspace/ui-data/*": ["../../packages/ui-data/src/*"],
+      "@workspace/ui-forms/*": ["../../packages/ui-forms/src/*"],
+      "@workspace/auth": ["../../packages/auth/src/index.ts"],
+      "@workspace/auth/*": ["../../packages/auth/src/*"],
+      "@workspace/stripe": ["../../packages/stripe/src/index.ts"],
+      "@workspace/stripe/*": ["../../packages/stripe/src/*"]
+    }
+  },
+  "include": ["next.config.ts", "**/*.ts", "**/*.tsx", "**/*.mts"],
+  "exclude": ["node_modules"]
+}

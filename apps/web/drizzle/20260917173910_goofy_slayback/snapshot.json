@@ -1,0 +1,50 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "e6cf182c-d97d-4fbd-bbc7-1b5ef5d83448",
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
+  "ddl": [
+    {
+      "name": "setting",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "setting"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "setting"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "setting"
+    },
+    {
+      "columns": ["key"],
+      "nameExplicit": false,
+      "name": "setting_pk",
+      "table": "setting",
+      "entityType": "pks"
+    }
+  ],
+  "renames": []
+}
