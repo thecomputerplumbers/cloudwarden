@@ -260,7 +260,8 @@ async function attachmentResponse(
     size: number
   },
   userId: string,
-  origin: string
+  origin: string,
+  orgId?: string
 ) {
   const token = await vault.issueVaultAttachmentToken(
     attachment.id,
@@ -269,7 +270,7 @@ async function attachmentResponse(
   if (!token) throw new Error("Attachment became unavailable")
   return {
     id: attachment.id,
-    url: `${origin}/attachments/${attachment.cipherId}/${attachment.id}?token=${userId}.${token}`,
+    url: `${origin}/attachments/${attachment.cipherId}/${attachment.id}?token=${orgId ? `${orgId}:${userId}` : userId}.${token}`,
     fileName: attachment.fileName,
     size: String(attachment.size),
     key: attachment.key,
@@ -299,7 +300,13 @@ async function cipherResponse(
     attachments: attachments.length
       ? await Promise.all(
           attachments.map((attachment) =>
-            attachmentResponse(vault, attachment, userId, origin)
+            attachmentResponse(
+              vault,
+              attachment,
+              userId,
+              origin,
+              organization?.id
+            )
           )
         )
       : null,
@@ -580,12 +587,40 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const downloadMatch =
     /^\/attachments\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/.exec(path)
   if (downloadMatch && method === "GET") {
-    const [userId, token] = (url.searchParams.get("token") ?? "").split(".")
-    if (!userId || !token || !/^[0-9a-f-]{36}$/.test(userId))
+    const [scope, token] = (url.searchParams.get("token") ?? "").split(".")
+    if (!scope || !token) return failure("Attachment not found", 404)
+    const [orgId, scopedUserId] = scope.includes(":")
+      ? scope.split(":")
+      : [null, scope]
+    const userId = scopedUserId
+    if (
+      !userId ||
+      !/^[0-9a-f-]{36}$/.test(userId) ||
+      (orgId && !/^[0-9a-f-]{36}$/.test(orgId))
+    )
       return failure("Attachment not found", 404)
     if (!(await findVaultUserById(env, userId)))
       return failure("Attachment not found", 404)
-    const vault = await env.APP_DATABASE.getByName(`vault:${userId}`)
+    if (orgId) {
+      const locator = await getOrgCipherLocator(env, downloadMatch[1]!)
+      const member =
+        locator?.orgId === orgId &&
+        (await getVaultMembership(env, orgId, userId))
+      const allowed =
+        member &&
+        new Set(
+          (await listVaultCollections(env, orgId, member)).map((row) => row.id)
+        )
+      if (
+        !locator ||
+        !allowed ||
+        !locator.collectionIds.some((id) => allowed.has(id))
+      )
+        return failure("Attachment not found", 404)
+    }
+    const vault = await env.APP_DATABASE.getByName(
+      orgId ? `org:${orgId}` : `vault:${userId}`
+    )
     const authorized = await vault.validateVaultAttachmentToken(
       downloadMatch[2]!,
       downloadMatch[1]!,
@@ -593,7 +628,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     )
     if (!authorized) return failure("Attachment not found", 404)
     const object = await env.VAULT_ATTACHMENTS.get(
-      `${userId}/${downloadMatch[1]}/${downloadMatch[2]}`
+      `${orgId ? `org/${orgId}` : userId}/${downloadMatch[1]}/${downloadMatch[2]}`
     )
     if (!object) return failure("Attachment not found", 404)
     return new Response(object.body, {
@@ -1184,8 +1219,8 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     if (!(await beginOrgDeletion(env, orgId, user.id)))
       return failure("Organization deletion already started", 409)
     try {
-      await cleanupOrgDeletion(env, orgId)
-      return new Response(null, { status: 200 })
+      const complete = await cleanupOrgDeletion(env, orgId)
+      return new Response(null, { status: complete ? 200 : 202 })
     } catch {
       return new Response(null, { status: 202 })
     }
@@ -1735,9 +1770,44 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (attachmentMatch) {
     const cipherId = attachmentMatch[1]!
     const attachmentId = attachmentMatch[2]
-    const cipher = await vault.getVaultCipher(cipherId)
+    const locator = await getOrgCipherLocator(env, cipherId)
+    const member =
+      locator && (await getVaultMembership(env, locator.orgId, user.id))
+    const available =
+      member &&
+      new Set(
+        (await listVaultCollections(env, locator!.orgId, member)).map(
+          (row) => row.id
+        )
+      )
+    const visible =
+      locator &&
+      available &&
+      locator.collectionIds.filter((id) => available.has(id))
+    if (locator && !visible?.length) return failure("Cipher not found", 404)
+    const attachmentVault = locator
+      ? await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
+      : vault
+    const organization =
+      locator && visible
+        ? { id: locator.orgId, collectionIds: visible }
+        : undefined
+    const objectPrefix = locator ? `org/${locator.orgId}` : user.id
+    const canEdit = !locator || (member && member.role <= 1)
+    const cipher = await attachmentVault.getVaultCipher(cipherId)
     if (!cipher || cipher.deletedAt) return failure("Cipher not found", 404)
+    const response = async () =>
+      json(
+        await cipherResponse(
+          cipher,
+          attachmentVault,
+          user.id,
+          url.origin,
+          organization
+        )
+      )
     if (attachmentId === "v2" && method === "POST") {
+      if (!canEdit) return failure("Attachment editing is forbidden", 403)
       const body = await bodyOf(request)
       const fileName = body && stringField(body, "fileName")
       const key = body && stringField(body, "key")
@@ -1752,7 +1822,13 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       )
         return failure("Invalid attachment")
       const id = crypto.randomUUID()
-      await vault.createVaultAttachment({ id, cipherId, fileName, key, size })
+      await attachmentVault.createVaultAttachment({
+        id,
+        cipherId,
+        fileName,
+        key,
+        size,
+      })
       return json({
         object: "attachment-fileUpload",
         attachmentId: id,
@@ -1760,51 +1836,57 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         fileUploadType: 0,
         cipherResponse: await cipherResponse(
           cipher,
-          vault,
+          attachmentVault,
           user.id,
-          url.origin
+          url.origin,
+          organization
         ),
       })
     }
     if (!attachmentId && method === "POST") {
+      if (!canEdit) return failure("Attachment editing is forbidden", 403)
       const form = await request.formData()
       const data = form.get("data")
       if (!(data instanceof File) || data.size > 20_000_000)
         return failure("Invalid attachment")
       const key = form.get("key")
       const id = crypto.randomUUID()
-      await vault.createVaultAttachment({
+      await attachmentVault.createVaultAttachment({
         id,
         cipherId,
         fileName: data.name,
         key: typeof key === "string" ? key : null,
         size: data.size,
       })
-      const objectKey = `${user.id}/${cipherId}/${id}`
+      const objectKey = `${objectPrefix}/${cipherId}/${id}`
       await env.VAULT_ATTACHMENTS.put(objectKey, data.stream())
       if (
         !(await keepCompletedUpload(env, objectKey, () =>
-          vault.completeVaultAttachment(id, cipherId)
+          attachmentVault.completeVaultAttachment(id, cipherId)
         ))
       )
         return failure("Attachment upload failed", 503)
-      return json(await cipherResponse(cipher, vault, user.id, url.origin))
+      return response()
     }
     if (attachmentId && attachmentId !== "v2") {
-      const attachment = await vault.getVaultAttachment(attachmentId, cipherId)
+      const attachment = await attachmentVault.getVaultAttachment(
+        attachmentId,
+        cipherId
+      )
       if (!attachment) return failure("Attachment not found", 404)
       if (method === "POST" && !path.endsWith("/delete")) {
+        if (!canEdit) return failure("Attachment editing is forbidden", 403)
         if (attachment.uploaded)
           return failure("Attachment already uploaded", 409)
         const form = await request.formData()
         const data = form.get("data")
         if (!(data instanceof File) || data.size !== attachment.size)
           return failure("Attachment size mismatch")
-        const objectKey = `${user.id}/${cipherId}/${attachmentId}`
+        const objectKey = `${objectPrefix}/${cipherId}/${attachmentId}`
         await env.VAULT_ATTACHMENTS.put(objectKey, data.stream())
         if (
           !(await keepCompletedUpload(env, objectKey, () =>
-            vault.completeVaultAttachment(attachmentId, cipherId)
+            attachmentVault.completeVaultAttachment(attachmentId, cipherId)
           ))
         )
           return failure("Attachment upload failed", 503)
@@ -1813,18 +1895,25 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       if (method === "GET")
         return attachment.uploaded
           ? json(
-              await attachmentResponse(vault, attachment, user.id, url.origin)
+              await attachmentResponse(
+                attachmentVault,
+                attachment,
+                user.id,
+                url.origin,
+                locator?.orgId
+              )
             )
           : failure("Attachment not found", 404)
       if (
         method === "DELETE" ||
         (method === "POST" && path.endsWith("/delete"))
       ) {
+        if (!canEdit) return failure("Attachment editing is forbidden", 403)
         await env.VAULT_ATTACHMENTS.delete(
-          `${user.id}/${cipherId}/${attachmentId}`
+          `${objectPrefix}/${cipherId}/${attachmentId}`
         )
-        await vault.deleteVaultAttachment(attachmentId, cipherId)
-        return json(await cipherResponse(cipher, vault, user.id, url.origin))
+        await attachmentVault.deleteVaultAttachment(attachmentId, cipherId)
+        return response()
       }
     }
   }

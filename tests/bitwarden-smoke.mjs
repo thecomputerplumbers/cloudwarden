@@ -377,6 +377,29 @@ assert.equal(sharedCipher.status, 200)
 assert.equal(sharedCipher.body.organizationId, orgId)
 assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
 const sharedId = sharedCipher.body.id
+const sharedAttachmentInit = await authorized(
+  `/api/ciphers/${sharedId}/attachment/v2`,
+  "POST",
+  { fileName: "2.shared-file", fileSize: 3, key: "2.shared-file-key" }
+)
+assert.equal(sharedAttachmentInit.status, 200)
+const sharedUpload = new FormData()
+sharedUpload.append("data", new File([new Uint8Array([9, 8, 7])], "shared.bin"))
+const sharedUploaded = await fetch(
+  `${origin}/api${sharedAttachmentInit.body.url}`,
+  {
+    method: "POST",
+    headers: { Authorization: `Bearer ${currentAccessToken}` },
+    body: sharedUpload,
+  }
+)
+assert.equal(sharedUploaded.status, 204)
+const ownerSharedLink = (await authorized(`/api/ciphers/${sharedId}`)).body
+  .attachments[0].url
+assert.deepEqual(
+  new Uint8Array(await (await fetch(ownerSharedLink)).arrayBuffer()),
+  new Uint8Array([9, 8, 7])
+)
 assert.equal(
   (
     await authorized(
@@ -492,6 +515,10 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   200
 )
+const memberSharedLink = (
+  await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
+).body.attachments[0].url
+assert.equal((await fetch(memberSharedLink)).status, 200)
 assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, sharedCipherBody, "PUT"))
     .status,
@@ -510,6 +537,7 @@ assert.equal(
   (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
   404
 )
+assert.equal((await fetch(memberSharedLink)).status, 404)
 assert.deepEqual(
   (await otherAuthorized("/api/sync", undefined, "GET")).body.profile
     .organizations,
@@ -1058,6 +1086,7 @@ assert.equal(
   200
 )
 assert.equal((await authorized(`/api/ciphers/${sharedId}`)).status, 404)
+assert.equal((await fetch(ownerSharedLink)).status, 404)
 assert.deepEqual((await authorized("/api/sync")).body.profile.organizations, [])
 assert.equal(
   (

@@ -47,6 +47,21 @@ export async function deletingOrganizations(env: CloudflareEnv) {
 export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
   const vault = await env.APP_DATABASE.getByName(`org:${orgId}`)
   await vault.clearPersonalVault()
+  let empty = false
+  for (let batch = 0; batch < 20; batch++) {
+    const found = await env.VAULT_ATTACHMENTS.list({
+      prefix: `org/${orgId}/`,
+      limit: 1000,
+    })
+    if (found.objects.length === 0) {
+      empty = !found.truncated
+      break
+    }
+    await env.VAULT_ATTACHMENTS.delete(
+      found.objects.map((object) => object.key)
+    )
+  }
+  if (!empty) return false
   await drizzle(env.DB)
     .delete(vaultOrganization)
     .where(
@@ -56,6 +71,7 @@ export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
       )
     )
     .run()
+  return true
 }
 
 export async function listOrgMembers(env: CloudflareEnv, orgId: string) {
