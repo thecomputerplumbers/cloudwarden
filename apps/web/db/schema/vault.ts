@@ -365,6 +365,63 @@ export const vaultCollectionMember = sqliteTable(
   ]
 )
 
+export const vaultGroup = sqliteTable("vault_group", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => vaultOrganization.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  accessAll: integer("access_all", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  externalId: text("external_id"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export const vaultGroupMember = sqliteTable(
+  "vault_group_member",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => vaultGroup.id, { onDelete: "cascade" }),
+    membershipId: text("membership_id")
+      .notNull()
+      .references(() => vaultMembership.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("vault_group_member_unique").on(
+      table.groupId,
+      table.membershipId
+    ),
+    index("vault_group_member_membership_idx").on(table.membershipId),
+  ]
+)
+
+export const vaultGroupCollection = sqliteTable(
+  "vault_group_collection",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => vaultGroup.id, { onDelete: "cascade" }),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => vaultCollection.id, { onDelete: "cascade" }),
+    readOnly: integer("read_only", { mode: "boolean" }).notNull().default(true),
+    hidePasswords: integer("hide_passwords", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    manage: integer("manage", { mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("vault_group_collection_unique").on(
+      table.groupId,
+      table.collectionId
+    ),
+    index("vault_group_collection_collection_idx").on(table.collectionId),
+  ]
+)
+
 // Track only collection grants created by directory sync. Manual grants must
 // survive a group removal or a temporarily missing directory user.
 export const vaultDirectoryCollectionGrant = sqliteTable(

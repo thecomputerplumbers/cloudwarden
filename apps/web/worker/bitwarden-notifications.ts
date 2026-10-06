@@ -5,6 +5,9 @@ import {
   vaultApiKey,
   vaultAuthRequest,
   vaultCollectionMember,
+  vaultGroup,
+  vaultGroupCollection,
+  vaultGroupMember,
   vaultMembership,
   vaultOrganization,
   vaultSession,
@@ -212,6 +215,27 @@ export async function organizationNotificationTargets(
     .where(inArray(vaultCollectionMember.collectionId, collectionIds))
     .all()
   const allowed = new Set(grants.map((grant) => grant.membershipId))
+  const groupGrants = await db
+    .select({
+      membershipId: vaultGroupMember.membershipId,
+      accessAll: vaultGroup.accessAll,
+      collectionId: vaultGroupCollection.collectionId,
+    })
+    .from(vaultGroupMember)
+    .innerJoin(vaultGroup, eq(vaultGroup.id, vaultGroupMember.groupId))
+    .leftJoin(
+      vaultGroupCollection,
+      eq(vaultGroupCollection.groupId, vaultGroup.id)
+    )
+    .where(eq(vaultGroup.orgId, orgId))
+    .all()
+  const affected = new Set(collectionIds)
+  for (const grant of groupGrants)
+    if (
+      grant.accessAll ||
+      (grant.collectionId && affected.has(grant.collectionId))
+    )
+      allowed.add(grant.membershipId)
   return members
     .filter((member) => member.accessAll || allowed.has(member.id))
     .map((member) => member.userId)

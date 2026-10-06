@@ -172,6 +172,12 @@ key may still be added as an accepted member for owner confirmation. Regular
 members have read-only shared item access. Owners and admins can view member details
 and change a regular member's collection assignments. Removing an assignment
 immediately blocks shared cipher and attachment reads through that collection.
+Owners and admins can create groups, assign members and collections, and grant
+collection access through group membership. Group changes update the
+organization revision and notify members. The group API follows Vaultwarden's
+list, details, create, update, and delete routes. Directory sync still uses
+collection external IDs for group grants; it does not yet create or update
+Cloudwarden groups from SCIM group records.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.

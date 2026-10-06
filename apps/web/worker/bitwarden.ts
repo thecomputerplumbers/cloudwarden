@@ -98,6 +98,17 @@ import {
   updateVaultOrganization,
 } from "./bitwarden-org"
 import {
+  deleteVaultGroup,
+  getVaultGroup,
+  groupDetails,
+  groupResponse,
+  listVaultGroups,
+  memberGroupIds,
+  saveVaultGroup,
+  setMemberGroups,
+  type GroupCollectionInput,
+} from "./bitwarden-groups"
+import {
   invitationMailEnabled,
   invitationOrigin,
   sendOrgInvite,
@@ -124,7 +135,10 @@ import {
   getAuthRequest,
   pendingAuthRequests,
 } from "./bitwarden-auth-request"
-import { publishVaultNotification } from "./bitwarden-notifications"
+import {
+  publishOrganizationSync,
+  publishVaultNotification,
+} from "./bitwarden-notifications"
 import {
   deleteWebauthnCredential,
   disableWebauthn,
@@ -2465,6 +2479,7 @@ export async function handleBitwarden(
               status: member.status,
               accessAll: member.accessAll,
               collections: await orgMemberCollections(env, member.id),
+              groups: await memberGroupIds(env, member.id),
               object: "organizationUserUserDetails",
             }))
           )
@@ -2603,6 +2618,7 @@ export async function handleBitwarden(
         status: member.membership.status,
         accessAll: member.membership.accessAll,
         collections: await orgMemberCollections(env, memberId),
+        groups: await memberGroupIds(env, memberId),
         object: "organizationUserUserDetails",
       })
     }
@@ -2617,7 +2633,12 @@ export async function handleBitwarden(
       if (
         (body && integerField(body, "type") !== 2) ||
         !Array.isArray(rawCollections) ||
-        (groups !== undefined && (!Array.isArray(groups) || groups.length > 0))
+        (groups !== undefined &&
+          (!Array.isArray(groups) ||
+            groups.length > 100 ||
+            !groups.every(
+              (id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id)
+            )))
       )
         return failure("Invalid member settings")
       const collections = rawCollections.map((item) => {
@@ -2634,7 +2655,13 @@ export async function handleBitwarden(
       })
       if (collections.some((entry) => !entry))
         return failure("Invalid member collections")
-      return (await setOrgMemberCollections(
+      const groupIds = groups as string[] | undefined
+      const availableGroups = new Set(
+        (await listVaultGroups(env, orgId)).map((group) => group.id)
+      )
+      if (groupIds?.some((id) => !availableGroups.has(id)))
+        return failure("Invalid member groups")
+      const updated = await setOrgMemberCollections(
         env,
         orgId,
         memberId,
@@ -2643,9 +2670,12 @@ export async function handleBitwarden(
           readOnly: boolean
           hidePasswords: boolean
         }[]
-      ))
-        ? new Response(null, { status: 200 })
-        : failure("Member or collection not found", 404)
+      )
+      if (!updated) return failure("Member or collection not found", 404)
+      if (groupIds && !(await setMemberGroups(env, orgId, memberId, groupIds)))
+        return failure("Invalid member groups")
+      await publishOrganizationSync(env, orgId, null)
+      return new Response(null, { status: 200 })
     }
     if (memberId && memberMatch[3] === "confirm" && method === "POST") {
       const body = await bodyOf(request)
@@ -2660,6 +2690,97 @@ export async function handleBitwarden(
       return (await removeOrgMember(env, orgId, memberId))
         ? new Response(null, { status: 200 })
         : failure("Member not found", 404)
+    }
+  }
+  const groupMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/groups(?:\/(details|[0-9a-f-]{36})(?:\/(details|delete))?)?$/.exec(
+      path
+    )
+  if (groupMatch) {
+    const orgId = groupMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role > 1)
+      return failure("Group management is forbidden", 403)
+    const groupId = groupMatch[2] === "details" ? null : groupMatch[2]
+    if (!groupId && method === "GET") {
+      const groups = await listVaultGroups(env, orgId)
+      return json(
+        list(
+          groupMatch[2] === "details"
+            ? await Promise.all(groups.map((group) => groupDetails(env, group)))
+            : groups.map(groupResponse)
+        )
+      )
+    }
+    if (groupId && method === "GET") {
+      const group = await getVaultGroup(env, orgId, groupId)
+      return group
+        ? json(await groupDetails(env, group))
+        : failure("Group not found", 404)
+    }
+    if (
+      groupId &&
+      (method === "DELETE" || (method === "POST" && groupMatch[3] === "delete"))
+    ) {
+      const removed = await deleteVaultGroup(env, orgId, groupId)
+      if (removed) await publishOrganizationSync(env, orgId, null)
+      return removed
+        ? new Response(null, { status: 200 })
+        : failure("Group not found", 404)
+    }
+    if (
+      (!groupMatch[2] && method === "POST") ||
+      (groupId && !groupMatch[3] && (method === "PUT" || method === "POST"))
+    ) {
+      const body = await bodyOf(request)
+      const name = body && stringField(body, "name")
+      const externalId = body && field(body, "externalId")
+      const rawCollections = body && field(body, "collections")
+      const users = body && field(body, "users")
+      const accessAll = body && field(body, "accessAll")
+      if (
+        !name ||
+        name.length > 100 ||
+        (externalId != null &&
+          (typeof externalId !== "string" || externalId.length > 255)) ||
+        typeof accessAll !== "boolean" ||
+        !Array.isArray(rawCollections) ||
+        !Array.isArray(users) ||
+        users.some(
+          (id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)
+        )
+      )
+        return failure("Invalid group")
+      const collections = rawCollections.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item))
+          return null
+        const entry = item as Body
+        const id = stringField(entry, "id")
+        const readOnly = field(entry, "readOnly")
+        const hidePasswords = field(entry, "hidePasswords")
+        const manage = field(entry, "manage")
+        return id &&
+          /^[0-9a-f-]{36}$/i.test(id) &&
+          typeof readOnly === "boolean" &&
+          typeof hidePasswords === "boolean" &&
+          typeof manage === "boolean"
+          ? { id, readOnly, hidePasswords, manage }
+          : null
+      })
+      if (collections.some((entry) => !entry))
+        return failure("Invalid group collections")
+      const saved = await saveVaultGroup(env, orgId, {
+        id: groupId ?? undefined,
+        name,
+        accessAll,
+        externalId: (externalId as string | null) || null,
+        collections: collections as GroupCollectionInput[],
+        users: users as string[],
+      })
+      if (!saved) return failure("Invalid group relationships", 400)
+      await publishOrganizationSync(env, orgId, null)
+      return json(groupResponse(saved))
     }
   }
   const organizationMatch =

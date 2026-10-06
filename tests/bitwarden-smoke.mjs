@@ -1663,6 +1663,105 @@ assert.equal(
 assert.equal((await fetch(memberSharedLink)).status, 404)
 assert.equal(
   (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/groups`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  403
+)
+const groupInput = {
+  name: "Shared collection readers",
+  accessAll: false,
+  externalId: "directory-group-1",
+  collections: [
+    {
+      id: secondCollection.body.id,
+      readOnly: true,
+      hidePasswords: false,
+      manage: false,
+    },
+  ],
+  users: [invitee.id],
+}
+const groupCreated = await authorized(
+  `/api/organizations/${orgId}/groups`,
+  "POST",
+  groupInput
+)
+assert.equal(groupCreated.status, 200)
+const groupId = groupCreated.body.id
+assert.deepEqual(
+  (await authorized(`/api/organizations/${orgId}/groups/details`)).body.data[0]
+    .users,
+  [invitee.id]
+)
+assert.deepEqual(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.collections.map(
+    (collection) => collection.id
+  ),
+  [secondCollection.body.id]
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  200
+)
+const groupAttachmentLink = (
+  await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
+).body.attachments[0].url
+assert.equal((await fetch(groupAttachmentLink)).status, 200)
+const groupRevoked = await authorized(
+  `/api/organizations/${orgId}/groups/${groupId}`,
+  "PUT",
+  { ...groupInput, users: [] }
+)
+assert.equal(groupRevoked.status, 200)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal((await fetch(groupAttachmentLink)).status, 404)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [],
+      groups: [groupId],
+    })
+  ).status,
+  200
+)
+assert.deepEqual(
+  (await authorized(`/api/organizations/${orgId}/users/${invitee.id}`)).body
+    .groups,
+  [groupId]
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  200
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [],
+      groups: [],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal(
+  (await authorized(`/api/organizations/${orgId}/groups/${groupId}`, "DELETE"))
+    .status,
+  200
+)
+assert.equal(
+  (
     await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
       type: 2,
       collections: [

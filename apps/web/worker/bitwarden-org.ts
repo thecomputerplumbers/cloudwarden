@@ -1,10 +1,13 @@
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import {
   vaultCollection,
   vaultCollectionMember,
   vaultDirectoryCollectionGrant,
+  vaultGroup,
+  vaultGroupCollection,
+  vaultGroupMember,
   vaultMembership,
   vaultOrgCipher,
   vaultOrgCipherCollection,
@@ -464,6 +467,23 @@ export async function listVaultCollections(
       .from(vaultCollection)
       .where(eq(vaultCollection.orgId, orgId))
       .all()
+  const groups = await db
+    .select({ id: vaultGroup.id, accessAll: vaultGroup.accessAll })
+    .from(vaultGroupMember)
+    .innerJoin(vaultGroup, eq(vaultGroup.id, vaultGroupMember.groupId))
+    .where(
+      and(
+        eq(vaultGroupMember.membershipId, membership.id),
+        eq(vaultGroup.orgId, orgId)
+      )
+    )
+    .all()
+  if (groups.some((group) => group.accessAll))
+    return db
+      .select()
+      .from(vaultCollection)
+      .where(eq(vaultCollection.orgId, orgId))
+      .all()
   const rows = await db
     .select({ collection: vaultCollection })
     .from(vaultCollectionMember)
@@ -478,7 +498,29 @@ export async function listVaultCollections(
       )
     )
     .all()
-  return rows.map((row) => row.collection)
+  if (!groups.length) return rows.map((row) => row.collection)
+  const groupRows = await db
+    .select({ collection: vaultCollection })
+    .from(vaultGroupCollection)
+    .innerJoin(
+      vaultCollection,
+      eq(vaultCollection.id, vaultGroupCollection.collectionId)
+    )
+    .where(
+      and(
+        eq(vaultCollection.orgId, orgId),
+        inArray(
+          vaultGroupCollection.groupId,
+          groups.map((group) => group.id)
+        )
+      )
+    )
+    .all()
+  return [
+    ...new Map(
+      [...rows, ...groupRows].map((row) => [row.collection.id, row.collection])
+    ).values(),
+  ]
 }
 
 export async function createVaultCollection(
@@ -597,7 +639,7 @@ export function organizationResponse(org: Organization) {
     useCustomPermissions: true,
     useDirectory: false,
     useEvents: false,
-    useGroups: false,
+    useGroups: true,
     useTotp: true,
     usePolicies: false,
     useScim: false,
@@ -630,7 +672,7 @@ export function profileOrganizationResponse(
     usePasswordManager: true,
     use2fa: true,
     useTotp: true,
-    useGroups: false,
+    useGroups: true,
     usePolicies: false,
     useSso: false,
     useScim: false,
