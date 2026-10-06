@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process"
-import { mkdtempSync, openSync, closeSync, rmSync } from "node:fs"
+import { mkdtempSync, openSync, closeSync, rmSync, readFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { once } from "node:events"
 import { setTimeout as delay } from "node:timers/promises"
@@ -12,6 +12,7 @@ await once(reservation, "listening")
 const port = reservation.address().port
 await new Promise((resolve) => reservation.close(resolve))
 const origin = `http://localhost:${port}`
+const product = JSON.parse(readFileSync("apps/web/config/product.json", "utf8"))
 const log = openSync(`${storage}/worker.log`, "w")
 let worker
 let passed = false
@@ -88,13 +89,19 @@ try {
     await delay(100)
   }
   if (!ready) throw new Error("Local Worker did not become healthy")
-  const test = spawn(
-    process.execPath,
-    ["tests/worker-smoke.mjs", origin, storage],
-    { stdio: "inherit" }
-  )
-  const [code] = await once(test, "exit")
-  if (code !== 0) throw new Error("Worker smoke test failed")
+  if (
+    product.features.billing &&
+    product.features.mcp &&
+    product.features.projects
+  ) {
+    const test = spawn(
+      process.execPath,
+      ["tests/worker-smoke.mjs", origin, storage],
+      { stdio: "inherit" }
+    )
+    const [code] = await once(test, "exit")
+    if (code !== 0) throw new Error("Worker smoke test failed")
+  }
   const vaultTest = spawn(
     process.execPath,
     ["tests/bitwarden-smoke.mjs", origin, storage],

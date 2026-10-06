@@ -14,6 +14,11 @@ Vaultwarden web vault release at `/`; it still needs end-to-end validation over
 trusted HTTPS. See [API status](docs/bitwarden-api.md) for supported routes,
 verification, and remaining work.
 
+The starter's billing, MCP, and sample Projects features remain in the source
+but are disabled in Cloudwarden. The Worker smoke test exercises the Bitwarden
+API when those example features are disabled, and production does not require
+Stripe credentials.
+
 ## Get started
 
 ```sh
@@ -21,7 +26,7 @@ mise install
 mise run setup
 cp apps/web/.dev.vars.example apps/web/.dev.vars
 pnpm db:seed
-pnpm doctor
+pnpm run doctor
 mise run dev
 ```
 
@@ -42,7 +47,7 @@ mise run check  # oxlint, oxfmt --check, type checking, regression tests, and a 
 mise run format # Format the workspace with oxfmt
 pnpm test:worker # Full local account + OAuth/MCP smoke test
 pnpm project:init # Configure Cloudflare account and environments
-pnpm doctor      # Check local setup; also accepts staging or production
+pnpm run doctor  # Check local setup; also accepts staging or production
 pnpm db:seed     # Repeatable local demo users, organizations and projects
 pnpm db:reset --yes # Reset local state; stop the dev server first
 pnpm cf:typegen # Regenerate Cloudflare binding and runtime types
@@ -185,9 +190,9 @@ Cloudflare Email Service sender. Set the secrets before the first real request:
 
 ```sh
 pnpm --filter web exec wrangler secret put BETTER_AUTH_SECRET
-pnpm --filter web exec wrangler secret put STRIPE_SECRET_KEY
-pnpm --filter web exec wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
+
+Stripe secrets are needed only if billing is enabled in the product configuration.
 
 `/api/health` reports what is bound, migrated and configured — without ever echoing a key.
 

@@ -3,7 +3,7 @@
   "slug": "cloudwarden",
   "description": "A workspace for your team and projects.",
   "supportEmail": "support@example.com",
-  "features": { "billing": true, "mcp": true, "projects": true },
+  "features": { "billing": false, "mcp": false, "projects": false },
   "navigation": [
     { "href": "/dashboard", "label": "Dashboard", "icon": "dashboard" },
     {

@@ -25,8 +25,8 @@ to a different Worker namespace in each deployment.
 ```sh
 pnpm --filter web exec wrangler secret put BETTER_AUTH_SECRET --env staging
 pnpm --filter web exec wrangler secret put BETTER_AUTH_SECRET
-pnpm doctor staging
-pnpm doctor production
+pnpm run doctor staging
+pnpm run doctor production
 ```
 
 Create GitHub environments named `staging` and `production`. Each needs a
