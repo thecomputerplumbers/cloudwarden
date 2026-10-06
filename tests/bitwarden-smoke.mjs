@@ -237,6 +237,10 @@ assert.match(webVaultHtml, /<title page-title>Vaultwarden Web<\/title>/)
 const webVaultScript = /src="(app\/main\.[^"]+\.js)"/.exec(webVaultHtml)?.[1]
 assert.ok(webVaultScript)
 assert.equal((await fetch(`${origin}/${webVaultScript}`)).status, 200)
+assert.equal((await fetch(`${origin}/sign-in`)).status, 404)
+assert.equal((await fetch(`${origin}/api/auth/ok`)).status, 404)
+assert.equal((await fetch(`${origin}/dashboard`)).status, 404)
+assert.equal((await fetch(`${origin}/api/health`)).status, 200)
 
 async function call(path, options = {}) {
   const response = await fetch(`${origin}${path}`, options)
@@ -1754,6 +1758,8 @@ const sharedUploaded = await fetch(
 assert.equal(sharedUploaded.status, 204)
 const ownerSharedLink = (await authorized(`/api/ciphers/${sharedId}`)).body
   .attachments[0].url
+const ownerSharedObjectKey = `org/${orgId}/${sharedId}/${sharedAttachmentInit.body.attachmentId}`
+assert.equal(localR2ObjectExists(ownerSharedObjectKey), true)
 const orgExport = await authorized(`/api/organizations/${orgId}/export`)
 assert.equal(orgExport.status, 200)
 assert.equal(orgExport.body.collections.length, 2)
@@ -3698,6 +3704,8 @@ const deletionCipherDetails = await currentAuthorized(
 )
 const attachmentUrl = deletionCipherDetails.body.attachments[0].url
 assert.equal((await fetch(attachmentUrl)).status, 200)
+const accountCipherObjectKey = `${otherUserId}/${deletionCipher.body.id}/${deletionAttachment.body.attachmentId}`
+assert.equal(localR2ObjectExists(accountCipherObjectKey), true)
 
 const deletionFileSend = await currentAuthorized("/api/sends/file/v2", {
   ...sendBody,
@@ -3736,6 +3744,8 @@ const deletionFileLink = await call(
 )
 assert.equal(deletionFileLink.status, 200)
 assert.equal((await fetch(deletionFileLink.body.url)).status, 200)
+const accountSendObjectKey = `sends/${otherUserId}/${deletionFileSend.body.sendResponse.id}/${deletionFileSend.body.sendResponse.file.id}`
+assert.equal(localR2ObjectExists(accountSendObjectKey), true)
 assert.equal(
   (
     await currentAuthorized("/api/accounts/delete", {
@@ -3771,6 +3781,8 @@ assert.equal(
 assert.equal((await tokenRequest(otherEmail, "third-secret")).status, 400)
 assert.equal((await fetch(attachmentUrl)).status, 404)
 assert.equal((await fetch(deletionFileLink.body.url)).status, 404)
+await awaitLocalR2Deletion(accountCipherObjectKey)
+await awaitLocalR2Deletion(accountSendObjectKey)
 assert.equal(
   (await sendAccessRequest(deletionFileSend.body.sendResponse.accessId)).status,
   404
@@ -3935,6 +3947,7 @@ assert.equal(
 )
 assert.equal((await authorized(`/api/ciphers/${sharedId}`)).status, 404)
 assert.equal((await fetch(ownerSharedLink)).status, 404)
+await awaitLocalR2Deletion(ownerSharedObjectKey)
 assert.deepEqual((await authorized("/api/sync")).body.profile.organizations, [])
 assert.equal(
   (

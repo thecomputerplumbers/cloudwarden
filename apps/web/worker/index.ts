@@ -227,6 +227,12 @@ export default {
         return new Response("Not found", { status: 404 })
       if (path === "/mcp") return handleMcp(request)
       if (path.startsWith("/.well-known/")) return auth.handler(request)
+      if (product.slug === "cloudwarden") {
+        if (path === "/api/health") return vinextWorker.fetch(request, env, ctx)
+        if (path.startsWith("/api/"))
+          return new Response("Not found", { status: 404 })
+        return env.ASSETS.fetch(request)
+      }
       return vinextWorker.fetch(request, env, ctx)
     })
   },

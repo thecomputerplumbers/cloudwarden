@@ -14,30 +14,29 @@ Vaultwarden web vault release at `/`; it still needs end-to-end validation over
 trusted HTTPS. See [API status](docs/bitwarden-api.md) for supported routes,
 verification, and remaining work.
 
-The starter's billing, MCP, and sample Projects features remain in the source
-but are disabled in Cloudwarden. The Worker smoke test exercises the Bitwarden
-API when those example features are disabled, and production does not require
-Stripe credentials.
+The starter's billing, MCP, sample Projects, and Better Auth pages remain in
+the source but are not served by the Cloudwarden Worker. vinext builds the
+Worker and serves its health route; the bundled Vaultwarden web vault serves
+the client at `/`. Production does not require Stripe credentials.
 
 ## Get started
 
 ```sh
 mise install
 mise run setup
-cp apps/web/.dev.vars.example apps/web/.dev.vars
-pnpm db:seed
-pnpm run doctor
-mise run dev
+mise run check
+pnpm test:worker
 ```
 
-The web app runs at [http://localhost:3000](http://localhost:3000).
-Sign in locally with `owner@example.test` / `Local-demo-only-2026!`.
+The Worker smoke test creates disposable local D1, Durable Object, and R2
+state. For a hosted instance, review the [Cloudwarden launch proposal](docs/cloudwarden-launch.md)
+and [deployment procedure](docs/deployment.md). Vault accounts are separate
+from the starter's demo accounts.
 
-Before deploying, run `pnpm project:init` to configure Cloudflare account and environment settings.
-See [new-project setup and fixtures](docs/new-project.md), [deployment](docs/deployment.md),
-and the [complete Projects feature](docs/feature-example.md). Product branding,
-navigation, feature switches and plan presentation live in
-`apps/web/config/product.json`.
+The original starter setup and fixtures remain documented in
+[new-project setup](docs/new-project.md) for reuse in another project.
+Cloudwarden's proposed environment configuration is already recorded in
+`apps/web/wrangler.jsonc`; its D1 IDs and remote resources are not provisioned.
 
 ## Commands
 

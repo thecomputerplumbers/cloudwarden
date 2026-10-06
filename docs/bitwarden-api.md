@@ -1,8 +1,10 @@
 # Bitwarden client API
 
-Cloudwarden serves Bitwarden-compatible routes from the Worker before vinext
-handles the starter application. It uses separate D1 accounts and sessions and
-selects one SQLite Durable Object per account for encrypted vault data. The
+Cloudwarden serves Bitwarden-compatible routes and the bundled web vault from
+the Worker; vinext serves the health route. The starter's separate Better Auth
+pages and API are not exposed by the Cloudwarden Worker. It uses D1 accounts
+and sessions, and selects one SQLite Durable Object per account for encrypted
+vault data. The
 server stores client-encrypted keys and cipher fields; it never derives or
 receives a master password.
 
