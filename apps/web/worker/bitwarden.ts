@@ -2,6 +2,7 @@ import {
   authenticatedVaultUser,
   beginVaultDeletion,
   createVaultUser,
+  createVaultStubUser,
   findVaultUser,
   findVaultUserById,
   initializeVaultPassword,
@@ -53,6 +54,7 @@ import {
 import {
   collectionResponse,
   beginOrgDeletion,
+  acceptOrgMember,
   cleanupOrgDeletion,
   confirmOrgMember,
   createOrgCipherLocator,
@@ -80,6 +82,12 @@ import {
   updateVaultCollection,
   updateVaultOrganization,
 } from "./bitwarden-org"
+import {
+  invitationMailEnabled,
+  invitationOrigin,
+  sendOrgInvite,
+  validOrgInvite,
+} from "./bitwarden-invite"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -789,11 +797,21 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       path === "/api/accounts/register/finish") &&
     method === "POST"
   ) {
-    if (!registrationsAllowed(env))
-      return failure("Registration is disabled", 403)
     const body = await bodyOf(request)
     if (!body) return failure("Invalid registration request")
     const email = stringField(body, "email")
+    const inviteToken =
+      stringField(body, "orgInviteToken") ?? stringField(body, "token")
+    const inviteMemberId = stringField(body, "organizationUserId")
+    const invitation =
+      email && inviteToken && inviteMemberId
+        ? await validOrgInvite(env, inviteToken, {
+            email,
+            memberId: inviteMemberId,
+          })
+        : null
+    if (!registrationsAllowed(env) && !invitation)
+      return failure("Registration is disabled", 403)
     const finishing = path.endsWith("/finish")
     const verification =
       finishing && email
@@ -803,7 +821,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
             normalizeEmail(email)
           )
         : null
-    if (finishing && !verification)
+    if (finishing && !verification && !invitation)
       return failure("Invalid registration token", 403)
     const authentication = field(body, "masterPasswordAuthentication") as
       | Body
@@ -839,25 +857,49 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       (unlock && normalizeEmail(email) !== stringField(unlock, "salt"))
     )
       return failure("Invalid registration fields")
-    if (await findVaultUser(env, email))
+    const existing = await findVaultUser(env, email)
+    if (
+      existing &&
+      (!invitation ||
+        existing.id !== invitation.userId ||
+        existing.passwordHash)
+    )
       return failure("Registration unavailable", 409)
     const keys = (field(body, "keys") ?? field(body, "userAsymmetricKeys")) as
       | Body
       | undefined
     try {
-      await createVaultUser(env, {
-        email,
-        name:
-          verification?.name ??
-          stringField(body, "name")?.slice(0, 50) ??
-          normalizeEmail(email),
-        masterPasswordHash: hash,
-        key,
-        privateKey: keys && stringField(keys, "encryptedPrivateKey"),
-        publicKey: keys && stringField(keys, "publicKey"),
-        kdf,
-        kdfIterations: iterations,
-      })
+      const name =
+        verification?.name ??
+        stringField(body, "name")?.slice(0, 50) ??
+        normalizeEmail(email)
+      if (invitation && existing) {
+        const privateKey = keys && stringField(keys, "encryptedPrivateKey")
+        const publicKey = keys && stringField(keys, "publicKey")
+        if (!privateKey || !publicKey)
+          return failure("Account keys are required")
+        const initialized = await initializeVaultPassword(env, existing.id, {
+          masterPasswordHash: hash,
+          key,
+          privateKey,
+          publicKey,
+          kdfIterations: iterations,
+          name,
+          emailVerified: true,
+        })
+        if (!initialized) return failure("Registration unavailable", 409)
+      } else {
+        await createVaultUser(env, {
+          email,
+          name,
+          masterPasswordHash: hash,
+          key,
+          privateKey: keys && stringField(keys, "encryptedPrivateKey"),
+          publicKey: keys && stringField(keys, "publicKey"),
+          kdf,
+          kdfIterations: iterations,
+        })
+      }
     } catch {
       return failure("Registration unavailable", 409)
     }
@@ -1406,11 +1448,28 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       : failure("Organization not found", 404)
   }
   const memberMatch =
-    /^\/api\/organizations\/([0-9a-f-]{36})\/users(?:\/(invite|[0-9a-f-]{36})(?:\/(confirm|delete))?)?$/.exec(
+    /^\/api\/organizations\/([0-9a-f-]{36})\/users(?:\/(invite|[0-9a-f-]{36})(?:\/(confirm|delete|accept|reinvite))?)?$/.exec(
       path
     )
   if (memberMatch) {
     const orgId = memberMatch[1]!
+    const memberId = memberMatch[2]
+    if (memberId && memberMatch[3] === "accept" && method === "POST") {
+      const body = await bodyOf(request)
+      const token = body && stringField(body, "token")
+      const invitation =
+        token &&
+        (await validOrgInvite(env, token, {
+          email: user.email,
+          orgId,
+          memberId,
+        }))
+      if (!invitation || invitation.userId !== user.id)
+        return failure("Invalid invitation", 403)
+      return (await acceptOrgMember(env, orgId, memberId, user.id))
+        ? new Response(null, { status: 200 })
+        : failure("Invitation is unavailable", 409)
+    }
     const membership = await getVaultMembership(env, orgId, user.id)
     if (!membership) return failure("Organization not found", 404)
     if (membership.role !== 0 && membership.role !== 1)
@@ -1460,38 +1519,99 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       const ids = collectionIds as string[]
       if (
         !accessAll &&
+        ids.length > 0 &&
         !(await validOrgCollections(env, orgId, membership, ids))
       )
         return failure("Invalid invitation collections")
+      const sending = invitationMailEnabled(env)
+      if (sending) {
+        try {
+          invitationOrigin(env)
+        } catch {
+          return failure("Invitation mail is not configured", 503)
+        }
+      }
+      const org = await getVaultOrganization(env, orgId)
+      if (!org) return failure("Organization not found", 404)
       const members = await listOrgMembers(env, orgId)
-      const targets: VaultUser[] = []
+      const targets: { email: string; user: VaultUser | null }[] = []
       for (const email of emails as string[]) {
+        const normalized = normalizeEmail(email)
+        if (
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ||
+          normalized.length > 254
+        )
+          return failure("Invalid invitation email")
         const target = await findVaultUser(env, email)
-        if (!target?.publicKey)
+        if (!sending && !target?.publicKey)
           return failure(
             "Invited account must exist and have a public key",
             400
           )
         if (
-          members.some(({ user: account }) => account.id === target.id) ||
-          targets.some((account) => account.id === target.id)
+          (target &&
+            members.some(({ user: account }) => account.id === target.id)) ||
+          targets.some((entry) => entry.email === normalized)
         )
           return failure("Account is already a member", 409)
-        targets.push(target)
+        targets.push({ email: normalized, user: target })
       }
       for (const target of targets) {
-        await inviteOrgMember(
+        const account =
+          target.user ??
+          (await createVaultStubUser(env, target.email, target.email))
+        const invited = await inviteOrgMember(
           env,
           orgId,
-          target.id,
+          account.id,
           role,
           accessAll,
-          accessAll ? [] : ids
+          accessAll ? [] : ids,
+          sending ? 0 : 1
         )
+        if (sending) {
+          try {
+            await sendOrgInvite(env, {
+              email: account.email,
+              orgId,
+              orgName: org.name,
+              memberId: invited.id,
+              userId: account.id,
+              existingUser: !!account.privateKey,
+            })
+          } catch {
+            return failure(
+              "Invitation delivery failed; retry the invitation",
+              503
+            )
+          }
+        }
       }
       return new Response(null, { status: 200 })
     }
-    const memberId = memberMatch[2]
+    if (memberId && memberMatch[3] === "reinvite" && method === "POST") {
+      if (!invitationMailEnabled(env))
+        return failure("Invitation mail is disabled", 403)
+      const org = await getVaultOrganization(env, orgId)
+      const row = (await listOrgMembers(env, orgId)).find(
+        ({ membership: member }) => member.id === memberId
+      )
+      if (!org || !row || row.membership.status !== 0)
+        return failure("Pending invitation not found", 404)
+      try {
+        await sendOrgInvite(env, {
+          email: row.user.email,
+          orgId,
+          orgName: org.name,
+          memberId,
+          userId: row.user.id,
+          existingUser: !!row.user.privateKey,
+        })
+      } catch {
+        return failure("Invitation delivery failed", 503)
+      }
+      return new Response(null, { status: 200 })
+    }
     if (memberId && !memberMatch[3] && method === "GET") {
       const member = (await listOrgMembers(env, orgId)).find(
         ({ membership: row }) => row.id === memberId

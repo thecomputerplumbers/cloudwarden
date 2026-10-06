@@ -70,12 +70,20 @@ Owners and admins can rename collections and delete empty ones. Only an owner
 can delete an organization, with a master-password check. Deletion marks the
 organization in D1, fences and clears its Durable Object, then removes D1 rows;
 the scheduled handler retries interrupted cleanup.
-An owner or admin can invite an already registered account with a public key,
-then confirm the membership using the client-wrapped organization key. Pending
-members have no vault access. Confirmed members see only assigned collections;
-removal revokes access on the next request. The current invitation flow does not
-send email, create accounts, or expose an acceptance screen, and regular members
-have read-only shared item access. Owners and admins can view member details
+An owner or admin can invite a member, then confirm the accepted membership
+using the client-wrapped organization key. Pending members have no vault
+access. Confirmed members see only assigned collections; removal revokes access
+on the next request. Set `ORG_INVITATION_EMAILS_ENABLED=true` to send signed
+seven-day invite links through the native Cloudflare Email Service binding.
+Set `APP_URL` to the canonical HTTPS vault origin and `EMAIL_FROM` to a verified
+sender before enabling it. This switch is off by default. The link opens the bundled web vault's
+acceptance screen. An unregistered invitee may create an account with the
+signed token even while public registration is disabled. The invited email is
+then marked verified; the invitee accepts before the owner can confirm the
+organization key. Failed delivery leaves the invitation pending so an owner
+can resend it. With mail disabled, an already registered account with a public
+key may still be added as an accepted member for owner confirmation. Regular
+members have read-only shared item access. Owners and admins can view member details
 and change a regular member's collection assignments. Removing an assignment
 immediately blocks shared cipher and attachment reads through that collection.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
@@ -107,7 +115,7 @@ interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. Emailed invitations, other
+response fields beyond the ones listed above. Other
 two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,

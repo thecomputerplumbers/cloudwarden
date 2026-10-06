@@ -1,8 +1,31 @@
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { setTimeout as delay } from "node:timers/promises"
 
 const origin = process.argv[2]
+const storage = process.argv[3]
 assert.ok(origin?.startsWith("http://localhost:"))
+assert.ok(storage?.startsWith("/tmp/starter-review."))
+
+async function invitationMail(email, subject) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const messages = readFileSync(`${storage}/worker.log`, "utf8")
+      .split("send_email binding called with MessageBuilder:")
+      .slice(1)
+    const match = messages
+      .reverse()
+      .find(
+        (message) =>
+          message.includes(`To: ${email}\n`) &&
+          message.includes(`Subject: ${subject}\n`)
+      )
+    const path = match?.match(/Text: (.+)\n/)?.[1]
+    if (path) return readFileSync(path, "utf8")
+    await delay(100)
+  }
+  throw new Error(`Missing local invitation for ${email}`)
+}
 
 const webVault = await fetch(origin)
 assert.equal(webVault.status, 200)
@@ -508,9 +531,137 @@ assert.deepEqual(
     .organizations,
   []
 )
+const invitedEmail = `invited-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/invite`, "POST", {
+      emails: [invitedEmail],
+      type: 2,
+      accessAll: false,
+      collections: [{ id: secondCollection.body.id }],
+    })
+  ).status,
+  200
+)
+const pendingInvite = (
+  await authorized(`/api/organizations/${orgId}/users`)
+).body.data.find((member) => member.email === invitedEmail)
+assert.equal(pendingInvite.status, 0)
+const pendingText = await invitationMail(
+  invitedEmail,
+  "Invitation to Encrypted Team Renamed"
+)
+const pendingLink = pendingText.match(/https?:\/\/\S+/)?.[0]
+assert.ok(pendingLink)
+const pendingParams = new URLSearchParams(
+  new URL(pendingLink).hash.split("?")[1]
+)
+assert.equal(pendingParams.get("orgUserHasExistingUser"), "false")
+const invitedRegistration = {
+  email: invitedEmail,
+  name: "Invited User",
+  masterPasswordHash: "invited-secret",
+  key: "2.invited-key",
+  keys: {
+    encryptedPrivateKey: "2.invited-private",
+    publicKey: "invited-public",
+  },
+  kdf: 0,
+  kdfIterations: 600_000,
+  organizationUserId: pendingInvite.id,
+  orgInviteToken: pendingParams.get("token"),
+}
+assert.equal(
+  (
+    await post("/identity/accounts/register", {
+      ...invitedRegistration,
+      orgInviteToken: `${pendingParams.get("token")}tampered`,
+    })
+  ).status,
+  409
+)
+assert.equal(
+  (await post("/identity/accounts/register", invitedRegistration)).status,
+  200
+)
+const invitedLogin = await tokenRequest(invitedEmail, "invited-secret")
+assert.equal(invitedLogin.status, 200)
+const invitedTokens = await invitedLogin.json()
+const invitedAccept = await post(
+  `/api/organizations/${orgId}/users/${pendingInvite.id}/accept`,
+  { token: pendingParams.get("token") },
+  invitedTokens.access_token
+)
+assert.equal(invitedAccept.status, 200)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${pendingInvite.id}/confirm`,
+      "POST",
+      {
+        key: "2.wrapped-invited-key",
+      }
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${invitedTokens.access_token}` },
+    })
+  ).body.profile.organizations[0].key,
+  "2.wrapped-invited-key"
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${pendingInvite.id}`,
+      "DELETE"
+    )
+  ).status,
+  200
+)
 const members = await authorized(`/api/organizations/${orgId}/users`)
 const invitee = members.body.data.find((member) => member.email === otherEmail)
-assert.equal(invitee.status, 1)
+assert.equal(invitee.status, 0)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${invitee.id}/confirm`,
+      "POST",
+      { key: "premature" }
+    )
+  ).status,
+  404
+)
+const inviteText = await invitationMail(
+  otherEmail,
+  "Invitation to Encrypted Team Renamed"
+)
+const inviteLink = inviteText.match(/https?:\/\/\S+/)?.[0]
+assert.ok(inviteLink)
+const inviteParams = new URLSearchParams(new URL(inviteLink).hash.split("?")[1])
+assert.equal(inviteParams.get("organizationUserId"), invitee.id)
+assert.equal(inviteParams.get("orgUserHasExistingUser"), "true")
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/users/${invitee.id}/accept`,
+      { token: `${inviteParams.get("token")}tampered` }
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/users/${invitee.id}/accept`,
+      { token: inviteParams.get("token") }
+    )
+  ).status,
+  200
+)
 assert.equal(
   (
     await authorized(

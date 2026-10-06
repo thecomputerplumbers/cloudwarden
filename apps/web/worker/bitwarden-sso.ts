@@ -2,7 +2,11 @@ import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import { vaultSsoFlow, vaultSsoIdentity, vaultUser } from "../db/schema/vault"
-import { tokenHash, type VaultUser } from "./bitwarden-auth"
+import {
+  createVaultStubUser,
+  tokenHash,
+  type VaultUser,
+} from "./bitwarden-auth"
 import {
   discoverVaultOidc,
   openVaultOidcRefresh,
@@ -381,29 +385,12 @@ export async function redeemVaultSso(
     )
     .get()
   if (!user) {
-    const now = new Date()
-    user = await db
-      .insert(vaultUser)
-      .values({
-        id: crypto.randomUUID(),
-        email: identity.email,
-        emailVerified: true,
-        name: identity.name ?? identity.email,
-        passwordHash: "",
-        passwordSalt: "",
-        key: "",
-        privateKey: null,
-        publicKey: null,
-        kdf: 0,
-        kdfIterations: 600_000,
-        kdfMemory: null,
-        kdfParallelism: null,
-        securityStamp: crypto.randomUUID(),
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning()
-      .get()
+    user = await createVaultStubUser(
+      env,
+      identity.email,
+      identity.name ?? identity.email,
+      true
+    )
   }
   if (!user.emailVerified)
     user = await db

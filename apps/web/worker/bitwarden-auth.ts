@@ -157,6 +157,37 @@ export async function createVaultUser(
   return user
 }
 
+export async function createVaultStubUser(
+  env: CloudflareEnv,
+  email: string,
+  name: string,
+  emailVerified = false
+) {
+  const now = new Date()
+  return drizzle(env.DB)
+    .insert(vaultUser)
+    .values({
+      id: crypto.randomUUID(),
+      email: normalizeEmail(email),
+      name,
+      emailVerified,
+      passwordHash: "",
+      passwordSalt: "",
+      key: "",
+      privateKey: null,
+      publicKey: null,
+      kdf: 0,
+      kdfIterations: 600_000,
+      kdfMemory: null,
+      kdfParallelism: null,
+      securityStamp: crypto.randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get()
+}
+
 export async function initializeVaultPassword(
   env: CloudflareEnv,
   userId: string,
@@ -166,6 +197,8 @@ export async function initializeVaultPassword(
     privateKey: string
     publicKey: string
     kdfIterations: number
+    name?: string
+    emailVerified?: boolean
   }
 ) {
   const salt = randomToken()
@@ -178,6 +211,8 @@ export async function initializeVaultPassword(
       privateKey: input.privateKey,
       publicKey: input.publicKey,
       kdfIterations: input.kdfIterations,
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.emailVerified ? { emailVerified: true } : {}),
       updatedAt: new Date(),
     })
     .where(

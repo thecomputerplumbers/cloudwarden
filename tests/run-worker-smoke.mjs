@@ -51,6 +51,10 @@ try {
       "--var",
       "SIGNUPS_ALLOWED:true",
       "--var",
+      "ORG_INVITATION_EMAILS_ENABLED:true",
+      "--var",
+      "EMAIL_FROM:cloudwarden@example.com",
+      "--var",
       "SSO_AUTHORITY:https://auth.example.test/api/auth",
       "--var",
       "SSO_CLIENT_ID:tcp-vaultwarden",
@@ -91,7 +95,7 @@ try {
   if (code !== 0) throw new Error("Worker smoke test failed")
   const vaultTest = spawn(
     process.execPath,
-    ["tests/bitwarden-smoke.mjs", origin],
+    ["tests/bitwarden-smoke.mjs", origin, storage],
     { stdio: "inherit" }
   )
   const [vaultCode] = await once(vaultTest, "exit")

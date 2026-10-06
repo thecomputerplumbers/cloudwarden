@@ -150,7 +150,8 @@ export async function inviteOrgMember(
   userId: string,
   role: number,
   accessAll: boolean,
-  collectionIds: string[]
+  collectionIds: string[],
+  status = 1
 ) {
   const db = drizzle(env.DB)
   const member: Membership = {
@@ -159,7 +160,7 @@ export async function inviteOrgMember(
     userId,
     key: null,
     role,
-    status: 1,
+    status,
     accessAll,
     createdAt: new Date(),
   }
@@ -175,6 +176,27 @@ export async function inviteOrgMember(
     ),
   ])
   return member
+}
+
+export async function acceptOrgMember(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string,
+  userId: string
+) {
+  return drizzle(env.DB)
+    .update(vaultMembership)
+    .set({ status: 1 })
+    .where(
+      and(
+        eq(vaultMembership.id, memberId),
+        eq(vaultMembership.orgId, orgId),
+        eq(vaultMembership.userId, userId),
+        eq(vaultMembership.status, 0)
+      )
+    )
+    .returning({ id: vaultMembership.id })
+    .get()
 }
 
 export async function confirmOrgMember(
