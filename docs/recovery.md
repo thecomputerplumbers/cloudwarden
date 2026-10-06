@@ -19,7 +19,11 @@ printf true | pnpm --filter web exec wrangler secret put MAINTENANCE_MODE --env 
 Omit `--env staging` for production. Wrangler deploys a new Worker version
 immediately when a secret is added or removed, so treat these as live release
 operations. Confirm that `/api/config` returns HTTP 503, and allow in-flight
-requests to drain. Then run:
+requests to drain. Vault Durable Object alarms also defer attachment deletion
+while maintenance is active; wait for any alarm already in progress to finish
+before capturing the R2 listing. Verify this behavior on the hosted staging
+Worker after toggling the secret; the local smoke suite does not prove that a
+running Durable Object has picked up a binding-only deployment. Then run:
 
 ```sh
 pnpm r2:snapshot staging /secure/offsite/cloudwarden-staging-2026-10-06

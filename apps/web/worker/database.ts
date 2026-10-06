@@ -113,6 +113,19 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async alarm() {
+    if (this.env.MAINTENANCE_MODE === "true") {
+      for (const socket of this.ctx.getWebSockets())
+        socket.close(1012, "Vault maintenance")
+      const hasPendingDeletes = !!this.db
+        .select({ key: schema.setting.key })
+        .from(schema.setting)
+        .where(like(schema.setting.key, "vault:delete:cipher:%"))
+        .limit(1)
+        .get()
+      if (hasPendingDeletes)
+        await this.ctx.storage.setAlarm(Date.now() + 60_000)
+      return
+    }
     const sockets = this.ctx.getWebSockets()
     for (const socket of sockets) {
       const attachment = socket.deserializeAttachment() as {
