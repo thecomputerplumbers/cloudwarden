@@ -113,16 +113,16 @@ const finishBody = {
   email: webEmail,
   emailVerificationToken: registrationToken,
   masterPasswordAuthentication: {
-    hash: "web-client-derived-secret",
+    masterPasswordAuthenticationHash: "web-client-derived-secret",
     salt: webEmail,
     kdf: { kdfType: 0, iterations: 600_000 },
   },
   masterPasswordUnlock: {
-    key: "2.web-encrypted-key",
+    masterKeyWrappedUserKey: "2.web-encrypted-key",
     salt: webEmail,
     kdf: { kdfType: 0, iterations: 600_000 },
   },
-  keys: {
+  userAsymmetricKeys: {
     encryptedPrivateKey: "2.web-private-key",
     publicKey: "web-public-key",
   },

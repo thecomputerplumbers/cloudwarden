@@ -119,9 +119,8 @@ This is an initial protocol implementation. Current clients may need routes or
 response fields beyond the ones listed above. Other
 two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
-implementation. Browser,
-mobile, and desktop clients have not been tested, so this cannot yet replace
-Vaultwarden.
+implementation. A browser flow has been tested, but mobile and desktop clients
+have not been tested, so this cannot yet replace Vaultwarden.
 
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
@@ -134,3 +133,11 @@ A disposable Bitwarden CLI 2026.2.0 account was also exercised against the
 local Worker through a local HTTPS proxy. Password login, sync, encrypted item
 creation and editing, folder creation, trash, and restore succeeded. This
 checks a real client but does not cover every client or API route.
+
+The bundled Vaultwarden web vault 2026.7.0 was exercised in isolated Chrome
+against a disposable HTTPS Wrangler Worker. Account creation, automatic sign-in,
+loading the vault, creating an encrypted login item, and viewing it succeeded.
+The client still requests `/api/auth-requests/pending`, which currently returns
+404; device approval has not been implemented. The upstream bundle also links
+to `/css/vaultwarden.css` without shipping that stylesheet; the main styles
+load and the tested screens rendered.

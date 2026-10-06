@@ -832,9 +832,15 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       | undefined
     const legacyHash = stringField(body, "masterPasswordHash")
     const hash =
-      (authentication && stringField(authentication, "hash")) ?? legacyHash
+      (authentication &&
+        (stringField(authentication, "masterPasswordAuthenticationHash") ??
+          stringField(authentication, "hash"))) ??
+      legacyHash
     const key =
-      (unlock && stringField(unlock, "key")) ?? stringField(body, "key")
+      (unlock &&
+        (stringField(unlock, "masterKeyWrappedUserKey") ??
+          stringField(unlock, "key"))) ??
+      stringField(body, "key")
     const kdf =
       (kdfSettings && numberField(kdfSettings, "kdfType")) ??
       numberField(body, "kdf")
