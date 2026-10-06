@@ -78,6 +78,16 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .from(schema.setting)
       .limit(1)
       .all()
+    this.db
+      .select({ id: schema.vaultCipher.id })
+      .from(schema.vaultCipher)
+      .limit(1)
+      .all()
+    this.db
+      .select({ id: schema.vaultAttachment.id })
+      .from(schema.vaultAttachment)
+      .limit(1)
+      .all()
     return { ok: true as const }
   }
 

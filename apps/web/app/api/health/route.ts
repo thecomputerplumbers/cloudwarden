@@ -9,12 +9,15 @@ import { stripeConfig } from "@/lib/stripe"
 export async function GET() {
   const durableObject = await env.APP_DATABASE.getByName("default").health()
 
-  // Cheapest possible proof that D1 is bound and migrated.
+  // Check the vault tables needed for registration and transfer recovery.
   let d1: { ok: boolean; users?: number; error?: string }
   try {
     const [row] = await getDb()
       .select({ users: sql<number>`count(*)`.as("users") })
-      .from(sql`"user"`)
+      .from(sql`"vault_user"`)
+    await getDb().run(
+      sql`select cipher_id, prepared, lease_until from vault_cipher_transfer limit 0`
+    )
     if (product.features.projects)
       await getDb().run(sql`select id, version from project limit 0`)
     d1 = { ok: true, users: Number(row?.users ?? 0) }
