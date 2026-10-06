@@ -40,15 +40,20 @@ import {
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import {
   collectionResponse,
+  createOrgCipherLocator,
   createVaultCollection,
   createVaultOrganization,
+  deleteOrgCipherLocator,
+  getOrgCipherLocator,
   getVaultMembership,
   getVaultOrganization,
   isLastVaultOwner,
+  listOrgCipherLocators,
   listVaultCollections,
   listVaultOrganizations,
   organizationResponse,
   profileOrganizationResponse,
+  validOrgCollections,
 } from "./bitwarden-org"
 
 type Body = Record<string, unknown>
@@ -108,6 +113,14 @@ function integerField(body: Body, name: string) {
     return Number.isSafeInteger(parsed) ? parsed : undefined
   }
   return undefined
+}
+
+function collectionIdsField(body: Body) {
+  const value = field(body, "collectionIds")
+  return Array.isArray(value) &&
+    value.every((id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id))
+    ? (value as string[])
+    : null
 }
 
 async function bodyOf(request: Request): Promise<Body | null> {
@@ -254,7 +267,8 @@ async function cipherResponse(
   row: CipherRow,
   vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
   userId: string,
-  origin: string
+  origin: string,
+  organization?: { id: string; collectionIds: string[] }
 ) {
   const data = JSON.parse(row.payload) as Body
   const attachments = await vault.listVaultAttachments(row.id)
@@ -266,7 +280,7 @@ async function cipherResponse(
     revisionDate: row.updatedAt.toISOString(),
     deletedDate: row.deletedAt?.toISOString() ?? null,
     reprompt: numberField(data, "reprompt") ?? 0,
-    organizationId: null,
+    organizationId: organization?.id ?? null,
     key: field(data, "key") ?? null,
     attachments: attachments.length
       ? await Promise.all(
@@ -276,7 +290,7 @@ async function cipherResponse(
         )
       : null,
     organizationUseTotp: true,
-    collectionIds: [],
+    collectionIds: organization?.collectionIds ?? [],
     name: stringField(data, "name"),
     notes: field(data, "notes") ?? null,
     fields: field(data, "fields") ?? [],
@@ -293,6 +307,44 @@ async function cipherResponse(
     viewPassword: true,
     permissions: { delete: true, restore: true },
   }
+}
+
+async function sharedCipherResponses(
+  env: CloudflareEnv,
+  userId: string,
+  origin: string
+) {
+  const organizations = await listVaultOrganizations(env, userId)
+  const responses = await Promise.all(
+    organizations.map(async ({ organization, membership }) => {
+      const allowed = new Set(
+        (await listVaultCollections(env, organization.id, membership)).map(
+          (row) => row.id
+        )
+      )
+      const locators = await listOrgCipherLocators(env, organization.id)
+      const orgVault = await env.APP_DATABASE.getByName(
+        `org:${organization.id}`
+      )
+      const ciphers = await Promise.all(
+        locators.map(async (locator) => {
+          if (!locator || !locator.collectionIds.some((id) => allowed.has(id)))
+            return null
+          const row = await orgVault.getVaultCipher(locator.id)
+          return row
+            ? cipherResponse(row, orgVault, userId, origin, {
+                id: organization.id,
+                collectionIds: locator.collectionIds.filter((id) =>
+                  allowed.has(id)
+                ),
+              })
+            : null
+        })
+      )
+      return ciphers.filter((cipher) => cipher !== null)
+    })
+  )
+  return responses.flat()
 }
 
 function folderResponse(row: { id: string; name: string; updatedAt: Date }) {
@@ -1195,11 +1247,14 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       folders: data.folders.map(folderResponse),
       collections,
       policies: [],
-      ciphers: await Promise.all(
-        data.ciphers.map((cipher) =>
-          cipherResponse(cipher, vault, user.id, url.origin)
-        )
-      ),
+      ciphers: [
+        ...(await Promise.all(
+          data.ciphers.map((cipher) =>
+            cipherResponse(cipher, vault, user.id, url.origin)
+          )
+        )),
+        ...(await sharedCipherResponses(env, user.id, url.origin)),
+      ],
       domains: {
         equivalentDomains: [],
         globalEquivalentDomains: [],
@@ -1226,13 +1281,14 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   if (path === "/api/ciphers" && method === "GET") {
     const data = await vault.listVault()
     return json(
-      list(
-        await Promise.all(
+      list([
+        ...(await Promise.all(
           data.ciphers.map((cipher) =>
             cipherResponse(cipher, vault, user.id, url.origin)
           )
-        )
-      )
+        )),
+        ...(await sharedCipherResponses(env, user.id, url.origin)),
+      ])
     )
   }
   if (
@@ -1242,8 +1298,35 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const body = await bodyOf(request)
     if (!body || !stringField(body, "name") || !numberField(body, "type"))
       return failure("Invalid cipher")
-    if (field(body, "organizationId"))
-      return failure("Organization ciphers are unavailable", 501)
+    const orgId = stringField(body, "organizationId")
+    if (orgId) {
+      const member = await getVaultMembership(env, orgId, user.id)
+      if (!member) return failure("Organization not found", 404)
+      if (member.role > 1) return failure("Cipher creation is forbidden", 403)
+      const collectionIds = collectionIdsField(body)
+      if (
+        !collectionIds ||
+        !(await validOrgCollections(env, orgId, member, collectionIds))
+      )
+        return failure("Invalid collections")
+      if (field(body, "folderId"))
+        return failure("Shared ciphers cannot have personal folders")
+      const id = crypto.randomUUID()
+      await createOrgCipherLocator(env, id, orgId, collectionIds)
+      const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
+      try {
+        const stored = await orgVault.putVaultCipher(id, JSON.stringify(body))
+        return json(
+          await cipherResponse(stored.cipher!, orgVault, user.id, url.origin, {
+            id: orgId,
+            collectionIds,
+          })
+        )
+      } catch (error) {
+        await deleteOrgCipherLocator(env, id)
+        throw error
+      }
+    }
     const folderId = stringField(body, "folderId")
     if (folderId && !(await vault.getVaultFolder(folderId)))
       return failure("Folder not found", 404)
@@ -1252,6 +1335,86 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     return json(
       await cipherResponse(stored.cipher!, vault, user.id, url.origin)
     )
+  }
+
+  const sharedCipherMatch =
+    /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore)?$/.exec(
+      path
+    )
+  if (sharedCipherMatch) {
+    const locator = await getOrgCipherLocator(env, sharedCipherMatch[1]!)
+    if (locator) {
+      const member = await getVaultMembership(env, locator.orgId, user.id)
+      const available =
+        member &&
+        new Set(
+          (await listVaultCollections(env, locator.orgId, member)).map(
+            (row) => row.id
+          )
+        )
+      const visible =
+        available && locator.collectionIds.filter((id) => available.has(id))
+      if (!visible?.length) return failure("Cipher not found", 404)
+      const orgVault = await env.APP_DATABASE.getByName(`org:${locator.orgId}`)
+      const response = async (cipher: CipherRow) =>
+        json(
+          await cipherResponse(cipher, orgVault, user.id, url.origin, {
+            id: locator.orgId,
+            collectionIds: visible,
+          })
+        )
+      if (method === "GET") {
+        const cipher = await orgVault.getVaultCipher(locator.id)
+        return cipher ? response(cipher) : failure("Cipher not found", 404)
+      }
+      if (!member || member.role > 1)
+        return failure("Cipher editing is forbidden", 403)
+      if (path.endsWith("/restore") && method === "PUT") {
+        const restored = await orgVault.restoreVaultCipher(locator.id)
+        return restored ? response(restored) : failure("Cipher not found", 404)
+      }
+      if (
+        method === "DELETE" ||
+        (method === "POST" && path.endsWith("/delete"))
+      ) {
+        const result = await orgVault.trashVaultCipher(locator.id)
+        return result.found
+          ? new Response(null, { status: 204 })
+          : failure("Cipher not found", 404)
+      }
+      if (method === "PUT" || method === "POST") {
+        const body = await bodyOf(request)
+        if (
+          !body ||
+          !stringField(body, "name") ||
+          !numberField(body, "type") ||
+          stringField(body, "organizationId") !== locator.orgId ||
+          field(body, "folderId")
+        )
+          return failure("Invalid shared cipher")
+        const collectionIds = collectionIdsField(body)
+        if (
+          !collectionIds ||
+          collectionIds.length !== locator.collectionIds.length ||
+          !collectionIds.every((id) => locator.collectionIds.includes(id))
+        )
+          return failure(
+            "Moving shared ciphers between collections is unavailable",
+            409
+          )
+        const existing = await orgVault.getVaultCipher(locator.id)
+        if (!existing) return failure("Cipher not found", 404)
+        const stored = await orgVault.putVaultCipher(
+          locator.id,
+          JSON.stringify(body),
+          undefined,
+          stringField(body, "lastKnownRevisionDate")
+        )
+        return stored.conflict
+          ? failure("Cipher was changed concurrently", 409)
+          : response(stored.cipher!)
+      }
+    }
   }
 
   const attachmentMatch =

@@ -27,6 +27,10 @@ Account deletion starts with a D1 `deletingAt` marker, then fences and clears
 the account Durable Object, removes R2 keys under both account prefixes, and
 finally deletes the D1 account. The scheduled handler retries incomplete
 cleanup. Keep authenticated and public reads from using deleting accounts.
+Shared encrypted ciphers live in an organization Durable Object selected from
+a D1 locator. Check confirmed organization membership and collection access
+from D1 before reading or mutating that object. Clients cannot select an
+arbitrary organization's object. Keep collection assignments in D1.
 
 Drizzle 1.x RC drives both, with one config each:
 

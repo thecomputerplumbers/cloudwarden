@@ -5,12 +5,75 @@ import {
   vaultCollection,
   vaultCollectionMember,
   vaultMembership,
+  vaultOrgCipher,
+  vaultOrgCipherCollection,
   vaultOrganization,
 } from "../db/schema/vault"
 
 export type Organization = typeof vaultOrganization.$inferSelect
 export type Membership = typeof vaultMembership.$inferSelect
 export type Collection = typeof vaultCollection.$inferSelect
+
+export async function getOrgCipherLocator(env: CloudflareEnv, id: string) {
+  const db = drizzle(env.DB)
+  const locator = await db
+    .select()
+    .from(vaultOrgCipher)
+    .where(eq(vaultOrgCipher.id, id))
+    .get()
+  if (!locator) return null
+  const mappings = await db
+    .select({ collectionId: vaultOrgCipherCollection.collectionId })
+    .from(vaultOrgCipherCollection)
+    .where(eq(vaultOrgCipherCollection.cipherId, id))
+    .all()
+  return { ...locator, collectionIds: mappings.map((row) => row.collectionId) }
+}
+
+export async function listOrgCipherLocators(env: CloudflareEnv, orgId: string) {
+  const ids = await drizzle(env.DB)
+    .select({ id: vaultOrgCipher.id })
+    .from(vaultOrgCipher)
+    .where(eq(vaultOrgCipher.orgId, orgId))
+    .all()
+  return Promise.all(ids.map((row) => getOrgCipherLocator(env, row.id)))
+}
+
+export async function createOrgCipherLocator(
+  env: CloudflareEnv,
+  id: string,
+  orgId: string,
+  collectionIds: string[]
+) {
+  const db = drizzle(env.DB)
+  await db.batch([
+    db.insert(vaultOrgCipher).values({ id, orgId, createdAt: new Date() }),
+    ...collectionIds.map((collectionId) =>
+      db.insert(vaultOrgCipherCollection).values({ cipherId: id, collectionId })
+    ),
+  ])
+}
+
+export async function deleteOrgCipherLocator(env: CloudflareEnv, id: string) {
+  await drizzle(env.DB)
+    .delete(vaultOrgCipher)
+    .where(eq(vaultOrgCipher.id, id))
+    .run()
+}
+
+export async function validOrgCollections(
+  env: CloudflareEnv,
+  orgId: string,
+  member: Membership,
+  ids: string[]
+) {
+  if (ids.length === 0 || ids.length > 50 || new Set(ids).size !== ids.length)
+    return false
+  const available = new Set(
+    (await listVaultCollections(env, orgId, member)).map((row) => row.id)
+  )
+  return ids.every((id) => available.has(id))
+}
 
 export async function createVaultOrganization(
   env: CloudflareEnv,

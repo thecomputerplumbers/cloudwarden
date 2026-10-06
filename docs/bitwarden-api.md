@@ -29,6 +29,11 @@ Organization creation stores client-encrypted organization keys, an owner
 membership, and a default collection in D1. Profile and sync expose the current
 member's wrapped key and available collections. Collection reads and writes
 recheck confirmed membership; only owners and admins can create collections.
+Shared cipher IDs and collection assignments live in D1; encrypted cipher data
+resides in an organization Durable Object. Sync and item routes check current
+membership and collection access before reading it. Owners and admins can create
+and edit shared ciphers. Collection moves and shared attachments are not yet
+supported.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.
@@ -41,8 +46,8 @@ interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. Shared organization ciphers,
-member invitations, the web vault, other two-factor providers and remembered
+response fields beyond the ones listed above. Member invitations, the web
+vault, other two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,
 mobile, and desktop clients have not been tested, so this cannot yet replace

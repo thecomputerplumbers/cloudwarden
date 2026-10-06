@@ -272,6 +272,51 @@ assert.equal(
   "2.encrypted-organization-key"
 )
 assert.equal(orgSync.body.collections.length, 2)
+const sharedCipherBody = {
+  type: 1,
+  name: "2.encrypted-shared-name",
+  organizationId: orgId,
+  collectionIds: [secondCollection.body.id],
+  login: { username: "2.encrypted-shared-login" },
+}
+const sharedCipher = await authorized("/api/ciphers", "POST", sharedCipherBody)
+assert.equal(sharedCipher.status, 200)
+assert.equal(sharedCipher.body.organizationId, orgId)
+assert.deepEqual(sharedCipher.body.collectionIds, [secondCollection.body.id])
+const sharedId = sharedCipher.body.id
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}`)).body.login.username,
+  "2.encrypted-shared-login"
+)
+assert.equal(
+  (await authorized("/api/sync")).body.ciphers.some(
+    (cipher) => cipher.id === sharedId
+  ),
+  true
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.equal(
+  (await otherAuthorized("/api/ciphers", sharedCipherBody)).status,
+  404
+)
+const editedShared = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+  ...sharedCipherBody,
+  name: "2.edited-shared-name",
+})
+assert.equal(editedShared.status, 200)
+assert.equal(editedShared.body.name, "2.edited-shared-name")
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}`, "DELETE")).status,
+  204
+)
+assert.ok((await authorized(`/api/ciphers/${sharedId}`)).body.deletedDate)
+assert.equal(
+  (await authorized(`/api/ciphers/${sharedId}/restore`, "PUT")).status,
+  200
+)
 assert.equal(
   (await otherAuthorized(`/api/organizations/${orgId}`, undefined, "GET"))
     .status,
