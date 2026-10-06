@@ -5,10 +5,17 @@ import { parse } from "jsonc-parser"
 import { root } from "./project-lib.mjs"
 
 const config = parse(readFileSync(resolve(root, "wrangler.jsonc"), "utf8"))
-if (config.routes?.length || config.workers_dev !== true)
-  throw new Error(
-    "One-click deployment must use workers.dev and no custom routes"
+if (config.workers_dev !== true)
+  throw new Error("One-click deployment must keep a workers.dev URL")
+if (config.routes?.length) {
+  const origin = new URL(config.vars?.APP_URL ?? "https://invalid.example")
+  if (
+    config.routes.length !== 1 ||
+    config.routes[0].custom_domain !== true ||
+    config.routes[0].pattern !== origin.host
   )
+    throw new Error("The custom domain must match APP_URL exactly")
+}
 const database = config.d1_databases?.find(
   (binding) => binding.binding === "DB"
 )
@@ -34,7 +41,8 @@ if (!/^[a-f0-9]{40}$/.test(buildId)) throw new Error("Missing Git build ID")
 artifact.name = config.name
 artifact.workers_dev = true
 artifact.preview_urls = false
-delete artifact.routes
+if (config.routes?.length) artifact.routes = config.routes
+else delete artifact.routes
 delete artifact.account_id
 artifact.vars = { ...config.vars, BUILD_ID: buildId }
 artifact.d1_databases = artifact.d1_databases.map((binding) =>
