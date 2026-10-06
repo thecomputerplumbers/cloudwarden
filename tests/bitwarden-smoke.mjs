@@ -56,6 +56,23 @@ async function notificationSocket(path) {
   return socket
 }
 
+function socketClosed(socket) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Notification socket remained open")),
+      5_000
+    )
+    socket.addEventListener(
+      "close",
+      (event) => {
+        clearTimeout(timeout)
+        resolve(event.code)
+      },
+      { once: true }
+    )
+  })
+}
+
 function decodeNotificationFrame(bytes) {
   let cursor = 0
   let length = 0
@@ -635,10 +652,15 @@ assert.equal(
   ).status,
   200
 )
+const apiNotificationSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(apiTokens.access_token)}`
+)
+const apiNotificationClosed = socketClosed(apiNotificationSocket)
 const rotatedApiKey = await authorized("/api/accounts/rotate-api-key", "POST", {
   masterPasswordHash: "client-derived-secret",
 })
 assert.equal(rotatedApiKey.status, 200)
+assert.equal(await apiNotificationClosed, 1000)
 assert.notEqual(rotatedApiKey.body.apiKey, apiKey.body.apiKey)
 assert.equal((await apiLogin(apiKey.body.apiKey)).status, 400)
 assert.equal(
