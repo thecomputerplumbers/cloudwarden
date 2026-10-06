@@ -7,7 +7,8 @@ server stores client-encrypted keys and cipher fields; it never derives or
 receives a master password.
 
 Current routes cover server configuration, legacy account registration,
-prelogin, password login, rotating refresh tokens, profile, personal vault
+prelogin, password login, master password and PBKDF2 setting changes, rotating
+refresh tokens, profile, personal vault
 sync, personal ciphers, folders, and encrypted attachments stored in private
 R2. It also supports authenticator app TOTP enrollment, login challenges,
 single-use recovery codes, and disabling the factor. TOTP codes cannot be
@@ -32,7 +33,7 @@ Vaultwarden.
 The local smoke test runs against a real Wrangler Worker with disposable D1
 and Durable Object state. It checks registration, prelogin, password login,
 token rotation, encrypted item and folder sync, attachment upload/download,
-TOTP enrollment and login, recovery, and account isolation. Run
+TOTP enrollment and login, recovery, password changes, and account isolation. Run
 `pnpm test:worker` after a build or changes to authentication and vault data.
 
 A disposable Bitwarden CLI 2026.2.0 account was also exercised against the

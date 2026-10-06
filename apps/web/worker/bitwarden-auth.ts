@@ -1,5 +1,5 @@
 import { drizzle } from "drizzle-orm/d1"
-import { eq } from "drizzle-orm"
+import { and, eq, ne } from "drizzle-orm"
 
 import { vaultSession, vaultUser } from "../db/schema/vault"
 
@@ -171,6 +171,52 @@ export async function verifyVaultPassword(
     user?.passwordSalt ?? "cloudwarden-unknown-account"
   )
   return !!user && constantTimeEqual(computed, user.passwordHash)
+}
+
+export async function updateVaultPassword(
+  env: CloudflareEnv,
+  user: VaultUser,
+  request: Request,
+  newPassword: string,
+  newKey: string,
+  kdf: { type: number; iterations: number } | null
+) {
+  const db = drizzle(env.DB)
+  const salt = randomToken()
+  const updated = await db
+    .update(vaultUser)
+    .set({
+      passwordSalt: salt,
+      passwordHash: await hashClientPassword(newPassword, salt),
+      key: newKey,
+      kdf: kdf?.type ?? user.kdf,
+      kdfIterations: kdf?.iterations ?? user.kdfIterations,
+      securityStamp: crypto.randomUUID(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(vaultUser.id, user.id),
+        eq(vaultUser.passwordHash, user.passwordHash)
+      )
+    )
+    .returning({ id: vaultUser.id })
+    .get()
+  if (!updated) return false
+  const bearer = /^Bearer ([-_A-Za-z0-9.]+)$/i.exec(
+    request.headers.get("Authorization") ?? ""
+  )?.[1]
+  if (bearer)
+    await db
+      .delete(vaultSession)
+      .where(
+        and(
+          eq(vaultSession.userId, user.id),
+          ne(vaultSession.accessHash, await tokenHash(bearer))
+        )
+      )
+      .run()
+  return true
 }
 
 export async function issueVaultSession(

@@ -333,8 +333,53 @@ const recovered = await tokenRequest(otherEmail, "second-secret", {
   two_factor_token: recovery.body.code,
 })
 assert.equal(recovered.status, 200)
-assert.equal((await tokenRequest(otherEmail, "second-secret")).status, 200)
+const recoveredTokens = await recovered.json()
+const beforeChange = await tokenRequest(otherEmail, "second-secret")
+assert.equal(beforeChange.status, 200)
+const beforeChangeTokens = await beforeChange.json()
+
+const passwordChange = (authenticationSalt) =>
+  call("/api/accounts/password", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${recoveredTokens.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      masterPasswordHash: "second-secret",
+      authenticationData: {
+        salt: authenticationSalt,
+        kdf: { kdfType: 0, iterations: 650_000 },
+        masterPasswordAuthenticationHash: "third-secret",
+      },
+      unlockData: {
+        salt: otherEmail,
+        kdf: { kdfType: 0, iterations: 650_000 },
+        masterKeyWrappedUserKey: "2.new-user-key",
+      },
+    }),
+  })
+assert.equal((await passwordChange("wrong@example.test")).status, 400)
+assert.equal((await passwordChange(otherEmail)).status, 200)
+assert.equal(
+  (
+    await call("/api/sync", {
+      headers: { Authorization: `Bearer ${beforeChangeTokens.access_token}` },
+    })
+  ).status,
+  401
+)
+assert.equal((await tokenRequest(otherEmail, "second-secret")).status, 400)
+assert.equal((await tokenRequest(otherEmail, "third-secret")).status, 200)
+const newPrelogin = await post("/identity/accounts/prelogin", {
+  email: otherEmail,
+})
+assert.equal(newPrelogin.body.kdfIterations, 650_000)
+const changedProfile = await call("/api/accounts/profile", {
+  headers: { Authorization: `Bearer ${recoveredTokens.access_token}` },
+})
+assert.equal(changedProfile.body.key, "2.new-user-key")
 
 console.log(
-  "Bitwarden auth, vault lifecycle, sync, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, password change, two-factor, and isolation passed"
 )

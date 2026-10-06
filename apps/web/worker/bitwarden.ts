@@ -5,6 +5,7 @@ import {
   issueVaultSession,
   normalizeEmail,
   refreshVaultSession,
+  updateVaultPassword,
   verifyVaultPassword,
   type VaultUser,
 } from "./bitwarden-auth"
@@ -452,7 +453,7 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       return failure("Missing credentials")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
-    const allowed = await limiter.consumeRateLimit(`login:${ip}`, 10, 60_000)
+    const allowed = await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)
     if (!allowed.allowed) return failure("Too many login attempts", 429)
     const user = await findVaultUser(env, username)
     if (!(await verifyVaultPassword(user, password)) || !user)
@@ -498,6 +499,83 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+
+  if (
+    (path === "/api/accounts/password" || path === "/api/accounts/kdf") &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request)
+    const oldPassword = body && stringField(body, "masterPasswordHash")
+    if (!oldPassword || !(await verifyVaultPassword(user, oldPassword)))
+      return failure("Invalid password", 403)
+    const authentication = body && field(body, "authenticationData")
+    const unlock = body && field(body, "unlockData")
+    let nextPassword: string | undefined
+    let nextKey: string | undefined
+    let kdf: { type: number; iterations: number } | null = null
+    if (
+      authentication &&
+      typeof authentication === "object" &&
+      !Array.isArray(authentication) &&
+      unlock &&
+      typeof unlock === "object" &&
+      !Array.isArray(unlock)
+    ) {
+      const auth = authentication as Body
+      const wrap = unlock as Body
+      const authKdf = field(auth, "kdf") as Body | undefined
+      const wrapKdf = field(wrap, "kdf") as Body | undefined
+      const authType =
+        authKdf &&
+        (numberField(authKdf, "kdfType") ?? numberField(authKdf, "kdf"))
+      const wrapType =
+        wrapKdf &&
+        (numberField(wrapKdf, "kdfType") ?? numberField(wrapKdf, "kdf"))
+      const authIterations =
+        authKdf &&
+        (numberField(authKdf, "iterations") ??
+          numberField(authKdf, "kdfIterations"))
+      const wrapIterations =
+        wrapKdf &&
+        (numberField(wrapKdf, "iterations") ??
+          numberField(wrapKdf, "kdfIterations"))
+      if (
+        stringField(auth, "salt") !== user.email ||
+        stringField(wrap, "salt") !== user.email ||
+        authType !== wrapType ||
+        authIterations !== wrapIterations ||
+        authType !== 0 ||
+        !authIterations ||
+        authIterations < 100_000 ||
+        authIterations > 2_000_000
+      )
+        return failure("Invalid KDF settings")
+      nextPassword = stringField(auth, "masterPasswordAuthenticationHash")
+      nextKey = stringField(wrap, "masterKeyWrappedUserKey")
+      kdf = { type: authType, iterations: authIterations }
+    } else if (path === "/api/accounts/password") {
+      nextPassword = body && stringField(body, "newMasterPasswordHash")
+      nextKey = body && stringField(body, "key")
+    }
+    if (
+      !nextPassword ||
+      nextPassword.length > 1024 ||
+      !nextKey ||
+      nextKey.length > 20_000
+    )
+      return failure("Invalid password change fields")
+    const updated = await updateVaultPassword(
+      env,
+      user,
+      request,
+      nextPassword,
+      nextKey,
+      kdf
+    )
+    return updated
+      ? new Response(null, { status: 200 })
+      : failure("Account changed", 409)
+  }
 
   if (path === "/api/two-factor" && method === "GET")
     return json({
