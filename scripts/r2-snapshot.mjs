@@ -108,9 +108,15 @@ export async function verifySnapshot(directory) {
       !/^[a-f0-9]{64}$/.test(object.sha256)
     )
       throw new Error("Invalid snapshot object entry")
-    const path = join(directory, "objects", object.key)
+    const parts = ["objects", ...object.key.split("/")]
+    let path = directory
+    for (const [index, part] of parts.entries()) {
+      path = join(path, part)
+      const entry = lstatSync(path)
+      if (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())
+        throw new Error(`Snapshot object failed verification: ${object.key}`)
+    }
     if (
-      !lstatSync(path).isFile() ||
       statSync(path).size !== object.size ||
       (await hashFile(path)) !== object.sha256
     )

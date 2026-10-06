@@ -4,12 +4,14 @@ import { createHash } from "node:crypto"
 import {
   chmodSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import {
   createSnapshot,
   safeKey,
@@ -92,4 +94,30 @@ if (args[1] === "list-objects-v2") {
     readFileSync(join(destination, "manifest.json"), "utf8"),
     /cloudwarden-r2-snapshot-v1/
   )
+})
+
+test("R2 snapshot verification rejects symlinked object directories", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "cloudwarden-r2-symlink-"))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const snapshot = join(directory, "snapshot")
+  const outside = join(directory, "outside")
+  mkdirSync(snapshot)
+  mkdirSync(dirname(join(outside, key)), { recursive: true })
+  const bytes = Buffer.from("attachment outside snapshot")
+  writeFileSync(join(outside, key), bytes)
+  symlinkSync(outside, join(snapshot, "objects"))
+  writeFileSync(
+    join(snapshot, "manifest.json"),
+    JSON.stringify({
+      format: "cloudwarden-r2-snapshot-v1",
+      objects: [
+        {
+          key,
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+      ],
+    })
+  )
+  await assert.rejects(() => verifySnapshot(snapshot), /verification/)
 })
