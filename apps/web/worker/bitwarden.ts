@@ -39,6 +39,10 @@ import {
 } from "./bitwarden-send"
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import {
+  issueRegistrationToken,
+  verifyRegistrationToken,
+} from "./bitwarden-register"
+import {
   collectionResponse,
   beginOrgDeletion,
   cleanupOrgDeletion,
@@ -652,8 +656,53 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
   }
 
   if (
+    (path === "/identity/accounts/register/send-verification-email" ||
+      path === "/api/accounts/register/send-verification-email") &&
+    method === "POST"
+  ) {
+    if (!registrationsAllowed(env))
+      return failure("Registration is disabled", 403)
+    const body = await bodyOf(request)
+    const email = body && stringField(body, "email")
+    const name = body && stringField(body, "name")
+    if (
+      !email ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      email.length > 254 ||
+      (name && name.length > 50)
+    )
+      return failure("Invalid registration request")
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+    const limiter = await env.APP_DATABASE.getByName(
+      "bitwarden-registration-rates"
+    )
+    const allowed = await limiter.consumeRateLimit(
+      `start:${ip}`,
+      10,
+      60 * 60_000
+    )
+    if (!allowed.allowed) return failure("Too many registration attempts", 429)
+    if (await findVaultUser(env, email))
+      return failure("Registration unavailable", 409)
+    const token = await issueRegistrationToken(
+      env,
+      normalizeEmail(email),
+      name ?? null
+    )
+    return request.headers.get("Accept")?.includes("application/json")
+      ? json(token)
+      : new Response(token, {
+          headers: {
+            "Content-Type": "text/plain",
+            "Cache-Control": "no-store",
+          },
+        })
+  }
+  if (
     (path === "/identity/accounts/register" ||
-      path === "/api/accounts/register") &&
+      path === "/api/accounts/register" ||
+      path === "/identity/accounts/register/finish" ||
+      path === "/api/accounts/register/finish") &&
     method === "POST"
   ) {
     if (!registrationsAllowed(env))
@@ -661,6 +710,17 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     const body = await bodyOf(request)
     if (!body) return failure("Invalid registration request")
     const email = stringField(body, "email")
+    const finishing = path.endsWith("/finish")
+    const verification =
+      finishing && email
+        ? await verifyRegistrationToken(
+            env,
+            stringField(body, "emailVerificationToken") ?? "",
+            normalizeEmail(email)
+          )
+        : null
+    if (finishing && !verification)
+      return failure("Invalid registration token", 403)
     const authentication = field(body, "masterPasswordAuthentication") as
       | Body
       | undefined
@@ -703,7 +763,10 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
     try {
       await createVaultUser(env, {
         email,
-        name: stringField(body, "name")?.slice(0, 50) ?? normalizeEmail(email),
+        name:
+          verification?.name ??
+          stringField(body, "name")?.slice(0, 50) ??
+          normalizeEmail(email),
         masterPasswordHash: hash,
         key,
         privateKey: keys && stringField(keys, "encryptedPrivateKey"),

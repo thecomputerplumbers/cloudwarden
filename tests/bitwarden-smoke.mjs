@@ -4,6 +4,14 @@ import { createHmac } from "node:crypto"
 const origin = process.argv[2]
 assert.ok(origin?.startsWith("http://localhost:"))
 
+const webVault = await fetch(origin)
+assert.equal(webVault.status, 200)
+const webVaultHtml = await webVault.text()
+assert.match(webVaultHtml, /<title page-title>Vaultwarden Web<\/title>/)
+const webVaultScript = /src="(app\/main\.[^"]+\.js)"/.exec(webVaultHtml)?.[1]
+assert.ok(webVaultScript)
+assert.equal((await fetch(`${origin}/${webVaultScript}`)).status, 200)
+
 async function call(path, options = {}) {
   const response = await fetch(`${origin}${path}`, options)
   const text = await response.text()
@@ -40,6 +48,54 @@ const registration = await post("/identity/accounts/register", {
   kdfIterations: 600_000,
 })
 assert.equal(registration.status, 200)
+
+const webEmail = `web-${crypto.randomUUID()}@example.test`
+const registrationStart = await fetch(
+  `${origin}/identity/accounts/register/send-verification-email`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ email: webEmail, name: "Web Test" }),
+  }
+)
+assert.equal(registrationStart.status, 200)
+const registrationToken = await registrationStart.json()
+assert.equal(typeof registrationToken, "string")
+const finishBody = {
+  email: webEmail,
+  emailVerificationToken: registrationToken,
+  masterPasswordAuthentication: {
+    hash: "web-client-derived-secret",
+    salt: webEmail,
+    kdf: { kdfType: 0, iterations: 600_000 },
+  },
+  masterPasswordUnlock: {
+    key: "2.web-encrypted-key",
+    salt: webEmail,
+    kdf: { kdfType: 0, iterations: 600_000 },
+  },
+  keys: {
+    encryptedPrivateKey: "2.web-private-key",
+    publicKey: "web-public-key",
+  },
+}
+assert.equal(
+  (
+    await post("/identity/accounts/register/finish", {
+      ...finishBody,
+      emailVerificationToken: `${registrationToken}tampered`,
+    })
+  ).status,
+  403
+)
+assert.equal(
+  (await post("/identity/accounts/register/finish", finishBody)).status,
+  200
+)
+assert.equal(
+  (await post("/identity/accounts/register/finish", finishBody)).status,
+  409
+)
 
 const prelogin = await post("/identity/accounts/prelogin", { email })
 assert.equal(prelogin.status, 200)

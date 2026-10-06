@@ -23,6 +23,7 @@ dist
 
 # turbo
 .turbo
+.cache/
 
 # misc
 .DS_Store

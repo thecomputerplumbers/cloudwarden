@@ -6,7 +6,16 @@ selects one SQLite Durable Object per account for encrypted vault data. The
 server stores client-encrypted keys and cipher fields; it never derives or
 receives a master password.
 
+Production builds download the pinned Vaultwarden web vault v2026.7.0 release,
+verify its SHA-256 checksum, and package its static files at `/`. The release
+is from [Vaultwarden's web vault builds](https://github.com/dani-garcia/bw_web_builds/tree/v2026.7.0)
+under GPL-3.0; `web-vault-source.txt` ships with the assets. The archive is
+cached under `apps/web/.cache/` for repeat builds. The web vault requires HTTPS
+even on localhost. Its static loading is verified locally, but signup and vault
+use in a browser still need testing on a trusted HTTPS deployment.
+
 Current routes cover server configuration, legacy account registration,
+the web vault's start/finish registration flow with a short-lived signed token,
 prelogin, password login, master password and PBKDF2 setting changes, rotating
 refresh tokens, profile and asymmetric key updates, personal vault sync,
 personal ciphers, folders, encrypted text and file Sends with public password
@@ -58,8 +67,8 @@ interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. Emailed invitations and the web
-vault, other two-factor providers and remembered
+response fields beyond the ones listed above. Emailed invitations, other
+two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,
 mobile, and desktop clients have not been tested, so this cannot yet replace

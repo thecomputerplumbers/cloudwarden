@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "vinext build && node scripts/install-web-vault.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json --persist-to .wrangler/state",
     "cf:typegen": "wrangler types --env-interface CloudflareEnv worker-env.d.ts",
     "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.do.config.ts",
