@@ -328,6 +328,93 @@ assert.deepEqual(
 )
 assert.equal(
   (
+    await otherAuthorized("/api/accounts/keys", {
+      encryptedPrivateKey: "2.other-private-key",
+      publicKey: "other-public-key",
+    })
+  ).status,
+  200
+)
+const otherUserId = otherSync.body.profile.id
+assert.equal(
+  (await authorized(`/api/users/${otherUserId}/public-key`)).body.publicKey,
+  "other-public-key"
+)
+const invitation = await authorized(
+  `/api/organizations/${orgId}/users/invite`,
+  "POST",
+  {
+    emails: [otherEmail],
+    type: 2,
+    accessAll: false,
+    collections: [
+      { id: secondCollection.body.id, readOnly: false, hidePasswords: false },
+    ],
+  }
+)
+assert.equal(invitation.status, 200)
+assert.deepEqual(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.profile
+    .organizations,
+  []
+)
+const members = await authorized(`/api/organizations/${orgId}/users`)
+const invitee = members.body.data.find((member) => member.email === otherEmail)
+assert.equal(invitee.status, 1)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${invitee.id}/confirm`,
+      "POST",
+      {
+        key: "2.encrypted-key-for-other",
+      }
+    )
+  ).status,
+  200
+)
+const memberSync = await otherAuthorized("/api/sync", undefined, "GET")
+assert.equal(
+  memberSync.body.profile.organizations[0].key,
+  "2.encrypted-key-for-other"
+)
+assert.deepEqual(
+  memberSync.body.collections.map((collection) => collection.id),
+  [secondCollection.body.id]
+)
+assert.equal(
+  memberSync.body.ciphers.some((cipher) => cipher.id === sharedId),
+  true
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, sharedCipherBody, "PUT"))
+    .status,
+  403
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${invitee.id}`,
+      "DELETE"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")).status,
+  404
+)
+assert.deepEqual(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.profile
+    .organizations,
+  []
+)
+assert.equal(
+  (
     await authorized("/api/accounts/delete", "POST", {
       masterPasswordHash: "client-derived-secret",
     })

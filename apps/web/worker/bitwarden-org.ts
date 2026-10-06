@@ -8,11 +8,92 @@ import {
   vaultOrgCipher,
   vaultOrgCipherCollection,
   vaultOrganization,
+  vaultUser,
 } from "../db/schema/vault"
 
 export type Organization = typeof vaultOrganization.$inferSelect
 export type Membership = typeof vaultMembership.$inferSelect
 export type Collection = typeof vaultCollection.$inferSelect
+
+export async function listOrgMembers(env: CloudflareEnv, orgId: string) {
+  return drizzle(env.DB)
+    .select({ membership: vaultMembership, user: vaultUser })
+    .from(vaultMembership)
+    .innerJoin(vaultUser, eq(vaultUser.id, vaultMembership.userId))
+    .where(eq(vaultMembership.orgId, orgId))
+    .all()
+}
+
+export async function inviteOrgMember(
+  env: CloudflareEnv,
+  orgId: string,
+  userId: string,
+  role: number,
+  accessAll: boolean,
+  collectionIds: string[]
+) {
+  const db = drizzle(env.DB)
+  const member: Membership = {
+    id: crypto.randomUUID(),
+    orgId,
+    userId,
+    key: null,
+    role,
+    status: 1,
+    accessAll,
+    createdAt: new Date(),
+  }
+  await db.batch([
+    db.insert(vaultMembership).values(member),
+    ...collectionIds.map((collectionId) =>
+      db.insert(vaultCollectionMember).values({
+        collectionId,
+        membershipId: member.id,
+        readOnly: false,
+        hidePasswords: false,
+      })
+    ),
+  ])
+  return member
+}
+
+export async function confirmOrgMember(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string,
+  key: string
+) {
+  return drizzle(env.DB)
+    .update(vaultMembership)
+    .set({ key, status: 2 })
+    .where(
+      and(
+        eq(vaultMembership.id, memberId),
+        eq(vaultMembership.orgId, orgId),
+        eq(vaultMembership.status, 1)
+      )
+    )
+    .returning()
+    .get()
+}
+
+export async function removeOrgMember(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string
+) {
+  return drizzle(env.DB)
+    .delete(vaultMembership)
+    .where(
+      and(
+        eq(vaultMembership.id, memberId),
+        eq(vaultMembership.orgId, orgId),
+        eq(vaultMembership.role, 2)
+      )
+    )
+    .returning()
+    .get()
+}
 
 export async function getOrgCipherLocator(env: CloudflareEnv, id: string) {
   const db = drizzle(env.DB)

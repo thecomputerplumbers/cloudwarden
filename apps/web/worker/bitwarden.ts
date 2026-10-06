@@ -40,6 +40,7 @@ import {
 import { cleanupVaultDeletion } from "./bitwarden-delete"
 import {
   collectionResponse,
+  confirmOrgMember,
   createOrgCipherLocator,
   createVaultCollection,
   createVaultOrganization,
@@ -48,11 +49,14 @@ import {
   getVaultMembership,
   getVaultOrganization,
   isLastVaultOwner,
+  inviteOrgMember,
   listOrgCipherLocators,
+  listOrgMembers,
   listVaultCollections,
   listVaultOrganizations,
   organizationResponse,
   profileOrganizationResponse,
+  removeOrgMember,
   validOrgCollections,
 } from "./bitwarden-org"
 
@@ -371,6 +375,7 @@ export function isBitwardenPath(path: string) {
     path === "/api/sync" ||
     path === "/api/organizations" ||
     path.startsWith("/api/organizations/") ||
+    path.startsWith("/api/users/") ||
     path === "/api/settings/domains" ||
     path === "/api/ciphers" ||
     path.startsWith("/api/ciphers/") ||
@@ -1077,6 +1082,119 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       publicKey: publicKey ?? null,
     })
     return json(organizationResponse(created.org))
+  }
+  const publicKeyMatch = /^\/api\/users\/([0-9a-f-]{36})\/public-key$/.exec(
+    path
+  )
+  if (publicKeyMatch && method === "GET") {
+    const target = await findVaultUserById(env, publicKeyMatch[1]!)
+    return target?.publicKey
+      ? json({
+          userId: target.id,
+          publicKey: target.publicKey,
+          object: "userKey",
+        })
+      : failure("Public key not found", 404)
+  }
+  const memberMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/users(?:\/(invite|[0-9a-f-]{36})(?:\/(confirm|delete))?)?$/.exec(
+      path
+    )
+  if (memberMatch) {
+    const orgId = memberMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role !== 0 && membership.role !== 1)
+      return failure("Organization management is forbidden", 403)
+    if (!memberMatch[2] && method === "GET") {
+      const members = await listOrgMembers(env, orgId)
+      return json(
+        list(
+          members.map(({ membership: member, user: account }) => ({
+            id: member.id,
+            userId: account.id,
+            email: account.email,
+            name: account.name,
+            type: member.role,
+            status: member.status,
+            accessAll: member.accessAll,
+            collections: [],
+            object: "organizationUserUserDetails",
+          }))
+        )
+      )
+    }
+    if (memberMatch[2] === "invite" && method === "POST") {
+      const body = await bodyOf(request)
+      const emails = body && field(body, "emails")
+      const role = body && integerField(body, "type")
+      const accessAll = !!body && field(body, "accessAll") === true
+      const collectionData = body && field(body, "collections")
+      const collectionIds = Array.isArray(collectionData)
+        ? collectionData.map((item) =>
+            item && typeof item === "object"
+              ? stringField(item as Body, "id")
+              : undefined
+          )
+        : []
+      if (
+        !Array.isArray(emails) ||
+        emails.length === 0 ||
+        emails.length > 20 ||
+        !emails.every((email) => typeof email === "string") ||
+        role !== 2 ||
+        collectionIds.some((id) => !id)
+      )
+        return failure("Invalid invitation")
+      const ids = collectionIds as string[]
+      if (
+        !accessAll &&
+        !(await validOrgCollections(env, orgId, membership, ids))
+      )
+        return failure("Invalid invitation collections")
+      const members = await listOrgMembers(env, orgId)
+      const targets: VaultUser[] = []
+      for (const email of emails as string[]) {
+        const target = await findVaultUser(env, email)
+        if (!target?.publicKey)
+          return failure(
+            "Invited account must exist and have a public key",
+            400
+          )
+        if (
+          members.some(({ user: account }) => account.id === target.id) ||
+          targets.some((account) => account.id === target.id)
+        )
+          return failure("Account is already a member", 409)
+        targets.push(target)
+      }
+      for (const target of targets) {
+        await inviteOrgMember(
+          env,
+          orgId,
+          target.id,
+          role,
+          accessAll,
+          accessAll ? [] : ids
+        )
+      }
+      return new Response(null, { status: 200 })
+    }
+    const memberId = memberMatch[2]
+    if (memberId && memberMatch[3] === "confirm" && method === "POST") {
+      const body = await bodyOf(request)
+      const key = body && stringField(body, "key")
+      if (!key || key.length > 20_000)
+        return failure("Invalid organization key")
+      return (await confirmOrgMember(env, orgId, memberId, key))
+        ? new Response(null, { status: 200 })
+        : failure("Pending member not found", 404)
+    }
+    if (memberId && !memberMatch[3] && method === "DELETE") {
+      return (await removeOrgMember(env, orgId, memberId))
+        ? new Response(null, { status: 200 })
+        : failure("Member not found", 404)
+    }
   }
   const organizationMatch =
     /^\/api\/organizations\/([0-9a-f-]{36})(?:\/collections(?:\/([0-9a-f-]{36}))?)?$/.exec(

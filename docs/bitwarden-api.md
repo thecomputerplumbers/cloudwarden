@@ -34,6 +34,12 @@ resides in an organization Durable Object. Sync and item routes check current
 membership and collection access before reading it. Owners and admins can create
 and edit shared ciphers. Collection moves and shared attachments are not yet
 supported.
+An owner or admin can invite an already registered account with a public key,
+then confirm the membership using the client-wrapped organization key. Pending
+members have no vault access. Confirmed members see only assigned collections;
+removal revokes access on the next request. The current invitation flow does not
+send email, create accounts, or expose an acceptance screen, and regular members
+have read-only shared item access.
 Set `ORG_CREATION_USERS` to a comma-separated list of account emails to restrict
 who can create organizations. An owner cannot delete their account while they
 are the only active owner of an organization.
@@ -46,7 +52,7 @@ interrupted cleanup. The vault object retains a deletion fence so an in-flight
 request cannot repopulate it after cleanup.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. Member invitations, the web
+response fields beyond the ones listed above. Emailed invitations and the web
 vault, other two-factor providers and remembered
 devices, account recovery, notifications, and import/export still need
 implementation. Browser,
