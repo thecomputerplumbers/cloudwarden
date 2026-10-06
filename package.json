@@ -17,6 +17,7 @@
     "test:cli": "node tests/bitwarden-cli-smoke.mjs",
     "project:init": "node scripts/init-project.mjs",
     "r2:snapshot": "node scripts/r2-snapshot.mjs",
+    "r2:restore": "node scripts/r2-restore.mjs",
     "do:recovery": "node scripts/do-recovery.mjs",
     "doctor": "node scripts/doctor.mjs",
     "db:seed": "node scripts/local-data.mjs seed",

@@ -26,7 +26,7 @@ export function safeKey(key) {
   )
 }
 
-function command(args, { capture = false } = {}) {
+export function command(args, { capture = false } = {}) {
   const result = spawnSync("aws", args, {
     cwd: root,
     encoding: capture ? "utf8" : undefined,
@@ -38,14 +38,14 @@ function command(args, { capture = false } = {}) {
   return result.stdout
 }
 
-async function hashFile(path) {
+export async function hashFile(path) {
   const { createReadStream } = await import("node:fs")
   const hash = createHash("sha256")
   for await (const chunk of createReadStream(path)) hash.update(chunk)
   return hash.digest("hex")
 }
 
-async function listObjects(bucket, endpoint) {
+export async function listObjects(bucket, endpoint) {
   const objects = []
   let token
   do {

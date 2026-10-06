@@ -76,10 +76,22 @@ pnpm --filter web exec wrangler secret delete MAINTENANCE_MODE --env staging
    transition remains unverified on a hosted Worker**. Local Durable Objects
    cannot exercise the PITR log.
 
-4. Copy the verified snapshot objects into the target R2 bucket using a scoped
-   operator credential, then compare object count, keys, and sizes with the
-   manifest. Test a Bitwarden client login, encrypted item sync, and attachment
-   download against the recovered staging deployment.
+4. Provide a scoped R2 write credential through `AWS_ACCESS_KEY_ID` and
+   `AWS_SECRET_ACCESS_KEY`. Preview the target bucket, then apply the restore
+   while the Worker remains in maintenance mode:
+
+   ```sh
+   pnpm r2:restore staging /secure/offsite/cloudwarden-staging-2026-10-06
+   pnpm r2:restore staging /secure/offsite/cloudwarden-staging-2026-10-06 --apply
+   ```
+
+   The command verifies the local snapshot and its account, environment, and
+   bucket before writing. It refuses a bucket with keys outside the snapshot,
+   uploads the snapshot objects, then downloads every object again to check
+   its size and SHA-256 hash. It does not delete R2 objects. If any check fails,
+   leave maintenance mode enabled and investigate before exposing the vault.
+   Test a Bitwarden client login, encrypted item sync, and attachment download
+   against the recovered staging deployment after clearing maintenance mode.
 
 R2 object deletion has no built-in rollback through D1 or Durable Object PITR.
 The snapshot includes file Sends and may preserve data after a user deletes it;
