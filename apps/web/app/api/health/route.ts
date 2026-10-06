@@ -9,7 +9,8 @@ import { stripeConfig } from "@/lib/stripe"
 export async function GET() {
   const durableObject = await env.APP_DATABASE.getByName("default").health()
 
-  // Check the vault tables needed for registration and transfer recovery.
+  // Check the vault tables and columns required by live authentication and
+  // resumable cross-store operations before declaring a deployment healthy.
   let d1: { ok: boolean; users?: number; error?: string }
   try {
     const [row] = await getDb()
@@ -18,6 +19,13 @@ export async function GET() {
     await getDb().run(
       sql`select cipher_id, prepared, lease_until from vault_cipher_transfer limit 0`
     )
+    await getDb().run(
+      sql`select api_key, api_key_hash from vault_session limit 0`
+    )
+    await getDb().run(
+      sql`select user_id, secret_hash, sealed_secret from vault_api_key limit 0`
+    )
+    await getDb().run(sql`select id, lease_until from vault_org_import limit 0`)
     if (product.features.projects)
       await getDb().run(sql`select id, version from project limit 0`)
     d1 = { ok: true, users: Number(row?.users ?? 0) }
