@@ -99,6 +99,17 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     }
   }
 
+  async vaultRevision() {
+    const ciphers = this.db.select().from(schema.vaultCipher).all()
+    const folders = this.db.select().from(schema.vaultFolder).all()
+    let latest = 0
+    for (const cipher of ciphers)
+      latest = Math.max(latest, cipher.updatedAt.getTime())
+    for (const folder of folders)
+      latest = Math.max(latest, folder.updatedAt.getTime())
+    return latest
+  }
+
   async getVaultCipher(id: string) {
     return (
       this.db
@@ -109,7 +120,12 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     )
   }
 
-  async putVaultCipher(id: string, payload: string, expectedRevision?: number) {
+  async putVaultCipher(
+    id: string,
+    payload: string,
+    expectedRevision?: number,
+    lastKnownRevisionDate?: string
+  ) {
     if (!id || payload.length > 1_000_000) throw new Error("Invalid cipher")
     const now = new Date()
     const existing = this.db
@@ -118,6 +134,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .where(eq(schema.vaultCipher.id, id))
       .get()
     if (existing) {
+      if (lastKnownRevisionDate) {
+        const knownTime = Date.parse(lastKnownRevisionDate)
+        if (
+          !Number.isFinite(knownTime) ||
+          existing.updatedAt.getTime() - knownTime > 1000
+        )
+          return { conflict: true as const, cipher: existing }
+      }
       if (
         expectedRevision !== undefined &&
         expectedRevision !== existing.revision
@@ -175,6 +199,27 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return { found: true as const, conflict: !cipher }
   }
 
+  async restoreVaultCipher(id: string) {
+    const existing = this.db
+      .select()
+      .from(schema.vaultCipher)
+      .where(eq(schema.vaultCipher.id, id))
+      .get()
+    if (!existing) return null
+    return (
+      this.db
+        .update(schema.vaultCipher)
+        .set({
+          revision: existing.revision + 1,
+          deletedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.vaultCipher.id, id))
+        .returning()
+        .get() ?? null
+    )
+  }
+
   async getVaultFolder(id: string) {
     return (
       this.db
@@ -225,10 +270,30 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   }
 
   async deleteVaultFolder(id: string) {
-    return !!this.db
+    const deleted = !!this.db
       .delete(schema.vaultFolder)
       .where(eq(schema.vaultFolder.id, id))
       .returning({ id: schema.vaultFolder.id })
       .get()
+    if (!deleted) return false
+    for (const cipher of this.db.select().from(schema.vaultCipher).all()) {
+      const payload = JSON.parse(cipher.payload) as Record<string, unknown>
+      const folderKey = Object.keys(payload).find(
+        (key) => key.toLowerCase() === "folderid"
+      )
+      if (folderKey && payload[folderKey] === id) {
+        payload[folderKey] = null
+        this.db
+          .update(schema.vaultCipher)
+          .set({
+            payload: JSON.stringify(payload),
+            revision: cipher.revision + 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.vaultCipher.id, cipher.id))
+          .run()
+      }
+    }
+    return true
   }
 }

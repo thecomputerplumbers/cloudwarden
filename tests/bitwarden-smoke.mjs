@@ -95,6 +95,43 @@ assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
 assert.equal(sync.body.ciphers[0].login.username, "2.encrypted-login")
 
+const updatedCipher = await authorized(`/api/ciphers/${cipherId}`, "PUT", {
+  type: 1,
+  name: "2.updated-name",
+  folderId: createdFolder.body.id,
+  lastKnownRevisionDate: createdCipher.body.revisionDate,
+})
+assert.equal(updatedCipher.status, 200)
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${cipherId}`, "PUT", {
+      type: 1,
+      name: "2.stale-name",
+      lastKnownRevisionDate: "2020-01-01T00:00:00.000Z",
+    })
+  ).status,
+  409
+)
+assert.equal(
+  (await authorized(`/api/folders/${createdFolder.body.id}`, "DELETE")).status,
+  204
+)
+assert.equal((await authorized(`/api/ciphers/${cipherId}`)).body.folderId, null)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}`, "DELETE")).status,
+  204
+)
+assert.ok((await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}/restore`, "PUT")).status,
+  200
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate,
+  null
+)
+assert.match((await authorized("/api/accounts/revision-date")).body, /^20/)
+
 const refreshed = await fetch(`${origin}/identity/connect/token`, {
   method: "POST",
   headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -139,6 +176,4 @@ const otherSync = await call("/api/sync", {
 assert.deepEqual(otherSync.body.ciphers, [])
 assert.deepEqual(otherSync.body.folders, [])
 
-console.log(
-  "Bitwarden account, token rotation, vault sync, and isolation passed"
-)
+console.log("Bitwarden auth, vault lifecycle, sync, and isolation passed")

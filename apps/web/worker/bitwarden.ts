@@ -175,7 +175,11 @@ export function isBitwardenPath(path: string) {
   return (
     path.startsWith("/identity/") ||
     path === "/api/config" ||
+    path === "/api/alive" ||
+    path === "/api/now" ||
+    path === "/api/version" ||
     path === "/api/sync" ||
+    path === "/api/settings/domains" ||
     path === "/api/ciphers" ||
     path.startsWith("/api/ciphers/") ||
     path === "/api/folders" ||
@@ -208,6 +212,11 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       object: "config",
     })
   }
+
+  if (path === "/api/alive" && method === "GET") return json(true)
+  if (path === "/api/now" && method === "GET")
+    return json(new Date().toISOString())
+  if (path === "/api/version" && method === "GET") return json("2026.6.0")
 
   if (
     (path === "/identity/accounts/prelogin" ||
@@ -338,6 +347,18 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
 
   if (path === "/api/accounts/profile" && method === "GET")
     return json(profile(user))
+  if (path === "/api/accounts/revision-date" && method === "GET")
+    return json(
+      new Date(
+        Math.max(user.updatedAt.getTime(), await vault.vaultRevision())
+      ).toISOString()
+    )
+  if (path === "/api/settings/domains" && method === "GET")
+    return json({
+      equivalentDomains: [],
+      globalEquivalentDomains: [],
+      object: "domains",
+    })
   if (path === "/api/sync" && method === "GET") {
     const data = await vault.listVault()
     return json({
@@ -382,12 +403,17 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
       return failure("Invalid cipher")
     if (field(body, "organizationId"))
       return failure("Organization ciphers are unavailable", 501)
+    const folderId = stringField(body, "folderId")
+    if (folderId && !(await vault.getVaultFolder(folderId)))
+      return failure("Folder not found", 404)
     const id = crypto.randomUUID()
     const stored = await vault.putVaultCipher(id, JSON.stringify(body))
     return json(cipherResponse(stored.cipher!), 201)
   }
   const cipherMatch =
-    /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete)?$/.exec(path)
+    /^\/api\/ciphers\/([0-9a-f-]{36})(?:\/details|\/delete|\/restore|\/partial)?$/.exec(
+      path
+    )
   if (cipherMatch) {
     const id = cipherMatch[1]!
     if (method === "GET") {
@@ -396,13 +422,47 @@ export async function handleBitwarden(request: Request, env: CloudflareEnv) {
         ? json(cipherResponse(cipher))
         : failure("Cipher not found", 404)
     }
-    if (method === "PUT" || method === "POST") {
+    if (path.endsWith("/restore") && method === "PUT") {
+      const restored = await vault.restoreVaultCipher(id)
+      return restored
+        ? json(cipherResponse(restored))
+        : failure("Cipher not found", 404)
+    }
+    if (path.endsWith("/partial") && (method === "PUT" || method === "POST")) {
+      const body = await bodyOf(request)
+      const existing = await vault.getVaultCipher(id)
+      if (!existing) return failure("Cipher not found", 404)
+      if (!body) return failure("Invalid cipher")
+      const folderId = stringField(body, "folderId")
+      if (folderId && !(await vault.getVaultFolder(folderId)))
+        return failure("Folder not found", 404)
+      const payload = JSON.parse(existing.payload) as Body
+      payload.folderId = field(body, "folderId") ?? null
+      payload.favorite = field(body, "favorite") === true
+      const stored = await vault.putVaultCipher(
+        id,
+        JSON.stringify(payload),
+        existing.revision
+      )
+      return stored.conflict
+        ? failure("Cipher was changed concurrently", 409)
+        : json(cipherResponse(stored.cipher!))
+    }
+    if ((method === "PUT" || method === "POST") && !path.endsWith("/delete")) {
       const body = await bodyOf(request)
       if (!body || !stringField(body, "name") || !numberField(body, "type"))
         return failure("Invalid cipher")
       if (!(await vault.getVaultCipher(id)))
         return failure("Cipher not found", 404)
-      const stored = await vault.putVaultCipher(id, JSON.stringify(body))
+      const folderId = stringField(body, "folderId")
+      if (folderId && !(await vault.getVaultFolder(folderId)))
+        return failure("Folder not found", 404)
+      const stored = await vault.putVaultCipher(
+        id,
+        JSON.stringify(body),
+        undefined,
+        stringField(body, "lastKnownRevisionDate")
+      )
       return stored.conflict
         ? failure("Cipher was changed concurrently", 409)
         : json(cipherResponse(stored.cipher!))
