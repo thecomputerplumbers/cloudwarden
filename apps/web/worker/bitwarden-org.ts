@@ -1,4 +1,12 @@
-import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+  sql,
+} from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
 import {
@@ -165,7 +173,7 @@ export async function inviteOrgMember(
   userId: string,
   role: number,
   accessAll: boolean,
-  collectionIds: string[],
+  collections: { id: string; readOnly: boolean; hidePasswords: boolean }[],
   status = 1
 ) {
   const db = drizzle(env.DB)
@@ -181,12 +189,12 @@ export async function inviteOrgMember(
   }
   await db.batch([
     db.insert(vaultMembership).values(member),
-    ...collectionIds.map((collectionId) =>
+    ...collections.map((collection) =>
       db.insert(vaultCollectionMember).values({
-        collectionId,
+        collectionId: collection.id,
         membershipId: member.id,
-        readOnly: false,
-        hidePasswords: false,
+        readOnly: collection.readOnly,
+        hidePasswords: collection.hidePasswords,
       })
     ),
   ])
@@ -791,6 +799,100 @@ export async function listCollectionAccess(env: CloudflareEnv, orgId: string) {
   for (const { collectionId, ...grant } of groups)
     entry(collectionId).groups.push(grant)
   return access
+}
+
+// Replaces one collection's user and group grants with the given lists.
+export async function setCollectionAccess(
+  env: CloudflareEnv,
+  orgId: string,
+  collectionId: string,
+  users: CollectionGrant[] | null,
+  groups: CollectionGrant[] | null
+) {
+  const db = drizzle(env.DB)
+  const collection = await getVaultCollection(env, orgId, collectionId)
+  if (!collection) return false
+  const kept = (users ?? []).map((user) => user.id)
+  const removals = [
+    ...(users
+      ? [
+          db
+            .delete(vaultCollectionMember)
+            .where(eq(vaultCollectionMember.collectionId, collectionId)),
+          // A grant removed by hand must not come back as a directory grant.
+          db
+            .delete(vaultDirectoryCollectionGrant)
+            .where(
+              kept.length
+                ? and(
+                    eq(
+                      vaultDirectoryCollectionGrant.collectionId,
+                      collectionId
+                    ),
+                    notInArray(vaultDirectoryCollectionGrant.membershipId, kept)
+                  )
+                : eq(vaultDirectoryCollectionGrant.collectionId, collectionId)
+            ),
+        ]
+      : []),
+    ...(groups
+      ? [
+          db
+            .delete(vaultGroupCollection)
+            .where(eq(vaultGroupCollection.collectionId, collectionId)),
+        ]
+      : []),
+  ]
+  // Validate before deleting anything: the grants are re-added below.
+  if (
+    (users ?? []).length + (groups ?? []).length > 1000 ||
+    new Set(kept).size !== kept.length ||
+    new Set((groups ?? []).map((group) => group.id)).size !==
+      (groups ?? []).length
+  )
+    return false
+  const [members, orgGroups] = await Promise.all([
+    db
+      .select({ id: vaultMembership.id })
+      .from(vaultMembership)
+      .where(eq(vaultMembership.orgId, orgId))
+      .all(),
+    db
+      .select({ id: vaultGroup.id })
+      .from(vaultGroup)
+      .where(eq(vaultGroup.orgId, orgId))
+      .all(),
+  ])
+  const memberIds = new Set(members.map((row) => row.id))
+  const groupIds = new Set(orgGroups.map((row) => row.id))
+  if (
+    !kept.every((id) => memberIds.has(id)) ||
+    !(groups ?? []).every((group) => groupIds.has(group.id))
+  )
+    return false
+  const statements = [
+    ...removals,
+    ...(users ?? []).map((user) =>
+      db.insert(vaultCollectionMember).values({
+        collectionId,
+        membershipId: user.id,
+        readOnly: user.readOnly,
+        hidePasswords: user.hidePasswords,
+      })
+    ),
+    ...(groups ?? []).map((group) =>
+      db.insert(vaultGroupCollection).values({
+        groupId: group.id,
+        collectionId,
+        readOnly: group.readOnly,
+        hidePasswords: group.hidePasswords,
+        manage: group.manage,
+      })
+    ),
+  ]
+  const [first, ...rest] = statements
+  if (first) await db.batch([first, ...rest])
+  return true
 }
 
 // Adds or updates grants on every listed collection; other grants are kept.

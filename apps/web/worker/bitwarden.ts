@@ -108,6 +108,7 @@ import {
   updateVaultCollection,
   updateVaultOrganization,
   grantCollectionAccess,
+  setCollectionAccess,
   listCollectionAccess,
   type CollectionGrant,
 } from "./bitwarden-org"
@@ -367,6 +368,20 @@ function collectionGrantsField(body: Body, name: string) {
     })
   }
   return grants
+}
+
+// An absent list leaves that kind of grant untouched; a present one replaces it.
+function collectionAccessFields(body: Body) {
+  const users =
+    field(body, "users") == null ? null : collectionGrantsField(body, "users")
+  const groups =
+    field(body, "groups") == null ? null : collectionGrantsField(body, "groups")
+  if (
+    (field(body, "users") != null && !users) ||
+    (field(body, "groups") != null && !groups)
+  )
+    return null
+  return { users, groups }
 }
 
 function collectionIdsField(body: Body) {
@@ -707,6 +722,9 @@ async function cipherResponse(
     card: field(data, "card") ?? null,
     identity: field(data, "identity") ?? null,
     sshKey: field(data, "sshKey") ?? null,
+    bankAccount: field(data, "bankAccount") ?? null,
+    driversLicense: field(data, "driversLicense") ?? null,
+    passport: field(data, "passport") ?? null,
     folderId: organization
       ? (preference?.folderId ?? null)
       : (field(data, "folderId") ?? null),
@@ -2313,19 +2331,39 @@ export async function handleBitwarden(
     const body = await bodyOf(request)
     const passwordHint = body && passwordHintField(body)
     const keys = body && (field(body, "keys") as Body | undefined)
+    // Newer clients send the wrapped key, KDF and key pair only inside
+    // masterPasswordUnlock and accountKeys.
+    const nested = (name: string) => {
+      const value = body && field(body, name)
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Body)
+        : null
+    }
+    const setUnlock = nested("masterPasswordUnlock")
+    const setAccountKeys = nested("accountKeys")
     const hash = body && stringField(body, "masterPasswordHash")
-    const key = body && stringField(body, "key")
-    const privateKey = keys && stringField(keys, "encryptedPrivateKey")
-    const publicKey = keys && stringField(keys, "publicKey")
-    const kdf =
-      body &&
-      validatedKdf(
-        integerField(body, "kdf") ?? integerField(body, "kdfType"),
-        integerField(body, "kdfIterations") ?? integerField(body, "iterations"),
-        integerField(body, "kdfMemory") ?? integerField(body, "memory"),
-        integerField(body, "kdfParallelism") ??
-          integerField(body, "parallelism")
-      )
+    const key =
+      (body && stringField(body, "key")) ??
+      (setUnlock && stringField(setUnlock, "masterKeyWrappedUserKey"))
+    const privateKey =
+      (keys && stringField(keys, "encryptedPrivateKey")) ??
+      (setAccountKeys &&
+        stringField(setAccountKeys, "userKeyEncryptedAccountPrivateKey"))
+    const publicKey =
+      (keys && stringField(keys, "publicKey")) ??
+      (setAccountKeys && stringField(setAccountKeys, "accountPublicKey"))
+    const unlockKdf = setUnlock && field(setUnlock, "kdf")
+    const kdf = unlockKdf
+      ? nestedKdf(unlockKdf)
+      : body &&
+        validatedKdf(
+          integerField(body, "kdf") ?? integerField(body, "kdfType"),
+          integerField(body, "kdfIterations") ??
+            integerField(body, "iterations"),
+          integerField(body, "kdfMemory") ?? integerField(body, "memory"),
+          integerField(body, "kdfParallelism") ??
+            integerField(body, "parallelism")
+        )
     if (
       !hash ||
       hash.length > 1024 ||
@@ -3526,13 +3564,35 @@ export async function handleBitwarden(
       const role = body && integerField(body, "type")
       const accessAll = !!body && field(body, "accessAll") === true
       const collectionData = body && field(body, "collections")
-      const collectionIds = Array.isArray(collectionData)
-        ? collectionData.map((item) =>
-            item && typeof item === "object"
-              ? stringField(item as Body, "id")
-              : undefined
-          )
+      const invitedCollections = Array.isArray(collectionData)
+        ? collectionData.map((item) => {
+            const id =
+              item && typeof item === "object"
+                ? stringField(item as Body, "id")
+                : undefined
+            return {
+              id,
+              readOnly: !!id && field(item as Body, "readOnly") === true,
+              hidePasswords:
+                !!id && field(item as Body, "hidePasswords") === true,
+            }
+          })
         : []
+      const collectionIds = invitedCollections.map((item) => item.id)
+      const invitedGroups = (body && field(body, "groups")) ?? []
+      if (
+        !Array.isArray(invitedGroups) ||
+        invitedGroups.length > 100 ||
+        !invitedGroups.every(
+          (id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id)
+        )
+      )
+        return failure("Invalid invitation groups")
+      const knownGroups = new Set(
+        (await listVaultGroups(env, orgId)).map((group) => group.id)
+      )
+      if ((invitedGroups as string[]).some((id) => !knownGroups.has(id)))
+        return failure("Invalid invitation groups")
       if (
         !Array.isArray(emails) ||
         emails.length === 0 ||
@@ -3592,9 +3652,22 @@ export async function handleBitwarden(
           account.id,
           role,
           accessAll,
-          accessAll ? [] : ids,
+          accessAll
+            ? []
+            : (invitedCollections as {
+                id: string
+                readOnly: boolean
+                hidePasswords: boolean
+              }[]),
           sending ? 0 : 1
         )
+        if (invitedGroups.length)
+          await setMemberGroups(
+            env,
+            orgId,
+            invited.id,
+            invitedGroups as string[]
+          )
         if (sending) {
           try {
             await sendOrgInvite(env, {
@@ -3882,12 +3955,25 @@ export async function handleBitwarden(
         (externalId && externalId.length > 255)
       )
         return failure("Invalid collection")
+      const access = collectionAccessFields(body!)
+      if (!access) return failure("Invalid collection access")
       const collection = await createVaultCollection(
         env,
         orgId,
         name,
         externalId ?? null
       )
+      if (
+        (access.users || access.groups) &&
+        !(await setCollectionAccess(
+          env,
+          orgId,
+          collection.id,
+          access.users,
+          access.groups
+        ))
+      )
+        return failure("Invalid collection access")
       return json(
         collectionResponse(collection, membership, {
           readOnly: false,
@@ -3918,6 +4004,19 @@ export async function handleBitwarden(
           (externalId && externalId.length > 255)
         )
           return failure("Invalid collection")
+        const access = collectionAccessFields(body!)
+        if (
+          !access ||
+          ((access.users || access.groups) &&
+            !(await setCollectionAccess(
+              env,
+              orgId,
+              collectionId,
+              access.users,
+              access.groups
+            )))
+        )
+          return failure("Invalid collection access")
         const updated = await updateVaultCollection(
           env,
           orgId,
@@ -4218,7 +4317,7 @@ export async function handleBitwarden(
         name.length > 10_000 ||
         !type ||
         type < 1 ||
-        type > 5 ||
+        type > 8 ||
         archivedDate === false
       )
         return failure("Invalid organization import")
@@ -4320,7 +4419,7 @@ export async function handleBitwarden(
         !name ||
         !type ||
         type < 1 ||
-        type > 5 ||
+        type > 8 ||
         orgId != null ||
         payload.length > 1_000_000 ||
         archivedDate === false

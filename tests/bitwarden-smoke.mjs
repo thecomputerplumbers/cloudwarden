@@ -910,6 +910,22 @@ assert.deepEqual(
   (await authorized("/api/sync")).body.domains.equivalentDomains,
   [["example.test", "example.org"]]
 )
+// Newer item types keep their type-specific data.
+const licenseItem = await authorized("/api/ciphers", "POST", {
+  type: 7,
+  name: "2.drivers-license",
+  driversLicense: { licenseNumber: "2.encrypted-license-number" },
+})
+assert.equal(licenseItem.status, 200)
+assert.equal(
+  (await authorized(`/api/ciphers/${licenseItem.body.id}`)).body.driversLicense
+    .licenseNumber,
+  "2.encrypted-license-number"
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${licenseItem.body.id}`, "DELETE")).status,
+  204
+)
 const bulkFolders = await Promise.all(
   ["2.bulk-folder-one", "2.bulk-folder-two"].map((name) =>
     authorized("/api/folders", "POST", { name })
@@ -2655,6 +2671,108 @@ assert.deepEqual(
     )
   ).body.groups,
   [{ id: groupId, readOnly: true, hidePasswords: true, manage: false }]
+)
+// Saving a collection replaces its grants with the ones the client sends.
+const savedCollection = await authorized(
+  `/api/organizations/${orgId}/collections/${grantedCollection}`,
+  "PUT",
+  {
+    name: "2.bulk-access-collection",
+    users: [
+      { id: invitee.id, readOnly: true, hidePasswords: false, manage: false },
+    ],
+    groups: [],
+  }
+)
+assert.equal(savedCollection.status, 200, JSON.stringify(savedCollection.body))
+const savedAccess = (
+  await authorized(
+    `/api/organizations/${orgId}/collections/${grantedCollection}/details`
+  )
+).body
+assert.deepEqual(savedAccess.groups, [])
+assert.deepEqual(savedAccess.users, [
+  { id: invitee.id, readOnly: true, hidePasswords: false, manage: false },
+])
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}`,
+      "PUT",
+      { name: "2.bulk-access-collection", users: [{ id: crypto.randomUUID() }] }
+    )
+  ).status,
+  400
+)
+// A rename alone leaves the grants as they are.
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}`,
+      "PUT",
+      { name: "2.bulk-access-renamed" }
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}/details`
+    )
+  ).body.users.length,
+  1
+)
+// An invitation keeps the read-only and group choices made for it.
+const restrictedEmail = `restricted-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/invite`, "POST", {
+      emails: [restrictedEmail],
+      type: 2,
+      accessAll: false,
+      collections: [
+        { id: grantedCollection, readOnly: true, hidePasswords: true },
+      ],
+      groups: [groupId],
+    })
+  ).status,
+  200
+)
+const restrictedMember = (
+  await authorized(`/api/organizations/${orgId}/users`)
+).body.data.find((member) => member.email === restrictedEmail)
+const restrictedDetails = (
+  await authorized(`/api/organizations/${orgId}/users/${restrictedMember.id}`)
+).body
+assert.deepEqual(
+  restrictedDetails.collections.map(({ id, readOnly, hidePasswords }) => ({
+    id,
+    readOnly,
+    hidePasswords,
+  })),
+  [{ id: grantedCollection, readOnly: true, hidePasswords: true }]
+)
+assert.deepEqual(restrictedDetails.groups, [groupId])
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/invite`, "POST", {
+      emails: [`other-${restrictedEmail}`],
+      type: 2,
+      collections: [],
+      groups: [crypto.randomUUID()],
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${restrictedMember.id}`,
+      "DELETE"
+    )
+  ).status,
+  200
 )
 assert.equal(
   (
