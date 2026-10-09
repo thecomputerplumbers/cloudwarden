@@ -112,6 +112,8 @@ import {
   grantCollectionAccess,
   setCollectionAccess,
   setOrgMemberRole,
+  memberPermissions,
+  twoFactorUserIds,
   listCollectionAccess,
   type CollectionGrant,
 } from "./bitwarden-org"
@@ -370,6 +372,46 @@ function sameKdf(a: VaultKdfSettings, b: VaultKdfSettings) {
   )
 }
 
+function organizationUserResponse(
+  member: {
+    id: string
+    role: number
+    status: number
+    accessAll: boolean
+    createdAt: Date
+  },
+  account: VaultUser,
+  twoFactorEnabled: boolean,
+  collections: unknown[],
+  groups: string[]
+) {
+  return {
+    id: member.id,
+    userId: account.id,
+    email: account.email,
+    name: account.name,
+    avatarColor: account.avatarColor,
+    type: member.role,
+    status: member.status,
+    accessAll: member.accessAll,
+    externalId: null,
+    accessSecretsManager: false,
+    accessPam: false,
+    permissions: memberPermissions(member.role),
+    resetPasswordEnrolled: false,
+    usesKeyConnector: false,
+    hasMasterPassword: !!account.passwordHash,
+    twoFactorEnabled,
+    ssoBound: false,
+    claimedByOrganization: false,
+    revocationReason: null,
+    creationDate: member.createdAt.toISOString(),
+    collections,
+    groups,
+    object: "organizationUserUserDetails",
+  }
+}
+
 function collectionGrantsField(body: Body, name: string) {
   const value = field(body, name) ?? []
   if (!Array.isArray(value) || value.length > 200) return null
@@ -589,6 +631,7 @@ function profile(
     providerOrganizations: [],
     forcePasswordReset: false,
     avatarColor: user.avatarColor,
+    verifyDevices: false,
     usesKeyConnector: false,
     creationDate: user.createdAt.toISOString(),
     object: "profile",
@@ -1136,6 +1179,8 @@ export async function handleBitwarden(
       },
       push: { pushTechnology: 0, vapidPublicKey: null },
       featureStates: {},
+      gitHash: (env as CloudflareEnv & { BUILD_ID?: string }).BUILD_ID ?? null,
+      communication: null,
       object: "config",
     })
   }
@@ -2142,6 +2187,7 @@ export async function handleBitwarden(
         type: number
         identifier: string
         creationDate: string
+        lastActivityDate: string
         devicePendingAuthRequest: null
         isTrusted: false
         encryptedPublicKey: null
@@ -2156,6 +2202,7 @@ export async function handleBitwarden(
         type: row.deviceType,
         identifier: row.deviceId,
         creationDate: row.createdAt.toISOString(),
+        lastActivityDate: row.updatedAt.toISOString(),
         devicePendingAuthRequest: null,
         isTrusted: false,
         encryptedPublicKey: null,
@@ -2205,6 +2252,7 @@ export async function handleBitwarden(
             type: row.deviceType,
             identifier: row.deviceId,
             creationDate: row.createdAt.toISOString(),
+            lastActivityDate: row.updatedAt.toISOString(),
             isTrusted: false,
             encryptedPublicKey: null,
             encryptedUserKey: null,
@@ -3556,21 +3604,22 @@ export async function handleBitwarden(
       return failure("Organization management is forbidden", 403)
     if (!memberMatch[2] && method === "GET") {
       const members = await listOrgMembers(env, orgId)
+      const twoFactor = await twoFactorUserIds(
+        env,
+        members.map(({ user: account }) => account.id)
+      )
       return json(
         list(
           await Promise.all(
-            members.map(async ({ membership: member, user: account }) => ({
-              id: member.id,
-              userId: account.id,
-              email: account.email,
-              name: account.name,
-              type: member.role,
-              status: member.status,
-              accessAll: member.accessAll,
-              collections: await orgMemberCollections(env, member.id),
-              groups: await memberGroupIds(env, member.id),
-              object: "organizationUserUserDetails",
-            }))
+            members.map(async ({ membership: member, user: account }) =>
+              organizationUserResponse(
+                member,
+                account,
+                twoFactor.has(account.id),
+                await orgMemberCollections(env, member.id),
+                await memberGroupIds(env, member.id)
+              )
+            )
           )
         )
       )
@@ -3735,18 +3784,15 @@ export async function handleBitwarden(
         ({ membership: row }) => row.id === memberId
       )
       if (!member) return failure("Member not found", 404)
-      return json({
-        id: member.membership.id,
-        userId: member.user.id,
-        email: member.user.email,
-        name: member.user.name,
-        type: member.membership.role,
-        status: member.membership.status,
-        accessAll: member.membership.accessAll,
-        collections: await orgMemberCollections(env, memberId),
-        groups: await memberGroupIds(env, memberId),
-        object: "organizationUserUserDetails",
-      })
+      return json(
+        organizationUserResponse(
+          member.membership,
+          member.user,
+          (await twoFactorUserIds(env, [member.user.id])).has(member.user.id),
+          await orgMemberCollections(env, memberId),
+          await memberGroupIds(env, memberId)
+        )
+      )
     }
     if (
       memberId &&

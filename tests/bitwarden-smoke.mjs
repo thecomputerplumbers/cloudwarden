@@ -1965,6 +1965,20 @@ const collectionDetails = await authorized(
 assert.equal(collectionDetails.status, 200)
 assert.equal(collectionDetails.body.data.length, 2)
 assert.equal(collectionDetails.body.data[0].object, "collectionAccessDetails")
+// The organization flags state what the server enforces.
+const ownerOrganization = (await authorized("/api/sync")).body.profile
+  .organizations[0]
+assert.equal(ownerOrganization.limitCollectionCreation, true)
+assert.equal(ownerOrganization.allowAdminAccessToAllCollectionItems, true)
+assert.equal(ownerOrganization.limitItemDeletion, false)
+assert.equal(ownerOrganization.permissions.manageUsers, true)
+assert.equal(ownerOrganization.permissions.managePolicies, false)
+const listedOwner = (
+  await authorized(`/api/organizations/${orgId}/users`)
+).body.data.find((member) => member.email === email)
+assert.equal(listedOwner.hasMasterPassword, true)
+assert.equal(typeof listedOwner.twoFactorEnabled, "boolean")
+assert.ok(Date.parse(listedOwner.creationDate))
 assert.ok(Array.isArray(collectionDetails.body.data[0].users))
 assert.equal(
   (

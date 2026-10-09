@@ -22,7 +22,10 @@ import {
   vaultOrganization,
   vaultCipherTransfer,
   vaultOrgImport,
+  vaultEmailTwoFactor,
+  vaultTotp,
   vaultUser,
+  vaultWebauthnFactor,
 } from "../db/schema/vault"
 import { settleVaultShares } from "./bitwarden-share"
 import { settleOrgImports } from "./bitwarden-org-import"
@@ -92,6 +95,39 @@ export async function cleanupOrgDeletion(env: CloudflareEnv, orgId: string) {
     )
     .returning({ id: vaultOrganization.id })
     .get())
+}
+
+// Which of these accounts have any two-factor method, for member listings.
+export async function twoFactorUserIds(env: CloudflareEnv, userIds: string[]) {
+  const db = drizzle(env.DB)
+  const enabled = new Set<string>()
+  for (let start = 0; start < userIds.length; start += 80) {
+    const ids = userIds.slice(start, start + 80)
+    const [totp, email, webauthn] = await Promise.all([
+      db
+        .select({ userId: vaultTotp.userId })
+        .from(vaultTotp)
+        .where(inArray(vaultTotp.userId, ids))
+        .all(),
+      db
+        .select({ userId: vaultEmailTwoFactor.userId })
+        .from(vaultEmailTwoFactor)
+        .where(
+          and(
+            inArray(vaultEmailTwoFactor.userId, ids),
+            isNotNull(vaultEmailTwoFactor.email)
+          )
+        )
+        .all(),
+      db
+        .select({ userId: vaultWebauthnFactor.userId })
+        .from(vaultWebauthnFactor)
+        .where(inArray(vaultWebauthnFactor.userId, ids))
+        .all(),
+    ])
+    for (const row of [...totp, ...email, ...webauthn]) enabled.add(row.userId)
+  }
+  return enabled
 }
 
 export async function listOrgMembers(env: CloudflareEnv, orgId: string) {
@@ -1091,6 +1127,47 @@ export async function isLastVaultOwner(env: CloudflareEnv, userId: string) {
   return false
 }
 
+// What this server enforces, stated in the flags clients read: owners and
+// admins create and delete collections and reach every shared item, and any
+// member who can edit an item can delete it.
+const organizationRules = {
+  limitCollectionCreation: true,
+  limitCollectionDeletion: true,
+  limitItemDeletion: false,
+  allowAdminAccessToAllCollectionItems: true,
+}
+
+const unusedOrganizationFeatures = {
+  useRiskInsights: false,
+  useOrganizationDomains: false,
+  useAdminSponsoredFamilies: false,
+  useAutomaticUserConfirmation: false,
+  useDisableSmAdsForUsers: false,
+  usePhishingBlocker: false,
+  useMyItems: false,
+  useInviteLinks: false,
+  usePam: false,
+}
+
+// Only custom roles read these; owners and admins hold them all.
+export function memberPermissions(role: number) {
+  const manages = role <= 1
+  return {
+    accessEventLogs: manages,
+    accessImportExport: manages,
+    accessReports: manages,
+    createNewCollections: manages,
+    editAnyCollection: manages,
+    deleteAnyCollection: manages,
+    manageGroups: manages,
+    managePolicies: false,
+    manageSso: false,
+    manageUsers: manages,
+    manageResetPassword: false,
+    manageScim: false,
+  }
+}
+
 export function organizationResponse(org: Organization) {
   return {
     id: org.id,
@@ -1114,7 +1191,24 @@ export function organizationResponse(org: Organization) {
     useSecretsManager: false,
     selfHost: true,
     useApi: false,
+    useResetPassword: false,
+    usersGetPremium: true,
     hasPublicAndPrivateKeys: !!(org.privateKey && org.publicKey),
+    ...organizationRules,
+    businessAddress1: null,
+    businessAddress2: null,
+    businessAddress3: null,
+    businessCountry: null,
+    businessTaxNumber: null,
+    plan: null,
+    secretsManagerPlan: null,
+    planType: 6,
+    maxAutoscaleSeats: null,
+    smSeats: null,
+    smServiceAccounts: null,
+    maxAutoscaleSmSeats: null,
+    maxAutoscaleSmServiceAccounts: null,
+    ...unusedOrganizationFeatures,
     object: "organization",
   }
 }
@@ -1142,12 +1236,42 @@ export function profileOrganizationResponse(
     useSso: false,
     useScim: false,
     hasPublicAndPrivateKeys: !!(org.privateKey && org.publicKey),
-    permissions: {
-      createNewCollections: member.role === 0,
-      editAnyCollection: member.role === 0,
-      deleteAnyCollection: member.role === 0,
-      manageUsers: member.role === 0,
-    },
+    permissions: memberPermissions(member.role),
+    identifier: null,
+    productTierType: 3,
+    seats: null,
+    maxCollections: null,
+    maxStorageGb: 32_767,
+    useKeyConnector: false,
+    useDirectory: false,
+    useEvents: false,
+    useApi: false,
+    useResetPassword: false,
+    useSecretsManager: false,
+    usersGetPremium: true,
+    useCustomPermissions: true,
+    useActivateAutofillPolicy: false,
+    ...organizationRules,
+    ...unusedOrganizationFeatures,
+    useDisableSMAdsForUsers: false,
+    ssoBound: false,
+    ssoEnabled: false,
+    ssoMemberDecryptionType: null,
+    resetPasswordEnrolled: false,
+    keyConnectorEnabled: false,
+    keyConnectorUrl: null,
+    providerId: null,
+    providerName: null,
+    providerType: null,
+    accessSecretsManager: false,
+    accessPam: false,
+    userIsClaimedByOrganization: false,
+    familySponsorshipFriendlyName: null,
+    familySponsorshipAvailable: false,
+    familySponsorshipLastSyncDate: null,
+    familySponsorshipValidUntil: null,
+    familySponsorshipToDelete: null,
+    isAdminInitiated: false,
     object: "profileOrganization",
   }
 }
@@ -1167,6 +1291,7 @@ export function collectionResponse(
     readOnly: rights.readOnly,
     hidePasswords: rights.hidePasswords,
     manage: member.role <= 1 && rights.manage,
+    hasEnabledAccessRule: false,
     object: "collectionDetails",
   }
 }
