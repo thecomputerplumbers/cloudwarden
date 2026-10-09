@@ -1978,6 +1978,30 @@ assert.deepEqual(
   (await authorized(`/api/organizations/${orgId}/events`)).body.data,
   []
 )
+// Clients wrap an item created straight into collections.
+const wrappedNote = await authorized("/api/ciphers/create", "POST", {
+  cipher: {
+    type: 2,
+    name: "2.wrapped-secure-note",
+    organizationId: orgId,
+    secureNote: { type: 0 },
+  },
+  collectionIds: [collectionDetails.body.data[0].id],
+})
+assert.equal(wrappedNote.status, 200, JSON.stringify(wrappedNote.body))
+assert.equal(wrappedNote.body.name, "2.wrapped-secure-note")
+assert.equal(wrappedNote.body.organizationId, orgId)
+assert.deepEqual(wrappedNote.body.collectionIds, [
+  collectionDetails.body.data[0].id,
+])
+assert.equal(
+  (await authorized("/api/ciphers/create", "POST", { cipher: {} })).status,
+  400
+)
+assert.equal(
+  (await authorized(`/api/ciphers/${wrappedNote.body.id}`, "DELETE")).status,
+  204
+)
 const sharedBefore = (await authorized(`/api/ciphers/${sharedId}`)).body
   .collectionIds
 const spareCollection = collectionDetails.body.data.find(

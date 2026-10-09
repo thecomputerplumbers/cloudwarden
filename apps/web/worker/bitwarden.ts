@@ -4339,7 +4339,19 @@ export async function handleBitwarden(
     (path === "/api/ciphers" || path === "/api/ciphers/create") &&
     method === "POST"
   ) {
-    const body = await bodyOf(request)
+    const received = await bodyOf(request)
+    // Clients creating an item in collections wrap it as
+    // { cipher, collectionIds }; everything else sends the cipher itself.
+    const wrapped = received && field(received, "cipher")
+    const body =
+      wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)
+        ? {
+            ...(wrapped as Body),
+            collectionIds:
+              field(received, "collectionIds") ??
+              field(wrapped as Body, "collectionIds"),
+          }
+        : received
     if (!body || !stringField(body, "name") || !numberField(body, "type"))
       return failure("Invalid cipher")
     const archivedDate = archivedDateField(body)
