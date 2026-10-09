@@ -299,13 +299,242 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     return { key, value, updatedAt }
   }
 
-  private assertVaultActive() {
+  private assertVaultExists() {
     const deleted = this.db
       .select({ key: schema.setting.key })
       .from(schema.setting)
       .where(eq(schema.setting.key, "vault:deleted"))
       .get()
     if (deleted) throw new Error("Vault has been deleted")
+  }
+
+  private assertVaultActive() {
+    this.assertVaultExists()
+    const lock = this.db
+      .select({ value: schema.setting.value })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:rotation-lock"))
+      .get()
+    if (lock && Number(lock.value) > Date.now())
+      throw new Error("Vault key rotation is in progress")
+  }
+
+  private rotationHeldBy(token: string) {
+    const held = this.db
+      .select({ value: schema.setting.value })
+      .from(schema.setting)
+      .where(eq(schema.setting.key, "vault:rotation"))
+      .get()
+    return !!token && held?.value === token
+  }
+
+  private lockVaultForRotation() {
+    const now = new Date()
+    const value = String(now.getTime() + 60_000)
+    this.db
+      .insert(schema.setting)
+      .values({ key: "vault:rotation-lock", value, updatedAt: now })
+      .onConflictDoUpdate({
+        target: schema.setting.key,
+        set: { value, updatedAt: now },
+      })
+      .run()
+  }
+
+  // D1 admits one rotation per account at a time, so a stage left behind
+  // here belongs to an attempt that never reached D1 and can be discarded.
+  async beginVaultRotation(token: string) {
+    this.assertVaultExists()
+    const now = new Date()
+    this.db.transaction((tx) => {
+      tx.delete(schema.vaultRotationStage).run()
+      tx.insert(schema.setting)
+        .values({ key: "vault:rotation", value: token, updatedAt: now })
+        .onConflictDoUpdate({
+          target: schema.setting.key,
+          set: { value: token, updatedAt: now },
+        })
+        .run()
+    })
+    this.lockVaultForRotation()
+  }
+
+  async stageVaultRotation(
+    token: string,
+    items: {
+      kind: "cipher" | "folder" | "send" | "attachment"
+      id: string
+      payload: string
+    }[]
+  ) {
+    this.assertVaultExists()
+    if (!this.rotationHeldBy(token)) return false
+    try {
+      this.db.transaction((tx) => {
+        for (const item of items)
+          tx.insert(schema.vaultRotationStage).values(item).run()
+      })
+    } catch {
+      // A repeated ID would otherwise let one item shadow another.
+      return false
+    }
+    return true
+  }
+
+  async sealVaultRotation(token: string) {
+    this.assertVaultExists()
+    if (!this.rotationHeldBy(token)) return "expired" as const
+    if (
+      this.db
+        .select({ key: schema.setting.key })
+        .from(schema.setting)
+        .where(like(schema.setting.key, "vault:share:%"))
+        .get()
+    )
+      return "sharing" as const
+    const staged = new Map<string, Set<string>>()
+    for (const row of this.db
+      .select({
+        kind: schema.vaultRotationStage.kind,
+        id: schema.vaultRotationStage.id,
+      })
+      .from(schema.vaultRotationStage)
+      .all()) {
+      const ids = staged.get(row.kind) ?? new Set<string>()
+      ids.add(row.id)
+      staged.set(row.kind, ids)
+    }
+    const complete = (kind: string, existing: { id: string }[]) => {
+      const ids = staged.get(kind) ?? new Set<string>()
+      return (
+        ids.size === existing.length && existing.every((row) => ids.has(row.id))
+      )
+    }
+    const attachments = this.db
+      .select({
+        id: schema.vaultAttachment.id,
+        key: schema.vaultAttachment.key,
+      })
+      .from(schema.vaultAttachment)
+      .where(eq(schema.vaultAttachment.uploaded, true))
+      .all()
+    // An attachment without its own key is encrypted under the user key
+    // itself and cannot be carried across a rotation.
+    if (attachments.some((attachment) => !attachment.key))
+      return "legacy-attachments" as const
+    if (
+      !complete(
+        "cipher",
+        this.db
+          .select({ id: schema.vaultCipher.id })
+          .from(schema.vaultCipher)
+          .all()
+      ) ||
+      !complete(
+        "folder",
+        this.db
+          .select({ id: schema.vaultFolder.id })
+          .from(schema.vaultFolder)
+          .all()
+      ) ||
+      !complete(
+        "send",
+        this.db.select({ id: schema.vaultSend.id }).from(schema.vaultSend).all()
+      ) ||
+      !complete("attachment", attachments)
+    )
+      return "incomplete" as const
+    this.lockVaultForRotation()
+    return "ready" as const
+  }
+
+  async abortVaultRotation(token: string) {
+    if (!this.rotationHeldBy(token)) return
+    this.db.transaction((tx) => {
+      tx.delete(schema.vaultRotationStage).run()
+      tx.delete(schema.setting)
+        .where(eq(schema.setting.key, "vault:rotation"))
+        .run()
+      tx.delete(schema.setting)
+        .where(eq(schema.setting.key, "vault:rotation-lock"))
+        .run()
+    })
+  }
+
+  // Safe to repeat: once applied, the token no longer matches.
+  async commitVaultRotation(token: string) {
+    this.assertVaultExists()
+    if (!this.rotationHeldBy(token)) return false
+    const now = new Date()
+    this.db.transaction((tx) => {
+      for (const item of tx.select().from(schema.vaultRotationStage).all()) {
+        if (item.kind === "cipher") {
+          const existing = tx
+            .select({ revision: schema.vaultCipher.revision })
+            .from(schema.vaultCipher)
+            .where(eq(schema.vaultCipher.id, item.id))
+            .get()
+          if (existing)
+            tx.update(schema.vaultCipher)
+              .set({
+                payload: item.payload,
+                revision: existing.revision + 1,
+                updatedAt: now,
+              })
+              .where(eq(schema.vaultCipher.id, item.id))
+              .run()
+        } else if (item.kind === "folder") {
+          const existing = tx
+            .select({ revision: schema.vaultFolder.revision })
+            .from(schema.vaultFolder)
+            .where(eq(schema.vaultFolder.id, item.id))
+            .get()
+          if (existing)
+            tx.update(schema.vaultFolder)
+              .set({
+                name: item.payload,
+                revision: existing.revision + 1,
+                updatedAt: now,
+              })
+              .where(eq(schema.vaultFolder.id, item.id))
+              .run()
+        } else if (item.kind === "send") {
+          const existing = tx
+            .select({ payload: schema.vaultSend.payload })
+            .from(schema.vaultSend)
+            .where(eq(schema.vaultSend.id, item.id))
+            .get()
+          if (existing)
+            tx.update(schema.vaultSend)
+              .set({
+                payload: JSON.stringify({
+                  ...(JSON.parse(existing.payload) as Record<string, unknown>),
+                  ...(JSON.parse(item.payload) as Record<string, unknown>),
+                }),
+                updatedAt: now,
+              })
+              .where(eq(schema.vaultSend.id, item.id))
+              .run()
+        } else if (item.kind === "attachment") {
+          const next = JSON.parse(item.payload) as {
+            fileName: string
+            key: string
+          }
+          tx.update(schema.vaultAttachment)
+            .set({ fileName: next.fileName, key: next.key })
+            .where(eq(schema.vaultAttachment.id, item.id))
+            .run()
+        }
+      }
+      tx.delete(schema.vaultRotationStage).run()
+      tx.delete(schema.setting)
+        .where(eq(schema.setting.key, "vault:rotation"))
+        .run()
+      tx.delete(schema.setting)
+        .where(eq(schema.setting.key, "vault:rotation-lock"))
+        .run()
+    })
+    return true
   }
 
   async clearPersonalVault() {

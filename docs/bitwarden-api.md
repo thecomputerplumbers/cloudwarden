@@ -311,4 +311,71 @@ login item, and viewing it succeeded. This local proxy did not forward WebSocket
 upgrades, so the run did not verify realtime notifications or device approval.
 The upstream bundle also links
 to `/css/vaultwarden.css` without shipping that stylesheet, so the build writes
-one that hides the duplicate SSO email input and the unsupported passkey login.
+one that hides the duplicate SSO email input.
+
+## Account keys, settings, and recovery
+
+`POST /api/accounts/key-management/user-key-id` records the ID of the account's
+user key once, for clients that backfill it after login; sync then returns it
+as `userDecryption.userKeyId` and as `masterPasswordUnlock.containedKeyId`. A
+password or KDF change that names a different key ID is rejected.
+
+`POST /api/accounts/key-management/rotate-user-account-keys` replaces the user
+key. The request must carry every personal cipher, folder, Send, keyed
+attachment, confirmed emergency contact, and PRF passkey; the KDF, email, and
+public key must not change. The new data is first staged in the account's
+Durable Object. D1 then takes the new wrapped keys, the emergency contact and
+passkey key copies, and a new security stamp in one batch, and only after that
+does the Durable Object apply the staged data in one transaction. D1 admits
+one rotation per account at a time, and any authenticated request applies a
+rotation that D1 committed but the Durable Object had not yet taken, so an
+interrupted rotation completes rather than leaving the vault under the old
+key. The vault rejects reads and writes for up to a minute while a rotation is
+staged. All sessions end. Attachments stored without their own key block the
+rotation, as they do in the official clients. Upgraded (signature-key)
+accounts are not supported. `regenerate-keys` replaces the account key pair
+only for accounts with no organization membership or emergency access grant.
+
+`POST /api/accounts/verify-password` checks the master-password hash.
+`PUT /api/accounts/avatar` stores a hex avatar color. `PUT /api/settings/domains`
+stores custom equivalent domains and excluded global groups; Cloudwarden ships
+no global equivalent-domain list. `DELETE /api/folders` and
+`DELETE /api/folders/all` remove folders in bulk. `DELETE /api/devices/:id`
+removes a device and ends its sessions. Push-token registration is accepted
+and ignored because there is no push relay; clients use the notification hub.
+`GET /api/hibp/breach` proxies Have I Been Pwned when the `HIBP_API_KEY` secret
+is set and otherwise returns an error.
+
+Emergency access follows the upstream flow: invite, accept, confirm, initiate,
+approve or reject, then view or take over. Invitations are mailed with a signed
+seven-day token when invitation mail is enabled; without mail, an existing
+account with a public key is treated as having accepted. A recovery request is
+approved automatically once its wait time (1 to 365 days) has passed, checked
+on each emergency access request and by the scheduled handler. Every recovery
+route reloads the grant and requires the grantee, the approved state, and the
+granted type. A takeover sets a new password and wrapped key, ends the
+grantor's sessions, removes their two-factor methods, and removes them from
+organizations they do not own. An attachment link issued during an approved
+view stays valid for its five minutes even if the grantor rejects in between.
+
+Login passkeys (`/api/webauthn`, `/identity/accounts/webauthn/assertion-options`,
+and the `webauthn` token grant) are stored separately from WebAuthn two-factor
+keys, five per account. Registration and sign-in require user verification, a
+single-use server-side challenge, the configured origin, and a user handle
+matching the credential's account. As upstream, a passkey sign-in is not asked
+for a second factor. PRF key sets are returned in the token response and sync
+so the client can unlock without the master password. This flow has protocol
+tests only; it has not been exercised with a real authenticator in the bundled
+web vault.
+
+## Organization administration
+
+`GET /api/ciphers/organization-details?organizationId=` lists the shared
+ciphers the caller can reach. `GET /api/organizations/:id/collections/details`
+and `.../collections/:id/details` include user and group grants for owners and
+admins. `POST .../collections/bulk-access` adds or updates grants on several
+collections, and `POST /api/ciphers/bulk-collections` adds or removes
+collections on several ciphers with the same checks as the single-item route.
+Policies are not enforced: the policy list is empty, each type reads as
+disabled, and saving a policy is rejected rather than accepted without effect.
+No event log is recorded, so event routes return an empty list.

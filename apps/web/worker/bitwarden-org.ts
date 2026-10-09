@@ -735,6 +735,161 @@ export async function deleteEmptyVaultCollection(
     : ("missing" as const)
 }
 
+export type CollectionGrant = {
+  id: string
+  readOnly: boolean
+  hidePasswords: boolean
+  manage: boolean
+}
+
+export async function listCollectionAccess(env: CloudflareEnv, orgId: string) {
+  const db = drizzle(env.DB)
+  const [users, groups] = await Promise.all([
+    db
+      .select({
+        collectionId: vaultCollectionMember.collectionId,
+        id: vaultCollectionMember.membershipId,
+        readOnly: vaultCollectionMember.readOnly,
+        hidePasswords: vaultCollectionMember.hidePasswords,
+      })
+      .from(vaultCollectionMember)
+      .innerJoin(
+        vaultCollection,
+        eq(vaultCollection.id, vaultCollectionMember.collectionId)
+      )
+      .where(eq(vaultCollection.orgId, orgId))
+      .all(),
+    db
+      .select({
+        collectionId: vaultGroupCollection.collectionId,
+        id: vaultGroupCollection.groupId,
+        readOnly: vaultGroupCollection.readOnly,
+        hidePasswords: vaultGroupCollection.hidePasswords,
+        manage: vaultGroupCollection.manage,
+      })
+      .from(vaultGroupCollection)
+      .innerJoin(
+        vaultCollection,
+        eq(vaultCollection.id, vaultGroupCollection.collectionId)
+      )
+      .where(eq(vaultCollection.orgId, orgId))
+      .all(),
+  ])
+  const access = new Map<
+    string,
+    { users: CollectionGrant[]; groups: CollectionGrant[] }
+  >()
+  const entry = (collectionId: string) => {
+    const existing = access.get(collectionId)
+    if (existing) return existing
+    const created = { users: [], groups: [] }
+    access.set(collectionId, created)
+    return created
+  }
+  for (const { collectionId, ...grant } of users)
+    entry(collectionId).users.push({ ...grant, manage: false })
+  for (const { collectionId, ...grant } of groups)
+    entry(collectionId).groups.push(grant)
+  return access
+}
+
+// Adds or updates grants on every listed collection; other grants are kept.
+export async function grantCollectionAccess(
+  env: CloudflareEnv,
+  orgId: string,
+  collectionIds: string[],
+  users: CollectionGrant[],
+  groups: CollectionGrant[]
+) {
+  if (
+    !collectionIds.length ||
+    collectionIds.length > 50 ||
+    collectionIds.length * (users.length + groups.length) > 1000 ||
+    new Set(collectionIds).size !== collectionIds.length ||
+    new Set(users.map((user) => user.id)).size !== users.length ||
+    new Set(groups.map((group) => group.id)).size !== groups.length
+  )
+    return false
+  const db = drizzle(env.DB)
+  const [collections, members, orgGroups] = await Promise.all([
+    db
+      .select({ id: vaultCollection.id })
+      .from(vaultCollection)
+      .where(eq(vaultCollection.orgId, orgId))
+      .all(),
+    db
+      .select({ id: vaultMembership.id })
+      .from(vaultMembership)
+      .where(eq(vaultMembership.orgId, orgId))
+      .all(),
+    db
+      .select({ id: vaultGroup.id })
+      .from(vaultGroup)
+      .where(eq(vaultGroup.orgId, orgId))
+      .all(),
+  ])
+  const known = (rows: { id: string }[], ids: string[]) => {
+    const set = new Set(rows.map((row) => row.id))
+    return ids.every((id) => set.has(id))
+  }
+  if (
+    !known(collections, collectionIds) ||
+    !known(
+      members,
+      users.map((user) => user.id)
+    ) ||
+    !known(
+      orgGroups,
+      groups.map((group) => group.id)
+    )
+  )
+    return false
+  const statements = collectionIds.flatMap((collectionId) => [
+    ...users.map((user) =>
+      db
+        .insert(vaultCollectionMember)
+        .values({
+          collectionId,
+          membershipId: user.id,
+          readOnly: user.readOnly,
+          hidePasswords: user.hidePasswords,
+        })
+        .onConflictDoUpdate({
+          target: [
+            vaultCollectionMember.collectionId,
+            vaultCollectionMember.membershipId,
+          ],
+          set: { readOnly: user.readOnly, hidePasswords: user.hidePasswords },
+        })
+    ),
+    ...groups.map((group) =>
+      db
+        .insert(vaultGroupCollection)
+        .values({
+          groupId: group.id,
+          collectionId,
+          readOnly: group.readOnly,
+          hidePasswords: group.hidePasswords,
+          manage: group.manage,
+        })
+        .onConflictDoUpdate({
+          target: [
+            vaultGroupCollection.groupId,
+            vaultGroupCollection.collectionId,
+          ],
+          set: {
+            readOnly: group.readOnly,
+            hidePasswords: group.hidePasswords,
+            manage: group.manage,
+          },
+        })
+    ),
+  ])
+  const [first, ...rest] = statements
+  if (first) await db.batch([first, ...rest])
+  return true
+}
+
 export async function isLastVaultOwner(env: CloudflareEnv, userId: string) {
   const db = drizzle(env.DB)
   const owned = await db

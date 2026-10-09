@@ -6,6 +6,7 @@ import m0004 from './20261006071729_daffy_phil_sheldon/migration.sql';
 import m0005 from './20261006080047_fast_lucky_pierre/migration.sql';
 import m0006 from './20261006131710_curious_kitty_pryde/migration.sql';
 import m0007 from './20261006133449_dizzy_loa/migration.sql';
+import m0008 from './20261009020608_goofy_wallop/migration.sql';
 
   export default {
     migrations: {
@@ -16,7 +17,8 @@ import m0007 from './20261006133449_dizzy_loa/migration.sql';
 "20261006071729_daffy_phil_sheldon": m0004,
 "20261006080047_fast_lucky_pierre": m0005,
 "20261006131710_curious_kitty_pryde": m0006,
-"20261006133449_dizzy_loa": m0007
+"20261006133449_dizzy_loa": m0007,
+"20261009020608_goofy_wallop": m0008
 }
   }
   

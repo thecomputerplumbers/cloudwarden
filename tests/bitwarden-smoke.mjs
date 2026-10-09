@@ -824,6 +824,118 @@ assert.equal(sync.status, 200)
 assert.equal(sync.body.profile.email, email)
 assert.equal(sync.body.folders[0].id, createdFolder.body.id)
 assert.equal(sync.body.ciphers[0].id, cipherId)
+assert.equal(sync.body.userDecryption.userKeyId, undefined)
+const userKeyId = "0123456789abcdef0123456789abcdef"
+assert.equal(
+  (
+    await authorized("/api/accounts/key-management/user-key-id", "POST", {
+      userKeyId: userKeyId.toUpperCase(),
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/key-management/user-key-id", "POST", {
+      userKeyId,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/key-management/user-key-id", "POST", {
+      userKeyId: "fedcba9876543210fedcba9876543210",
+    })
+  ).status,
+  400
+)
+const keyedSync = await authorized("/api/sync")
+assert.equal(keyedSync.body.userDecryption.userKeyId, userKeyId)
+assert.equal(
+  keyedSync.body.userDecryption.masterPasswordUnlock.containedKeyId,
+  userKeyId
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/verify-password", "POST", {
+      masterPasswordHash: "wrong",
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/verify-password", "POST", {
+      masterPasswordHash: "client-derived-secret",
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await authorized("/api/accounts/avatar", "PUT", {
+      avatarColor: "javascript:alert(1)",
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (await authorized("/api/accounts/avatar", "PUT", { avatarColor: "#12ab9f" }))
+    .body.avatarColor,
+  "#12ab9f"
+)
+assert.equal(
+  (await authorized("/api/accounts/profile")).body.avatarColor,
+  "#12ab9f"
+)
+assert.equal(
+  (
+    await authorized("/api/settings/domains", "PUT", {
+      equivalentDomains: [["example.test", 7]],
+    })
+  ).status,
+  400
+)
+assert.deepEqual(
+  (
+    await authorized("/api/settings/domains", "PUT", {
+      equivalentDomains: [["example.test", "example.org"]],
+      excludedGlobalEquivalentDomains: [3],
+    })
+  ).body.equivalentDomains,
+  [["example.test", "example.org"]]
+)
+assert.deepEqual(
+  (await authorized("/api/sync")).body.domains.equivalentDomains,
+  [["example.test", "example.org"]]
+)
+const bulkFolders = await Promise.all(
+  ["2.bulk-folder-one", "2.bulk-folder-two"].map((name) =>
+    authorized("/api/folders", "POST", { name })
+  )
+)
+assert.equal(
+  (await authorized("/api/folders", "DELETE", { ids: ["not-a-folder"] }))
+    .status,
+  400
+)
+assert.equal(
+  (
+    await authorized("/api/folders", "DELETE", {
+      ids: bulkFolders.map((folder) => folder.body.id),
+    })
+  ).status,
+  200
+)
+assert.deepEqual(
+  (await authorized("/api/folders")).body.data.map((folder) => folder.id),
+  [createdFolder.body.id]
+)
+assert.equal(
+  (await authorized("/api/hibp/breach?username=someone%40example.test")).status,
+  400
+)
 const loginDeviceId = JSON.parse(
   Buffer.from(tokens.access_token.split(".")[1], "base64url").toString()
 ).device
@@ -833,6 +945,22 @@ assert.equal(devices.body.data.length, 1)
 assert.equal(devices.body.data[0].identifier, loginDeviceId)
 assert.equal(devices.body.data[0].name, "Smoke test")
 assert.equal(devices.body.data[0].type, 14)
+assert.equal(
+  (await authorized(`/api/devices/${loginDeviceId}`)).body.identifier,
+  loginDeviceId
+)
+assert.equal(
+  (await authorized(`/api/devices/${crypto.randomUUID()}`)).status,
+  404
+)
+assert.equal(
+  (
+    await authorized(`/api/devices/identifier/${loginDeviceId}/token`, "PUT", {
+      pushToken: "unused",
+    })
+  ).status,
+  200
+)
 assert.equal(
   (await authorized(`/api/devices/identifier/${loginDeviceId}`)).body.id,
   loginDeviceId
@@ -1799,6 +1927,102 @@ assert.ok(
   )
 )
 assert.ok(orgExport.body.ciphers.some((cipher) => cipher.id === sharedId))
+const orgCiphers = await authorized(
+  `/api/ciphers/organization-details?organizationId=${orgId}`
+)
+assert.equal(orgCiphers.status, 200)
+assert.deepEqual(
+  orgCiphers.body.data.map((cipher) => cipher.id).sort(),
+  orgExport.body.ciphers.map((cipher) => cipher.id).sort()
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/ciphers/organization-details?organizationId=${crypto.randomUUID()}`
+    )
+  ).status,
+  404
+)
+const collectionDetails = await authorized(
+  `/api/organizations/${orgId}/collections/details`
+)
+assert.equal(collectionDetails.status, 200)
+assert.equal(collectionDetails.body.data.length, 2)
+assert.equal(collectionDetails.body.data[0].object, "collectionAccessDetails")
+assert.ok(Array.isArray(collectionDetails.body.data[0].users))
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${collectionDetails.body.data[0].id}/details`
+    )
+  ).body.id,
+  collectionDetails.body.data[0].id
+)
+assert.deepEqual(
+  (await authorized(`/api/organizations/${orgId}/policies`)).body.data,
+  []
+)
+assert.equal(
+  (await authorized(`/api/organizations/${orgId}/policies/1`)).body.enabled,
+  false
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/policies/1`, "PUT", {
+      enabled: true,
+    })
+  ).status,
+  400
+)
+assert.deepEqual(
+  (await authorized(`/api/organizations/${orgId}/events`)).body.data,
+  []
+)
+const sharedBefore = (await authorized(`/api/ciphers/${sharedId}`)).body
+  .collectionIds
+const spareCollection = collectionDetails.body.data.find(
+  (collection) => !sharedBefore.includes(collection.id)
+)
+if (spareCollection) {
+  const bulkAssign = (removeCollections) =>
+    authorized("/api/ciphers/bulk-collections", "POST", {
+      organizationId: orgId,
+      cipherIds: [sharedId],
+      collectionIds: [spareCollection.id],
+      removeCollections,
+    })
+  assert.equal((await bulkAssign(false)).status, 200)
+  assert.deepEqual(
+    (await authorized(`/api/ciphers/${sharedId}`)).body.collectionIds.sort(),
+    [...sharedBefore, spareCollection.id].sort()
+  )
+  assert.equal((await bulkAssign(true)).status, 200)
+  assert.deepEqual(
+    (await authorized(`/api/ciphers/${sharedId}`)).body.collectionIds.sort(),
+    [...sharedBefore].sort()
+  )
+}
+assert.equal(
+  (
+    await authorized("/api/ciphers/bulk-collections", "POST", {
+      organizationId: orgId,
+      cipherIds: [sharedId],
+      collectionIds: sharedBefore,
+      removeCollections: true,
+    })
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/bulk-access`,
+      "POST",
+      { collectionIds: [crypto.randomUUID()], users: [], groups: [] }
+    )
+  ).status,
+  400
+)
 assert.deepEqual(
   new Uint8Array(await (await fetch(ownerSharedLink)).arrayBuffer()),
   new Uint8Array([9, 8, 7])
@@ -2379,6 +2603,44 @@ const groupCreated = await authorized(
 )
 assert.equal(groupCreated.status, 200)
 const groupId = groupCreated.body.id
+const grantedCollection = (
+  await authorized(`/api/organizations/${orgId}/collections`, "POST", {
+    name: "2.bulk-access-collection",
+  })
+).body.id
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/bulk-access`,
+      "POST",
+      {
+        collectionIds: [grantedCollection],
+        users: [],
+        groups: [
+          { id: groupId, readOnly: true, hidePasswords: true, manage: false },
+        ],
+      }
+    )
+  ).status,
+  200
+)
+assert.deepEqual(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}/details`
+    )
+  ).body.groups,
+  [{ id: groupId, readOnly: true, hidePasswords: true, manage: false }]
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}`,
+      "DELETE"
+    )
+  ).status,
+  204
+)
 assert.deepEqual(
   (await authorized(`/api/organizations/${orgId}/groups/details`)).body.data[0]
     .users,
@@ -4067,6 +4329,1225 @@ assert.equal(
   400
 )
 
+const passkeyEmail = `passkey-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await registerWithEmail({
+      email: passkeyEmail,
+      masterPasswordHash: "passkey-secret",
+      key: "2.passkey-key",
+      kdf: 0,
+      kdfIterations: 600_000,
+    })
+  ).status,
+  200
+)
+const passkeyPasswordLogin = await tokenRequest(
+  passkeyEmail,
+  "passkey-secret",
+  {},
+  "203.0.113.80"
+)
+assert.equal(passkeyPasswordLogin.status, 200)
+const passkeyAccessToken = (await passkeyPasswordLogin.json()).access_token
+const passkeyAuthorized = (path, method = "GET", body) =>
+  call(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${passkeyAccessToken}`,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+const passkeyReauth = { masterPasswordHash: "passkey-secret" }
+assert.equal((await call("/api/webauthn")).status, 401)
+assert.deepEqual((await passkeyAuthorized("/api/webauthn")).body.data, [])
+assert.equal(
+  (await passkeyAuthorized("/api/webauthn/attestation-options", "POST", {}))
+    .status,
+  403
+)
+assert.equal(
+  (
+    await passkeyAuthorized("/api/webauthn/attestation-options", "POST", {
+      masterPasswordHash: "wrong-secret",
+    })
+  ).status,
+  403
+)
+
+const passkeyKeys = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
+const passkeyJwk = passkeyKeys.publicKey.export({ format: "jwk" })
+const passkeyCredentialId = randomBytes(32).toString("base64url")
+const passkeyKeySet = {
+  encryptedUserKey: `4.${"u".repeat(344)}`,
+  encryptedPublicKey: `2.${"i".repeat(24)}|${"p".repeat(44)}|${"m".repeat(44)}`,
+  encryptedPrivateKey: `2.${"i".repeat(24)}|${"k".repeat(44)}|${"m".repeat(44)}`,
+}
+const passkeyAttestation = (challenge, flags = 0x45) => {
+  const authData = Buffer.concat([
+    rpIdHash,
+    Buffer.from([flags, 0, 0, 0, 0]),
+    Buffer.alloc(16),
+    Buffer.from([0, 32]),
+    Buffer.from(passkeyCredentialId, "base64url"),
+    Buffer.from(
+      encodeCBOR(
+        new Map([
+          [1, 2],
+          [3, -7],
+          [-1, 1],
+          [-2, Buffer.from(passkeyJwk.x, "base64url")],
+          [-3, Buffer.from(passkeyJwk.y, "base64url")],
+        ])
+      )
+    ),
+  ])
+  return {
+    id: passkeyCredentialId,
+    rawId: passkeyCredentialId,
+    type: "public-key",
+    extensions: {},
+    response: {
+      clientDataJson: Buffer.from(
+        JSON.stringify({ type: "webauthn.create", challenge, origin })
+      ).toString("base64url"),
+      attestationObject: Buffer.from(
+        encodeCBOR(
+          new Map([
+            ["fmt", "none"],
+            ["attStmt", new Map()],
+            ["authData", authData],
+          ])
+        )
+      ).toString("base64url"),
+      transports: ["internal"],
+    },
+  }
+}
+const passkeyAssertion = (challenge, counter, userHandle, flags = 0x05) => {
+  const authData = Buffer.concat([
+    rpIdHash,
+    Buffer.from([flags, 0, 0, 0, counter]),
+  ])
+  const clientData = Buffer.from(
+    JSON.stringify({ type: "webauthn.get", challenge, origin })
+  )
+  return {
+    id: passkeyCredentialId,
+    rawId: passkeyCredentialId,
+    type: "public-key",
+    extensions: {},
+    response: {
+      authenticatorData: authData.toString("base64url"),
+      clientDataJSON: clientData.toString("base64url"),
+      signature: sign(
+        "sha256",
+        Buffer.concat([
+          authData,
+          createHash("sha256").update(clientData).digest(),
+        ]),
+        passkeyKeys.privateKey
+      ).toString("base64url"),
+      userHandle,
+    },
+  }
+}
+const passkeyCreateOptions = () =>
+  passkeyAuthorized("/api/webauthn/attestation-options", "POST", passkeyReauth)
+const passkeyLoginOptions = () =>
+  call("/identity/accounts/webauthn/assertion-options", {
+    headers: { "CF-Connecting-IP": "203.0.113.81" },
+  })
+const passkeyGrant = (token, deviceResponse) =>
+  fetch(`${origin}/identity/connect/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "CF-Connecting-IP": "203.0.113.82",
+    },
+    body: new URLSearchParams({
+      grant_type: "webauthn",
+      client_id: "web",
+      scope: "api offline_access",
+      token,
+      deviceResponse: JSON.stringify(deviceResponse),
+      deviceIdentifier: crypto.randomUUID(),
+      deviceName: "Smoke test",
+      deviceType: "14",
+    }),
+  })
+
+const passkeyUnverifiedOptions = await passkeyCreateOptions()
+assert.equal(passkeyUnverifiedOptions.status, 200)
+assert.equal(passkeyUnverifiedOptions.body.options.rp.id, "localhost")
+assert.deepEqual(passkeyUnverifiedOptions.body.options.excludeCredentials, [])
+assert.equal(
+  passkeyUnverifiedOptions.body.options.authenticatorSelection.residentKey,
+  "required"
+)
+assert.equal(
+  passkeyUnverifiedOptions.body.options.authenticatorSelection.userVerification,
+  "required"
+)
+const passkeyUserHandle = passkeyUnverifiedOptions.body.options.user.id
+const passkeySave = (options, deviceResponse, extra = passkeyKeySet) =>
+  passkeyAuthorized("/api/webauthn", "POST", {
+    name: "Smoke passkey",
+    token: options.body.token,
+    deviceResponse,
+    supportsPrf: true,
+    ...extra,
+  })
+// Presence without user verification is not enough, and the failed attempt
+// spends the token.
+assert.equal(
+  (
+    await passkeySave(
+      passkeyUnverifiedOptions,
+      passkeyAttestation(passkeyUnverifiedOptions.body.options.challenge, 0x41)
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await passkeySave(
+      passkeyUnverifiedOptions,
+      passkeyAttestation(passkeyUnverifiedOptions.body.options.challenge)
+    )
+  ).status,
+  400
+)
+const passkeyPartialOptions = await passkeyCreateOptions()
+assert.equal(
+  (
+    await passkeySave(
+      passkeyPartialOptions,
+      passkeyAttestation(passkeyPartialOptions.body.options.challenge),
+      { encryptedUserKey: passkeyKeySet.encryptedUserKey }
+    )
+  ).status,
+  400
+)
+const passkeyOptions = await passkeyCreateOptions()
+const passkeySaved = await passkeySave(
+  passkeyOptions,
+  passkeyAttestation(passkeyOptions.body.options.challenge)
+)
+assert.equal(passkeySaved.status, 200, JSON.stringify(passkeySaved))
+assert.equal(passkeySaved.body.object, "webauthnCredential")
+assert.equal(passkeySaved.body.prfStatus, 0)
+const passkeyListing = await passkeyAuthorized("/api/webauthn")
+assert.equal(passkeyListing.body.data.length, 1)
+assert.equal(passkeyListing.body.data[0].name, "Smoke passkey")
+assert.equal(
+  passkeyListing.body.data[0].encryptedPublicKey,
+  passkeyKeySet.encryptedPublicKey
+)
+assert.equal(passkeyListing.body.data[0].encryptedPrivateKey, undefined)
+const passkeyId = passkeyListing.body.data[0].id
+// The same credential cannot be registered twice.
+const passkeyDuplicateOptions = await passkeyCreateOptions()
+assert.equal(
+  passkeyDuplicateOptions.body.options.excludeCredentials[0].id,
+  passkeyCredentialId
+)
+assert.equal(
+  (
+    await passkeySave(
+      passkeyDuplicateOptions,
+      passkeyAttestation(passkeyDuplicateOptions.body.options.challenge)
+    )
+  ).status,
+  400
+)
+assert.deepEqual(
+  (await passkeyAuthorized("/api/sync")).body.userDecryption.webAuthnPrfOptions,
+  [
+    {
+      encryptedPrivateKey: passkeyKeySet.encryptedPrivateKey,
+      encryptedUserKey: passkeyKeySet.encryptedUserKey,
+      credentialId: passkeyCredentialId,
+      transports: [],
+    },
+  ]
+)
+
+const passkeyChallenge = await passkeyLoginOptions()
+assert.equal(passkeyChallenge.status, 200)
+assert.equal(passkeyChallenge.body.options.rpId, "localhost")
+assert.equal(passkeyChallenge.body.options.userVerification, "required")
+assert.deepEqual(passkeyChallenge.body.options.allowCredentials, [])
+// No user verification.
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyChallenge.body.token,
+      passkeyAssertion(
+        passkeyChallenge.body.options.challenge,
+        1,
+        passkeyUserHandle,
+        0x01
+      )
+    )
+  ).status,
+  400
+)
+// That attempt spent the token, so a correct assertion for it now fails.
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyChallenge.body.token,
+      passkeyAssertion(
+        passkeyChallenge.body.options.challenge,
+        1,
+        passkeyUserHandle
+      )
+    )
+  ).status,
+  400
+)
+// A user handle naming another account.
+const passkeyWrongHandle = await passkeyLoginOptions()
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyWrongHandle.body.token,
+      passkeyAssertion(
+        passkeyWrongHandle.body.options.challenge,
+        1,
+        Buffer.from(crypto.randomUUID()).toString("base64url")
+      )
+    )
+  ).status,
+  400
+)
+// A signature over a different challenge than the token's.
+const passkeyMismatch = await passkeyLoginOptions()
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyMismatch.body.token,
+      passkeyAssertion(
+        passkeyWrongHandle.body.options.challenge,
+        1,
+        passkeyUserHandle
+      )
+    )
+  ).status,
+  400
+)
+// A key-update token is not a login token.
+const passkeyUpdateScope = await passkeyAuthorized(
+  "/api/webauthn/assertion-options",
+  "POST",
+  passkeyReauth
+)
+assert.equal(passkeyUpdateScope.status, 200)
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyUpdateScope.body.token,
+      passkeyAssertion(
+        passkeyUpdateScope.body.options.challenge,
+        1,
+        passkeyUserHandle
+      )
+    )
+  ).status,
+  400
+)
+const passkeyValid = await passkeyLoginOptions()
+const passkeyValidAssertion = passkeyAssertion(
+  passkeyValid.body.options.challenge,
+  1,
+  passkeyUserHandle
+)
+const passkeySession = await passkeyGrant(
+  passkeyValid.body.token,
+  passkeyValidAssertion
+)
+assert.equal(passkeySession.status, 200, await passkeySession.clone().text())
+const passkeyTokens = await passkeySession.json()
+assert.deepEqual(passkeyTokens.UserDecryptionOptions.WebAuthnPrfOption, {
+  EncryptedPrivateKey: passkeyKeySet.encryptedPrivateKey,
+  EncryptedUserKey: passkeyKeySet.encryptedUserKey,
+  CredentialId: passkeyCredentialId,
+  Transports: [],
+})
+assert.equal(
+  (
+    await call("/api/accounts/profile", {
+      headers: { Authorization: `Bearer ${passkeyTokens.access_token}` },
+    })
+  ).body.email,
+  passkeyEmail
+)
+assert.equal(
+  (await passkeyGrant(passkeyValid.body.token, passkeyValidAssertion)).status,
+  400
+)
+// A fresh challenge with a counter that did not advance.
+const passkeyStaleCounter = await passkeyLoginOptions()
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyStaleCounter.body.token,
+      passkeyAssertion(
+        passkeyStaleCounter.body.options.challenge,
+        1,
+        passkeyUserHandle
+      )
+    )
+  ).status,
+  400
+)
+
+const passkeyRotatedKeySet = {
+  encryptedUserKey: `4.${"v".repeat(344)}`,
+  encryptedPublicKey: passkeyKeySet.encryptedPublicKey,
+  encryptedPrivateKey: passkeyKeySet.encryptedPrivateKey,
+}
+assert.equal(
+  (await passkeyAuthorized("/api/webauthn/assertion-options", "POST", {}))
+    .status,
+  403
+)
+// A login token is not a key-update token.
+const passkeyLoginScope = await passkeyLoginOptions()
+assert.equal(
+  (
+    await passkeyAuthorized("/api/webauthn", "PUT", {
+      token: passkeyLoginScope.body.token,
+      deviceResponse: passkeyAssertion(
+        passkeyLoginScope.body.options.challenge,
+        2,
+        passkeyUserHandle
+      ),
+      ...passkeyRotatedKeySet,
+    })
+  ).status,
+  400
+)
+const passkeyUpdateOptions = await passkeyAuthorized(
+  "/api/webauthn/assertion-options",
+  "POST",
+  passkeyReauth
+)
+const passkeyUpdated = await passkeyAuthorized("/api/webauthn", "PUT", {
+  token: passkeyUpdateOptions.body.token,
+  deviceResponse: passkeyAssertion(
+    passkeyUpdateOptions.body.options.challenge,
+    2,
+    passkeyUserHandle
+  ),
+  ...passkeyRotatedKeySet,
+})
+assert.equal(passkeyUpdated.status, 200, JSON.stringify(passkeyUpdated))
+assert.equal(
+  (await passkeyAuthorized("/api/sync")).body.userDecryption
+    .webAuthnPrfOptions[0].encryptedUserKey,
+  passkeyRotatedKeySet.encryptedUserKey
+)
+
+assert.equal(
+  (await passkeyAuthorized(`/api/webauthn/${passkeyId}/delete`, "POST", {}))
+    .status,
+  403
+)
+assert.equal(
+  (
+    await passkeyAuthorized(
+      `/api/webauthn/${crypto.randomUUID()}/delete`,
+      "POST",
+      passkeyReauth
+    )
+  ).status,
+  404
+)
+assert.equal(
+  (
+    await passkeyAuthorized(
+      `/api/webauthn/${passkeyId}/delete`,
+      "POST",
+      passkeyReauth
+    )
+  ).status,
+  200
+)
+assert.deepEqual((await passkeyAuthorized("/api/webauthn")).body.data, [])
+assert.equal(
+  (await passkeyAuthorized("/api/sync")).body.userDecryption.webAuthnPrfOptions,
+  undefined
+)
+const passkeyAfterDelete = await passkeyLoginOptions()
+assert.equal(
+  (
+    await passkeyGrant(
+      passkeyAfterDelete.body.token,
+      passkeyAssertion(
+        passkeyAfterDelete.body.options.challenge,
+        3,
+        passkeyUserHandle
+      )
+    )
+  ).status,
+  400
+)
+
+// Emergency access
+const eaUser = async (label, clientIp) => {
+  const address = `${label}-${crypto.randomUUID()}@example.test`
+  // Registration is rate limited per client address, so each account starts
+  // from its own.
+  const fromClient = (path, body) =>
+    call(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CF-Connecting-IP": clientIp,
+      },
+      body: JSON.stringify(body),
+    })
+  const name = `Emergency ${label}`
+  assert.equal(
+    (
+      await fromClient("/identity/accounts/register/send-verification-email", {
+        email: address,
+        name,
+      })
+    ).status,
+    204
+  )
+  const verification = (
+    await invitationMail(address, "Verify your Cloudwarden email")
+  ).match(/https?:\/\/\S+/)?.[0]
+  assert.ok(verification)
+  assert.equal(
+    (
+      await fromClient("/identity/accounts/register/finish", {
+        email: address,
+        name,
+        masterPasswordHash: `${label}-secret`,
+        key: `2.${label}-key`,
+        keys: {
+          encryptedPrivateKey: `2.${label}-private`,
+          publicKey: `${label}-public`,
+        },
+        kdf: 0,
+        kdfIterations: 600_000,
+        emailVerificationToken: new URLSearchParams(
+          new URL(verification).hash.split("?")[1]
+        ).get("token"),
+      })
+    ).status,
+    200
+  )
+  const login = await tokenRequest(address, `${label}-secret`, {}, clientIp)
+  assert.equal(login.status, 200)
+  const session = await login.json()
+  return {
+    email: address,
+    token: session.access_token,
+    call: (path, method = "GET", body) =>
+      call(path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }),
+  }
+}
+const grantor = await eaUser("grantor", "203.0.113.190")
+const grantee = await eaUser("grantee", "203.0.113.191")
+const outsider = await eaUser("outsider", "203.0.113.192")
+const eaCipher = await grantor.call("/api/ciphers", "POST", {
+  type: 1,
+  name: "2.emergency-cipher-name",
+  login: { username: "2.emergency-login" },
+})
+assert.equal(eaCipher.status, 200)
+const eaAttachmentInit = await grantor.call(
+  `/api/ciphers/${eaCipher.body.id}/attachment/v2`,
+  "POST",
+  {
+    fileName: "2.emergency-file-name",
+    fileSize: 4,
+    key: "2.emergency-file-key",
+  }
+)
+assert.equal(eaAttachmentInit.status, 200)
+const eaAttachmentId = eaAttachmentInit.body.attachmentId
+const eaUpload = new FormData()
+eaUpload.append(
+  "data",
+  new File([new Uint8Array([9, 8, 7, 6])], "encrypted.bin")
+)
+assert.equal(
+  (
+    await fetch(`${origin}/api${eaAttachmentInit.body.url}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${grantor.token}` },
+      body: eaUpload,
+    })
+  ).status,
+  204
+)
+
+assert.equal((await call("/api/emergency-access/trusted")).status, 401)
+for (const invalid of [
+  { email: grantor.email, type: 0, waitTimeDays: 1 },
+  { email: grantee.email, type: 2, waitTimeDays: 1 },
+  { email: grantee.email, type: 0, waitTimeDays: 0 },
+  { email: "not-an-email", type: 0, waitTimeDays: 1 },
+])
+  assert.equal(
+    (await grantor.call("/api/emergency-access/invite", "POST", invalid))
+      .status,
+    400
+  )
+assert.equal(
+  (
+    await grantor.call("/api/emergency-access/invite", "POST", {
+      email: grantee.email,
+      type: 0,
+      waitTimeDays: 1,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await grantor.call("/api/emergency-access/invite", "POST", {
+      email: grantee.email,
+      type: 1,
+      waitTimeDays: 7,
+    })
+  ).status,
+  409
+)
+const trusted = await grantor.call("/api/emergency-access/trusted")
+assert.equal(trusted.body.data.length, 1)
+assert.equal(trusted.body.data[0].status, 0)
+assert.equal(trusted.body.data[0].email, grantee.email)
+assert.equal(trusted.body.data[0].granteeId, null)
+assert.equal(trusted.body.data[0].object, "emergencyAccessGranteeDetails")
+const eaId = trusted.body.data[0].id
+const ea = (suffix = "") => `/api/emergency-access/${eaId}${suffix}`
+const eaAttachmentPath = ea(`/${eaCipher.body.id}/attachment/${eaAttachmentId}`)
+// An invitation is not listed for the grantee until it is accepted.
+assert.deepEqual(
+  (await grantee.call("/api/emergency-access/granted")).body.data,
+  []
+)
+
+const eaInviteText = await invitationMail(
+  grantee.email,
+  "Emergency access invitation from Emergency grantor"
+)
+const eaInviteLink = eaInviteText.match(/https?:\/\/\S+/)?.[0]
+assert.ok(eaInviteLink)
+const eaParams = new URLSearchParams(new URL(eaInviteLink).hash.split("?")[1])
+assert.equal(eaParams.get("id"), eaId)
+assert.equal(eaParams.get("email"), grantee.email)
+const eaToken = eaParams.get("token")
+assert.ok(eaToken)
+assert.equal((await grantor.call(ea("/reinvite"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/reinvite"), "POST")).status, 400)
+
+// The token is bound to the invited email and to this grant.
+assert.equal(
+  (await outsider.call(ea("/accept"), "POST", { token: eaToken })).status,
+  400
+)
+assert.equal(
+  (await grantee.call(ea("/accept"), "POST", { token: `${eaToken}x` })).status,
+  400
+)
+assert.equal(
+  (await grantor.call(ea("/confirm"), "POST", { key: "4.early" })).status,
+  400
+)
+assert.equal(
+  (await grantee.call(ea("/accept"), "POST", { token: eaToken })).status,
+  200
+)
+assert.equal(
+  (await grantee.call(ea("/accept"), "POST", { token: eaToken })).status,
+  400
+)
+assert.equal((await grantor.call(ea("/reinvite"), "POST")).status, 400)
+const granted = await grantee.call("/api/emergency-access/granted")
+assert.equal(granted.body.data.length, 1)
+assert.equal(granted.body.data[0].status, 1)
+assert.equal(granted.body.data[0].email, grantor.email)
+assert.equal(granted.body.data[0].object, "emergencyAccessGrantorDetails")
+
+assert.equal((await grantee.call(ea("/initiate"), "POST")).status, 400)
+assert.equal(
+  (await grantee.call(ea("/confirm"), "POST", { key: "4.stolen" })).status,
+  400
+)
+assert.equal(
+  (await grantor.call(ea("/confirm"), "POST", { key: "4.wrapped-user-key" }))
+    .status,
+  200
+)
+const eaConfirmed = await grantor.call(ea())
+assert.equal(eaConfirmed.status, 200)
+assert.equal(eaConfirmed.body.status, 2)
+assert.equal(eaConfirmed.body.email, grantee.email)
+assert.equal(eaConfirmed.body.name, "Emergency grantee")
+// Only the grantor can read or change the grant.
+assert.equal((await grantee.call(ea())).status, 400)
+assert.equal(
+  (await grantee.call(ea(), "PUT", { type: 1, waitTimeDays: 1 })).status,
+  400
+)
+assert.equal((await outsider.call(ea(), "DELETE")).status, 400)
+
+assert.equal((await grantee.call(ea("/view"), "POST")).status, 400)
+assert.equal((await grantor.call(ea("/initiate"), "POST")).status, 400)
+assert.equal((await outsider.call(ea("/initiate"), "POST")).status, 400)
+assert.equal((await grantor.call(ea("/approve"), "POST")).status, 400)
+assert.equal((await grantee.call(ea("/initiate"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/initiate"), "POST")).status, 400)
+assert.equal(
+  (await grantee.call("/api/emergency-access/granted")).body.data[0].status,
+  3
+)
+// Initiated is not approved: the wait time has not passed.
+assert.equal((await grantee.call(ea("/view"), "POST")).status, 400)
+assert.equal((await grantee.call(eaAttachmentPath)).status, 400)
+assert.equal((await grantee.call(ea("/approve"), "POST")).status, 400)
+assert.equal((await grantor.call(ea("/approve"), "POST")).status, 200)
+assert.equal((await grantor.call(ea("/approve"), "POST")).status, 400)
+
+const eaView = await grantee.call(ea("/view"), "POST")
+assert.equal(eaView.status, 200)
+assert.equal(eaView.body.object, "emergencyAccessView")
+assert.equal(eaView.body.keyEncrypted, "4.wrapped-user-key")
+assert.deepEqual(
+  eaView.body.ciphers.map((cipher) => cipher.id),
+  [eaCipher.body.id]
+)
+assert.equal(eaView.body.ciphers[0].name, "2.emergency-cipher-name")
+assert.equal(eaView.body.ciphers[0].attachments[0].id, eaAttachmentId)
+assert.equal((await grantor.call(ea("/view"), "POST")).status, 400)
+assert.equal((await outsider.call(ea("/view"), "POST")).status, 400)
+// The grantee downloads the grantor's attachment through the grant.
+const eaAttachment = await grantee.call(eaAttachmentPath)
+assert.equal(eaAttachment.status, 200)
+assert.equal(eaAttachment.body.id, eaAttachmentId)
+assert.equal(eaAttachment.body.fileName, "2.emergency-file-name")
+assert.equal(eaAttachment.body.key, "2.emergency-file-key")
+assert.equal(eaAttachment.body.object, "attachment")
+for (const url of [
+  eaAttachment.body.url,
+  eaView.body.ciphers[0].attachments[0].url,
+]) {
+  const eaDownload = await fetch(url)
+  assert.equal(eaDownload.status, 200)
+  assert.deepEqual(
+    new Uint8Array(await eaDownload.arrayBuffer()),
+    new Uint8Array([9, 8, 7, 6])
+  )
+}
+assert.equal((await grantor.call(eaAttachmentPath)).status, 400)
+assert.equal((await outsider.call(eaAttachmentPath)).status, 400)
+assert.equal(
+  (
+    await grantee.call(
+      ea(`/${eaCipher.body.id}/attachment/${crypto.randomUUID()}`)
+    )
+  ).status,
+  404
+)
+// A view grant never allows a takeover.
+assert.equal((await grantee.call(ea("/takeover"), "POST")).status, 400)
+assert.equal((await grantee.call(ea("/policies"))).status, 400)
+assert.equal(
+  (
+    await grantee.call(ea("/password"), "POST", {
+      newMasterPasswordHash: "stolen-secret",
+      key: "2.stolen-key",
+    })
+  ).status,
+  400
+)
+
+// Rejecting revokes access that was already approved.
+assert.equal((await grantee.call(ea("/reject"), "POST")).status, 400)
+assert.equal((await grantor.call(ea("/reject"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/view"), "POST")).status, 400)
+assert.equal((await grantee.call(eaAttachmentPath)).status, 400)
+assert.equal((await grantor.call(ea())).body.status, 2)
+
+assert.equal(
+  (await grantor.call(ea(), "PUT", { type: 1, waitTimeDays: 2 })).status,
+  200
+)
+const eaTakeoverGrant = await grantor.call(ea())
+assert.equal(eaTakeoverGrant.body.type, 1)
+assert.equal(eaTakeoverGrant.body.waitTimeDays, 2)
+assert.equal((await grantee.call(ea("/initiate"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/takeover"), "POST")).status, 400)
+assert.equal((await grantor.call(ea("/approve"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/view"), "POST")).status, 400)
+assert.equal((await grantee.call(eaAttachmentPath)).status, 400)
+const eaTakeover = await grantee.call(ea("/takeover"), "POST")
+assert.equal(eaTakeover.status, 200)
+assert.deepEqual(eaTakeover.body, {
+  kdf: 0,
+  kdfIterations: 600_000,
+  kdfMemory: null,
+  kdfParallelism: null,
+  keyEncrypted: "4.wrapped-user-key",
+  salt: grantor.email,
+  object: "emergencyAccessTakeover",
+})
+assert.deepEqual((await grantee.call(ea("/policies"))).body.data, [])
+assert.equal((await grantor.call(ea("/takeover"), "POST")).status, 400)
+assert.equal((await outsider.call(ea("/takeover"), "POST")).status, 400)
+
+const eaTakeoverKdf = { kdfType: 0, iterations: 600_000 }
+const eaTakeoverBody = (kdf, salt) => ({
+  authenticationData: {
+    kdf,
+    masterPasswordAuthenticationHash: "taken-over-secret",
+    salt,
+  },
+  unlockData: { kdf, masterKeyWrappedUserKey: "2.taken-over-key", salt },
+})
+assert.equal(
+  (
+    await outsider.call(
+      ea("/password"),
+      "POST",
+      eaTakeoverBody(eaTakeoverKdf, grantor.email)
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await grantee.call(
+      ea("/password"),
+      "POST",
+      eaTakeoverBody({ kdfType: 0, iterations: 100_000 }, grantor.email)
+    )
+  ).status,
+  400
+)
+assert.equal(
+  (
+    await grantee.call(
+      ea("/password"),
+      "POST",
+      eaTakeoverBody(eaTakeoverKdf, grantee.email)
+    )
+  ).status,
+  400
+)
+assert.equal((await grantor.call("/api/sync")).status, 200)
+assert.equal(
+  (
+    await grantee.call(
+      ea("/password"),
+      "POST",
+      eaTakeoverBody(eaTakeoverKdf, grantor.email)
+    )
+  ).status,
+  200
+)
+// The takeover signs the grantor out and replaces the password and key.
+assert.equal((await grantor.call("/api/sync")).status, 401)
+assert.equal((await grantee.call("/api/sync")).status, 200)
+assert.equal(
+  (await tokenRequest(grantor.email, "grantor-secret", {}, "203.0.113.193"))
+    .status,
+  400
+)
+const eaTakenOver = await tokenRequest(
+  grantor.email,
+  "taken-over-secret",
+  {},
+  "203.0.113.194"
+)
+assert.equal(eaTakenOver.status, 200)
+const eaTakenOverSession = await eaTakenOver.json()
+assert.equal(eaTakenOverSession.Key, "2.taken-over-key")
+
+// Either party can end the grant.
+assert.equal((await outsider.call(ea("/delete"), "POST")).status, 400)
+assert.equal((await grantee.call(ea("/delete"), "POST")).status, 200)
+assert.equal((await grantee.call(ea("/takeover"), "POST")).status, 400)
+assert.deepEqual(
+  (
+    await call("/api/emergency-access/trusted", {
+      headers: { Authorization: `Bearer ${eaTakenOverSession.access_token}` },
+    })
+  ).body.data,
+  []
+)
+
+{
+  // Key rotation: every personal item moves to the new key together with the
+  // account row, or nothing does.
+  const rotationEmail = `rotation-${crypto.randomUUID()}@example.test`
+  assert.equal(
+    (
+      await registerWithEmail({
+        email: rotationEmail,
+        name: "Rotation Test",
+        masterPasswordHash: "rotation-old-secret",
+        key: "2.rotation-old-key",
+        keys: {
+          encryptedPrivateKey: "2.rotation-old-private",
+          publicKey: "rotation-public",
+        },
+        kdf: 0,
+        kdfIterations: 600_000,
+      })
+    ).status,
+    200
+  )
+  const signIn = async (password) => {
+    const response = await tokenRequest(
+      rotationEmail,
+      password,
+      {},
+      "203.0.113.180"
+    )
+    return { status: response.status, tokens: await response.json() }
+  }
+  const first = await signIn("rotation-old-secret")
+  const second = await signIn("rotation-old-secret")
+  assert.equal(first.status, 200)
+  assert.equal(second.status, 200, JSON.stringify(second.tokens))
+  const as =
+    (token) =>
+    (path, method = "GET", body) =>
+      call(path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+  const rotating = as(first.tokens.access_token)
+  const secondDevice = JSON.parse(
+    Buffer.from(
+      second.tokens.access_token.split(".")[1],
+      "base64url"
+    ).toString()
+  ).device
+  assert.equal(
+    (await rotating(`/api/devices/${secondDevice}`, "DELETE")).status,
+    200
+  )
+  assert.equal((await as(second.tokens.access_token)("/api/sync")).status, 401)
+  assert.equal((await rotating("/api/devices")).body.data.length, 1)
+
+  const folder = await rotating("/api/folders", "POST", {
+    name: "2.old-folder",
+  })
+  const kept = await rotating("/api/ciphers", "POST", {
+    type: 1,
+    name: "2.old-kept",
+    folderId: folder.body.id,
+    favorite: true,
+    login: { username: "2.old-username" },
+  })
+  const trashed = await rotating("/api/ciphers", "POST", {
+    type: 2,
+    name: "2.old-trashed",
+    secureNote: { type: 0 },
+  })
+  assert.equal(
+    (await rotating(`/api/ciphers/${trashed.body.id}/delete`, "PUT")).status,
+    204
+  )
+  const attachmentStart = await rotating(
+    `/api/ciphers/${kept.body.id}/attachment/v2`,
+    "POST",
+    { fileName: "2.old-file-name", fileSize: 3, key: "2.old-file-key" }
+  )
+  const attachmentData = new FormData()
+  attachmentData.append("data", new File([new Uint8Array([7, 7, 7])], "f.bin"))
+  assert.equal(
+    (
+      await fetch(`${origin}/api${attachmentStart.body.url}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${first.tokens.access_token}` },
+        body: attachmentData,
+      })
+    ).status,
+    204
+  )
+  const rotatingSend = await rotating("/api/sends", "POST", {
+    ...sendBody,
+    name: "2.rotation-send",
+    key: "2.old-send-key",
+  })
+  assert.equal(rotatingSend.status, 200)
+  assert.equal(
+    (
+      await rotating("/api/accounts/key-management/user-key-id", "POST", {
+        userKeyId: "11111111111111111111111111111111",
+      })
+    ).status,
+    200
+  )
+
+  // Copies of the user key held for an emergency contact and a passkey.
+  assert.equal(
+    (
+      await rotating("/api/emergency-access/invite", "POST", {
+        email: outsider.email,
+        type: 1,
+        waitTimeDays: 1,
+      })
+    ).status,
+    200
+  )
+  const contactId = (await rotating("/api/emergency-access/trusted")).body
+    .data[0].id
+  const contactInvite = await invitationMail(
+    outsider.email,
+    "Emergency access invitation from Rotation Test"
+  )
+  const contactToken = new URLSearchParams(
+    new URL(contactInvite.match(/https?:\/\/\S+/)[0]).hash.split("?")[1]
+  ).get("token")
+  assert.equal(
+    (
+      await outsider.call(`/api/emergency-access/${contactId}/accept`, "POST", {
+        token: contactToken,
+      })
+    ).status,
+    200
+  )
+  assert.equal(
+    (
+      await rotating(`/api/emergency-access/${contactId}/confirm`, "POST", {
+        key: "4.old-wrapped-user-key",
+      })
+    ).status,
+    200
+  )
+  const rotationPasskeyOptions = await rotating(
+    "/api/webauthn/attestation-options",
+    "POST",
+    { masterPasswordHash: "rotation-old-secret" }
+  )
+  const rotationPasskey = await rotating("/api/webauthn", "POST", {
+    name: "Rotation passkey",
+    token: rotationPasskeyOptions.body.token,
+    deviceResponse: passkeyAttestation(
+      rotationPasskeyOptions.body.options.challenge
+    ),
+    supportsPrf: true,
+    ...passkeyKeySet,
+  })
+  assert.equal(rotationPasskey.status, 200, JSON.stringify(rotationPasskey))
+  const rotatedPasskeyUserKey = `4.${"w".repeat(344)}`
+
+  const rotation = (overrides = {}) => ({
+    oldMasterKeyAuthenticationHash: "rotation-old-secret",
+    newUserKeyId: "22222222222222222222222222222222",
+    accountUnlockData: {
+      masterPasswordUnlockData: {
+        kdfType: 0,
+        kdfIterations: 600_000,
+        email: rotationEmail,
+        masterKeyAuthenticationHash: "rotation-new-secret",
+        masterKeyEncryptedUserKey: "2.rotation-new-key",
+      },
+      emergencyAccessUnlockData: [
+        {
+          id: contactId,
+          type: 1,
+          waitTimeDays: 1,
+          keyEncrypted: "4.new-wrapped-user-key",
+        },
+      ],
+      organizationAccountRecoveryUnlockData: [],
+      passkeyUnlockData: [
+        {
+          id: rotationPasskey.body.id,
+          encryptedUserKey: rotatedPasskeyUserKey,
+          encryptedPublicKey: passkeyKeySet.encryptedPublicKey,
+        },
+      ],
+    },
+    accountKeys: {
+      userKeyEncryptedAccountPrivateKey: "2.rotation-new-private",
+      accountPublicKey: "rotation-public",
+    },
+    accountData: {
+      ciphers: [
+        {
+          id: kept.body.id,
+          type: 1,
+          name: "2.new-kept",
+          folderId: folder.body.id,
+          favorite: true,
+          login: { username: "2.new-username" },
+          attachments2: {
+            [attachmentStart.body.attachmentId]: {
+              fileName: "2.new-file-name",
+              key: "2.new-file-key",
+            },
+          },
+        },
+        {
+          id: trashed.body.id,
+          type: 2,
+          name: "2.new-trashed",
+          secureNote: { type: 0 },
+        },
+      ],
+      folders: [{ id: folder.body.id, name: "2.new-folder" }],
+      sends: [{ ...sendBody, id: rotatingSend.body.id, key: "2.new-send-key" }],
+    },
+    ...overrides,
+  })
+  const rotate = (body) =>
+    rotating(
+      "/api/accounts/key-management/rotate-user-account-keys",
+      "POST",
+      body
+    )
+  assert.equal(
+    (await rotate(rotation({ oldMasterKeyAuthenticationHash: "wrong" })))
+      .status,
+    403
+  )
+  assert.equal(
+    (
+      await rotate(
+        rotation({
+          accountKeys: {
+            userKeyEncryptedAccountPrivateKey: "2.rotation-new-private",
+            accountPublicKey: "another-public-key",
+          },
+        })
+      )
+    ).status,
+    400
+  )
+  const complete = rotation()
+  for (const missing of ["ciphers", "folders", "sends"])
+    assert.equal(
+      (
+        await rotate(
+          rotation({
+            accountData: {
+              ...complete.accountData,
+              [missing]: complete.accountData[missing].slice(1),
+            },
+          })
+        )
+      ).status,
+      400
+    )
+  for (const missing of ["emergencyAccessUnlockData", "passkeyUnlockData"])
+    assert.equal(
+      (
+        await rotate(
+          rotation({
+            accountUnlockData: { ...complete.accountUnlockData, [missing]: [] },
+          })
+        )
+      ).status,
+      400
+    )
+  const withoutAttachment = structuredClone(complete)
+  delete withoutAttachment.accountData.ciphers[0].attachments2
+  assert.equal((await rotate(withoutAttachment)).status, 400)
+  const duplicated = structuredClone(complete)
+  duplicated.accountData.folders.push(duplicated.accountData.folders[0])
+  assert.equal((await rotate(duplicated)).status, 400)
+
+  // Nothing above changed the vault or the session.
+  const untouched = await rotating("/api/sync")
+  assert.equal(untouched.status, 200)
+  assert.equal(untouched.body.profile.key, "2.rotation-old-key")
+  assert.deepEqual(untouched.body.ciphers.map((cipher) => cipher.name).sort(), [
+    "2.old-kept",
+    "2.old-trashed",
+  ])
+  assert.equal(untouched.body.folders[0].name, "2.old-folder")
+  assert.equal(untouched.body.sends[0].key, "2.old-send-key")
+
+  assert.equal((await rotate(complete)).status, 200)
+  assert.equal((await rotating("/api/sync")).status, 401)
+  assert.equal((await signIn("rotation-old-secret")).status, 400)
+  const after = await signIn("rotation-new-secret")
+  assert.equal(after.status, 200)
+  assert.equal(after.tokens.Key, "2.rotation-new-key")
+  assert.equal(after.tokens.PrivateKey, "2.rotation-new-private")
+  const rotated = await as(after.tokens.access_token)("/api/sync")
+  assert.equal(rotated.status, 200)
+  assert.equal(
+    rotated.body.userDecryption.userKeyId,
+    "22222222222222222222222222222222"
+  )
+  const rotatedKept = rotated.body.ciphers.find(
+    (cipher) => cipher.id === kept.body.id
+  )
+  assert.equal(rotatedKept.name, "2.new-kept")
+  assert.equal(rotatedKept.login.username, "2.new-username")
+  assert.equal(rotatedKept.folderId, folder.body.id)
+  assert.equal(rotatedKept.favorite, true)
+  assert.equal(rotatedKept.attachments[0].fileName, "2.new-file-name")
+  assert.equal(rotatedKept.attachments[0].key, "2.new-file-key")
+  assert.deepEqual(
+    new Uint8Array(
+      await (await fetch(rotatedKept.attachments[0].url)).arrayBuffer()
+    ),
+    new Uint8Array([7, 7, 7])
+  )
+  const rotatedTrashed = rotated.body.ciphers.find(
+    (cipher) => cipher.id === trashed.body.id
+  )
+  assert.equal(rotatedTrashed.name, "2.new-trashed")
+  assert.ok(rotatedTrashed.deletedDate)
+  assert.equal(rotated.body.folders[0].name, "2.new-folder")
+  assert.equal(rotated.body.sends[0].key, "2.new-send-key")
+  assert.equal(rotated.body.sends[0].name, "2.encrypted-send-name")
+  assert.equal(rotated.body.sends[0].maxAccessCount, 1)
+  assert.equal(
+    rotated.body.userDecryption.webAuthnPrfOptions[0].encryptedUserKey,
+    rotatedPasskeyUserKey
+  )
+  const recovering = (action, caller) =>
+    caller(`/api/emergency-access/${contactId}/${action}`, "POST")
+  assert.equal((await recovering("initiate", outsider.call)).status, 200)
+  assert.equal(
+    (await recovering("approve", as(after.tokens.access_token))).status,
+    200
+  )
+  assert.equal(
+    (await recovering("takeover", outsider.call)).body.keyEncrypted,
+    "4.new-wrapped-user-key"
+  )
+  // The vault accepts writes again once the rotation has settled.
+  assert.equal(
+    (
+      await as(after.tokens.access_token)("/api/folders", "POST", {
+        name: "2.after-rotation",
+      })
+    ).status,
+    200
+  )
+}
+
 console.log(
-  "Bitwarden auth, vault lifecycle, account changes and deletion, Sends, two-factor, and isolation passed"
+  "Bitwarden auth, vault lifecycle, account changes and deletion, Sends, two-factor, key rotation, and isolation passed"
 )

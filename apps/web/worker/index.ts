@@ -1,3 +1,5 @@
+import { processEmergencyAccess } from "./bitwarden-emergency-access"
+import { prunePasskeyChallenges } from "./bitwarden-passkey-login"
 import product from "../config/product.json"
 import { observeRequest } from "../lib/diagnostics"
 import vinextWorker from "vinext/server/app-router-entry"
@@ -271,6 +273,16 @@ export default {
       await pruneProtectedOtps(env)
     } catch {
       console.error("Protected-action code cleanup will retry")
+    }
+    try {
+      await processEmergencyAccess(env)
+    } catch {
+      console.error("Emergency access processing will retry")
+    }
+    try {
+      await prunePasskeyChallenges(env)
+    } catch {
+      console.error("Passkey challenge cleanup will retry")
     }
     try {
       await pruneVaultEmailChanges(env)

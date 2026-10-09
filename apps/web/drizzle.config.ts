@@ -17,6 +17,8 @@ export default defineConfig({
     "./db/schema/billing.ts",
     "./db/schema/projects.ts",
     "./db/schema/vault.ts",
+    "./db/schema/vault-emergency.ts",
+    "./db/schema/vault-passkey.ts",
   ],
   out: "./migrations",
 })

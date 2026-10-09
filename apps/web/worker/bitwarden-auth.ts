@@ -1,5 +1,16 @@
 import { drizzle } from "drizzle-orm/d1"
-import { and, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
+import {
+  and,
+  eq,
+  gt,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm"
 import { pbkdf2 } from "@noble/hashes/pbkdf2.js"
 import { sha256 } from "@noble/hashes/sha2.js"
 
@@ -443,6 +454,144 @@ export async function updateVaultPassword(
   return true
 }
 
+const ROTATION_STALE_MS = 10 * 60 * 1000
+
+// D1 admits one key rotation per account. An attempt that never reached the
+// commit state can be superseded once stale; a committed one never can.
+export async function beginVaultKeyRotation(
+  env: CloudflareEnv,
+  user: VaultUser
+) {
+  const token = crypto.randomUUID()
+  const now = new Date()
+  const claimed = await drizzle(env.DB)
+    .update(vaultUser)
+    .set({
+      rotationToken: token,
+      rotationState: "staging",
+      rotationStartedAt: now,
+    })
+    .where(
+      and(
+        eq(vaultUser.id, user.id),
+        eq(vaultUser.securityStamp, user.securityStamp),
+        isNull(vaultUser.deletingAt),
+        or(
+          isNull(vaultUser.rotationToken),
+          and(
+            eq(vaultUser.rotationState, "staging"),
+            lt(
+              vaultUser.rotationStartedAt,
+              new Date(now.getTime() - ROTATION_STALE_MS)
+            )
+          )
+        )
+      )
+    )
+    .returning({ id: vaultUser.id })
+    .get()
+  return claimed ? token : null
+}
+
+export async function abandonVaultKeyRotation(
+  env: CloudflareEnv,
+  userId: string,
+  token: string
+) {
+  await drizzle(env.DB)
+    .update(vaultUser)
+    .set({ rotationToken: null, rotationState: null, rotationStartedAt: null })
+    .where(
+      and(
+        eq(vaultUser.id, userId),
+        eq(vaultUser.rotationToken, token),
+        eq(vaultUser.rotationState, "staging")
+      )
+    )
+    .run()
+}
+
+// True inside the commit batch only once the account row has taken the new
+// keys, so companion writes cannot land without it.
+export function vaultKeyRotationCommitted(userId: string, token: string): SQL {
+  return sql`exists (select 1 from ${vaultUser} where ${vaultUser.id} = ${userId} and ${vaultUser.rotationToken} = ${token} and ${vaultUser.rotationState} = 'commit')`
+}
+
+export async function commitVaultKeyRotation(
+  env: CloudflareEnv,
+  user: VaultUser,
+  token: string,
+  next: {
+    masterPasswordHash: string
+    key: string
+    privateKey: string
+    passwordHint: string | null | undefined
+    userKeyId: string | null
+  },
+  companions: (
+    db: ReturnType<typeof drizzle>,
+    committed: SQL
+  ) => unknown[] = () => []
+) {
+  const db = drizzle(env.DB)
+  const salt = randomToken()
+  const committed = vaultKeyRotationCommitted(user.id, token)
+  const [updated] = await db.batch([
+    db
+      .update(vaultUser)
+      .set({
+        passwordSalt: salt,
+        passwordHash: await hashClientPassword(next.masterPasswordHash, salt),
+        key: next.key,
+        privateKey: next.privateKey,
+        ...(next.passwordHint !== undefined
+          ? { passwordHint: next.passwordHint }
+          : {}),
+        userKeyId: next.userKeyId,
+        securityStamp: crypto.randomUUID(),
+        rotationState: "commit",
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(vaultUser.id, user.id),
+          eq(vaultUser.rotationToken, token),
+          eq(vaultUser.rotationState, "staging"),
+          eq(vaultUser.passwordHash, user.passwordHash)
+        )
+      )
+      .returning({ id: vaultUser.id }),
+    db
+      .delete(vaultSession)
+      .where(and(eq(vaultSession.userId, user.id), committed)),
+    ...(companions(db, committed) as []),
+  ])
+  if (!updated.length) return false
+  await clearRememberedVaultDevices(env, user.id)
+  return true
+}
+
+// Applies a committed rotation that the Durable Object has not yet taken.
+export async function settleVaultKeyRotation(
+  env: CloudflareEnv,
+  user: Pick<VaultUser, "id" | "rotationToken" | "rotationState">
+) {
+  if (!user.rotationToken || user.rotationState !== "commit") return
+  const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+  await vault.commitVaultRotation(user.rotationToken)
+  await drizzle(env.DB)
+    .update(vaultUser)
+    .set({ rotationToken: null, rotationState: null, rotationStartedAt: null })
+    .where(
+      and(
+        eq(vaultUser.id, user.id),
+        eq(vaultUser.rotationToken, user.rotationToken),
+        eq(vaultUser.rotationState, "commit")
+      )
+    )
+    .run()
+}
+
 export async function resetVaultSecurityStamp(
   env: CloudflareEnv,
   userId: string
@@ -471,6 +620,37 @@ export async function updateVaultProfile(
     .get()
 }
 
+export async function updateVaultAvatar(
+  env: CloudflareEnv,
+  userId: string,
+  avatarColor: string | null
+) {
+  return drizzle(env.DB)
+    .update(vaultUser)
+    .set({ avatarColor, updatedAt: new Date() })
+    .where(eq(vaultUser.id, userId))
+    .returning()
+    .get()
+}
+
+export async function updateVaultDomains(
+  env: CloudflareEnv,
+  userId: string,
+  equivalentDomains: string[][],
+  excludedGlobalDomains: number[]
+) {
+  return drizzle(env.DB)
+    .update(vaultUser)
+    .set({
+      equivalentDomains: JSON.stringify(equivalentDomains),
+      excludedGlobalDomains: JSON.stringify(excludedGlobalDomains),
+      updatedAt: new Date(),
+    })
+    .where(eq(vaultUser.id, userId))
+    .returning()
+    .get()
+}
+
 export async function updateVaultKeys(
   env: CloudflareEnv,
   userId: string,
@@ -483,6 +663,20 @@ export async function updateVaultKeys(
     .where(eq(vaultUser.id, userId))
     .returning()
     .get()
+}
+
+export async function setVaultUserKeyId(
+  env: CloudflareEnv,
+  userId: string,
+  userKeyId: string
+) {
+  const updated = await drizzle(env.DB)
+    .update(vaultUser)
+    .set({ userKeyId, updatedAt: new Date() })
+    .where(and(eq(vaultUser.id, userId), isNull(vaultUser.userKeyId)))
+    .returning({ id: vaultUser.id })
+    .get()
+  return !!updated
 }
 
 export async function issueVaultSession(
@@ -709,6 +903,31 @@ export async function listVaultDevices(env: CloudflareEnv, userId: string) {
     .orderBy(vaultDevice.createdAt)
     .limit(1000)
     .all()
+}
+
+export async function removeVaultDevice(
+  env: CloudflareEnv,
+  userId: string,
+  deviceId: string
+) {
+  const db = drizzle(env.DB)
+  const [, removed] = await db.batch([
+    db
+      .delete(vaultSession)
+      .where(
+        and(
+          eq(vaultSession.userId, userId),
+          eq(vaultSession.deviceId, deviceId)
+        )
+      ),
+    db
+      .delete(vaultDevice)
+      .where(
+        and(eq(vaultDevice.userId, userId), eq(vaultDevice.deviceId, deviceId))
+      )
+      .returning({ id: vaultDevice.id }),
+  ])
+  return removed.length > 0
 }
 
 export async function verifyRememberedVaultDevice(

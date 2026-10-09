@@ -70,6 +70,18 @@ export const vaultSend = sqliteTable("vault_send", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 })
 
+// A key rotation is staged here, then applied in one transaction once D1
+// holds the new account key, so the two stores cannot disagree about the key.
+export const vaultRotationStage = sqliteTable(
+  "vault_rotation_stage",
+  {
+    kind: text("kind").notNull(),
+    id: text("id").notNull(),
+    payload: text("payload").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.kind, table.id] })]
+)
+
 export const vaultSendToken = sqliteTable("vault_send_token", {
   hash: text("hash").primaryKey(),
   sendId: text("send_id").notNull(),

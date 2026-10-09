@@ -80,9 +80,7 @@ try {
   await writeFile(
     join(assets, "css", "vaultwarden.css"),
     `.vw-hide,
-.vw-email-sso,
-.vw-passkey-login,
-app-user-layout app-password-settings app-webauthn-login-settings {
+.vw-email-sso {
   display: none !important;
 }
 `

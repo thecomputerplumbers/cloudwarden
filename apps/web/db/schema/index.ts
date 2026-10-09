@@ -10,3 +10,5 @@ export * from "./billing"
 
 export * from "./projects"
 export * from "./vault"
+export * from "./vault-emergency"
+export * from "./vault-passkey"

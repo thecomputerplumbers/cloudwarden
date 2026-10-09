@@ -19,6 +19,14 @@ import {
   rememberVaultDevice,
   resetVaultSecurityStamp,
   tokenHash,
+  abandonVaultKeyRotation,
+  beginVaultKeyRotation,
+  commitVaultKeyRotation,
+  removeVaultDevice,
+  settleVaultKeyRotation,
+  setVaultUserKeyId,
+  updateVaultAvatar,
+  updateVaultDomains,
   updateVaultKeys,
   updateVaultPassword,
   updateVaultProfile,
@@ -99,6 +107,9 @@ import {
   writableVaultCollections,
   updateVaultCollection,
   updateVaultOrganization,
+  grantCollectionAccess,
+  listCollectionAccess,
+  type CollectionGrant,
 } from "./bitwarden-org"
 import {
   deleteVaultGroup,
@@ -165,6 +176,20 @@ import {
   startOrgImport,
   type OrgImportPlan,
 } from "./bitwarden-org-import"
+
+import {
+  emergencyAccessRotation,
+  hasEmergencyAccess,
+  handleEmergencyAccess,
+} from "./bitwarden-emergency-access"
+import {
+  handlePasskeyRoutes,
+  passkeyAssertionOptions,
+  passkeyPrfOptions,
+  passkeyRotation,
+  verifyPasskeyGrant,
+  type PasskeyPrfOption,
+} from "./bitwarden-passkey-login"
 
 type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
@@ -326,6 +351,24 @@ function sameKdf(a: VaultKdfSettings, b: VaultKdfSettings) {
   )
 }
 
+function collectionGrantsField(body: Body, name: string) {
+  const value = field(body, name) ?? []
+  if (!Array.isArray(value) || value.length > 200) return null
+  const grants: CollectionGrant[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null
+    const id = stringField(item as Body, "id")
+    if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return null
+    grants.push({
+      id,
+      readOnly: field(item as Body, "readOnly") === true,
+      hidePasswords: field(item as Body, "hidePasswords") === true,
+      manage: field(item as Body, "manage") === true,
+    })
+  }
+  return grants
+}
+
 function collectionIdsField(body: Body) {
   const value = field(body, "collectionIds")
   return Array.isArray(value) &&
@@ -334,9 +377,12 @@ function collectionIdsField(body: Body) {
     : null
 }
 
-async function bodyOf(request: Request): Promise<Body | null> {
+async function bodyOf(
+  request: Request,
+  limit = 1_000_000
+): Promise<Body | null> {
   const text = await request.text()
-  if (text.length > 1_000_000) return null
+  if (text.length > limit) return null
   try {
     if (request.headers.get("Content-Type")?.includes("form-urlencoded"))
       return Object.fromEntries(new URLSearchParams(text))
@@ -440,6 +486,39 @@ async function verifySecondFactor(
   return false
 }
 
+function storedList<T>(value: string | null): T[] {
+  if (!value) return []
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) ? (parsed as T[]) : []
+  } catch {
+    return []
+  }
+}
+
+function domainsResponse(user: VaultUser) {
+  return {
+    equivalentDomains: storedList<string[]>(user.equivalentDomains),
+    globalEquivalentDomains: [],
+    object: "domains",
+  }
+}
+
+function masterPasswordUnlockResponse(user: VaultUser) {
+  return {
+    kdf: {
+      kdfType: user.kdf,
+      iterations: user.kdfIterations,
+      memory: user.kdfMemory,
+      parallelism: user.kdfParallelism,
+    },
+    masterKeyEncryptedUserKey: user.key,
+    masterKeyWrappedUserKey: user.key,
+    salt: user.email,
+    ...(user.userKeyId ? { containedKeyId: user.userKeyId } : {}),
+  }
+}
+
 function profile(
   user: VaultUser,
   twoFactorEnabled = false,
@@ -476,7 +555,7 @@ function profile(
     providers: [],
     providerOrganizations: [],
     forcePasswordReset: false,
-    avatarColor: null,
+    avatarColor: user.avatarColor,
     usesKeyConnector: false,
     creationDate: user.createdAt.toISOString(),
     object: "profile",
@@ -485,7 +564,8 @@ function profile(
 
 function tokenResponse(
   user: VaultUser,
-  tokens: { access: string; refresh: string; expiresIn: number }
+  tokens: { access: string; refresh: string; expiresIn: number },
+  prf: PasskeyPrfOption | null = null
 ) {
   const hasMasterPassword = !!user.passwordHash
   const accountKeys =
@@ -529,6 +609,16 @@ function tokenResponse(
             Salt: user.email,
           }
         : null,
+      ...(prf
+        ? {
+            WebAuthnPrfOption: {
+              EncryptedPrivateKey: prf.encryptedPrivateKey,
+              EncryptedUserKey: prf.encryptedUserKey,
+              CredentialId: prf.credentialId,
+              Transports: prf.transports,
+            },
+          }
+        : {}),
       Object: "userDecryptionOptions",
     },
   }
@@ -716,6 +806,11 @@ export function isBitwardenPath(path: string) {
     path.startsWith("/api/organizations/") ||
     path.startsWith("/api/users/") ||
     path === "/api/settings/domains" ||
+    path === "/api/hibp/breach" ||
+    path === "/api/emergency-access" ||
+    path.startsWith("/api/emergency-access/") ||
+    path === "/api/webauthn" ||
+    path.startsWith("/api/webauthn/") ||
     path === "/api/ciphers" ||
     path.startsWith("/api/ciphers/") ||
     path === "/api/folders" ||
@@ -1612,10 +1707,52 @@ export async function handleBitwarden(
     return new Response(null, { status: 200 })
   }
 
+  if (
+    path === "/identity/accounts/webauthn/assertion-options" &&
+    method === "GET"
+  )
+    return passkeyAssertionOptions(env, request)
   if (path === "/identity/connect/token" && method === "POST") {
     const body = await bodyOf(request)
     if (!body) return failure("Invalid token request")
     const grant = stringField(body, "grant_type")
+    if (grant === "webauthn") {
+      const deviceId = stringField(body, "device_identifier")
+      const deviceType = stringField(body, "device_type") ?? "unknown"
+      const clientId = stringField(body, "client_id") ?? "unknown"
+      if (!deviceId || deviceId.length > 200)
+        return json({ error: "invalid_grant" }, 400)
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
+      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
+        return failure("Too many login attempts", 429)
+      const passkey = await verifyPasskeyGrant(
+        env,
+        new URLSearchParams({
+          token: stringField(body, "token") ?? "",
+          deviceResponse: stringField(body, "deviceResponse") ?? "",
+        })
+      )
+      const passkeyUser =
+        passkey && (await findVaultUserById(env, passkey.userId))
+      if (!passkey || !passkeyUser) return json({ error: "invalid_grant" }, 400)
+      // As upstream: a passkey assertion with user verification stands in
+      // for the second factor.
+      return json(
+        tokenResponse(
+          passkeyUser,
+          await issueVaultSession(
+            env,
+            passkeyUser,
+            deviceId,
+            clientId,
+            deviceType,
+            { deviceName: stringField(body, "device_name") ?? clientId }
+          ),
+          passkey.prf
+        )
+      )
+    }
     if (grant === "refresh_token") {
       const token = stringField(body, "refresh_token")
       const refreshed = token && (await refreshVaultSession(env, token))
@@ -1876,6 +2013,26 @@ export async function handleBitwarden(
   const user = await authenticatedVaultUser(env, request)
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
+  await settleVaultKeyRotation(env, user)
+  const emergency = await handleEmergencyAccess(
+    env,
+    request,
+    user,
+    path,
+    method,
+    origin,
+    cipherResponse
+  )
+  if (emergency) return emergency
+  const passkeyResponse = await handlePasskeyRoutes(
+    env,
+    request,
+    user,
+    path,
+    method,
+    (body) => validateProtectedAction(env, user, body)
+  )
+  if (passkeyResponse) return passkeyResponse
 
   if (
     (path === "/api/auth-requests" || path === "/api/auth-requests/pending") &&
@@ -1979,6 +2136,46 @@ export async function handleBitwarden(
     const identifier = path.slice("/api/devices/identifier/".length)
     const device = devices.get(identifier)
     return device ? json(device) : failure("Device not found", 404)
+  }
+
+  if (
+    /^\/api\/devices\/identifier\/[^/]+\/(token|clear-token|web-push-auth)$/.test(
+      path
+    ) &&
+    (method === "PUT" || method === "POST")
+  )
+    // Cloudwarden has no push relay; clients fall back to the notification hub.
+    return new Response(null, { status: 200 })
+  const deviceMatch = /^\/api\/devices\/([0-9a-f-]{36})(\/deactivate)?$/i.exec(
+    path
+  )
+  if (deviceMatch) {
+    const deviceId = deviceMatch[1]!
+    const deactivating =
+      (method === "DELETE" && !deviceMatch[2]) ||
+      (method === "POST" && !!deviceMatch[2])
+    if (deactivating)
+      return (await removeVaultDevice(env, user.id, deviceId))
+        ? new Response(null, { status: 200 })
+        : failure("Device not found", 404)
+    if (method === "GET" && !deviceMatch[2]) {
+      const row = (await listVaultDevices(env, user.id)).find(
+        (device) => device.deviceId === deviceId
+      )
+      return row
+        ? json({
+            id: row.deviceId,
+            name: row.deviceName,
+            type: row.deviceType,
+            identifier: row.deviceId,
+            creationDate: row.createdAt.toISOString(),
+            isTrusted: false,
+            encryptedPublicKey: null,
+            encryptedUserKey: null,
+            object: "device",
+          })
+        : failure("Device not found", 404)
+    }
   }
 
   if (path === "/api/accounts/request-otp" && method === "POST") {
@@ -2213,6 +2410,9 @@ export async function handleBitwarden(
         !sameKdf(authKdf, wrapKdf)
       )
         return failure("Invalid KDF settings")
+      const containedKeyId = stringField(wrap, "containedKeyId")
+      if (user.userKeyId && containedKeyId && containedKeyId !== user.userKeyId)
+        return failure("Invalid user key sent in master-password unlock data.")
       nextPassword = stringField(auth, "masterPasswordAuthenticationHash")
       nextKey = stringField(wrap, "masterKeyWrappedUserKey")
       kdf = authKdf
@@ -2241,6 +2441,266 @@ export async function handleBitwarden(
     return updated
       ? new Response(null, { status: 200 })
       : failure("Account changed", 409)
+  }
+
+  if (
+    path === "/api/accounts/key-management/regenerate-keys" &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request)
+    const publicKey = body && stringField(body, "userPublicKey")
+    const privateKey =
+      body && stringField(body, "userKeyEncryptedUserPrivateKey")
+    if (
+      !publicKey ||
+      publicKey.length > 20_000 ||
+      !privateKey ||
+      privateKey.length > 20_000
+    )
+      return failure("Invalid account keys")
+    // Anything wrapped to the old public key would be lost with it.
+    if (
+      (await listVaultOrganizations(env, user.id)).length ||
+      (await hasEmergencyAccess(env, user.id))
+    )
+      return failure(
+        "Keys cannot be regenerated for an organization member or emergency contact"
+      )
+    await updateVaultKeys(env, user.id, privateKey, publicKey)
+    await publishVaultNotification(env, { type: 5, userId: user.id })
+    return new Response(null, { status: 200 })
+  }
+  if (
+    path === "/api/accounts/key-management/rotate-user-account-keys" &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request, 25_000_000)
+    const section = (parent: Body | null | undefined, name: string) => {
+      const value = parent && field(parent, name)
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Body)
+        : null
+    }
+    const items = (parent: Body | null, name: string) => {
+      const value = (parent && field(parent, name)) ?? []
+      return Array.isArray(value) &&
+        value.every(
+          (item) => item && typeof item === "object" && !Array.isArray(item)
+        )
+        ? (value as Body[])
+        : null
+    }
+    const oldPassword =
+      body && stringField(body, "oldMasterKeyAuthenticationHash")
+    if (!oldPassword || !(await verifyVaultPassword(user, oldPassword)))
+      return failure("Invalid password", 403)
+    const unlockData = section(body, "accountUnlockData")
+    const unlock = section(unlockData, "masterPasswordUnlockData")
+    const accountKeys = section(body, "accountKeys")
+    const accountData = section(body, "accountData")
+    const nextPassword =
+      unlock && stringField(unlock, "masterKeyAuthenticationHash")
+    const nextKey = unlock && stringField(unlock, "masterKeyEncryptedUserKey")
+    const nextPrivateKey =
+      accountKeys &&
+      stringField(accountKeys, "userKeyEncryptedAccountPrivateKey")
+    const passwordHint = unlock ? passwordHintField(unlock) : undefined
+    const newUserKeyId =
+      (body && stringField(body, "newUserKeyId")) ??
+      (unlock && stringField(unlock, "containedKeyId")) ??
+      null
+    const emergencyKeys = items(unlockData, "emergencyAccessUnlockData")
+    const passkeyKeys = items(unlockData, "passkeyUnlockData")
+    const ciphers = items(accountData, "ciphers")
+    const folders = items(accountData, "folders")
+    const sends = items(accountData, "sends")
+    if (
+      !unlock ||
+      !accountKeys ||
+      !nextPassword ||
+      nextPassword.length > 1024 ||
+      !nextKey ||
+      nextKey.length > 20_000 ||
+      !nextPrivateKey ||
+      nextPrivateKey.length > 20_000 ||
+      passwordHint === false ||
+      (newUserKeyId !== null && !/^[0-9a-f]{32}$/.test(newUserKeyId)) ||
+      !emergencyKeys ||
+      !passkeyKeys ||
+      !ciphers ||
+      !folders ||
+      !sends
+    )
+      return failure("Invalid key rotation request")
+    // Every copy of the user key held for someone else must move with it.
+    const emergencyRotation = await emergencyAccessRotation(
+      env,
+      user.id,
+      emergencyKeys
+    )
+    const passkeyKeyRotation = await passkeyRotation(env, user.id, passkeyKeys)
+    if (!emergencyRotation || !passkeyKeyRotation)
+      return failure(
+        "Key rotation must include every emergency contact and passkey"
+      )
+    // A rotation replaces the user key only; the login secret's derivation
+    // and the key pair other members encrypt to must stay as they are.
+    if (
+      numberField(unlock, "kdfType") !== user.kdf ||
+      numberField(unlock, "kdfIterations") !== user.kdfIterations ||
+      (numberField(unlock, "kdfMemory") ?? null) !== user.kdfMemory ||
+      (numberField(unlock, "kdfParallelism") ?? null) !== user.kdfParallelism ||
+      stringField(unlock, "email") !== user.email ||
+      stringField(accountKeys, "accountPublicKey") !== user.publicKey
+    )
+      return failure("Key rotation cannot change the KDF, email, or public key")
+    if (
+      field(accountKeys, "signatureKeyPair") != null ||
+      field(accountKeys, "securityState") != null
+    )
+      return failure("This server does not support upgraded account keys")
+    const staged: Parameters<typeof vault.stageVaultRotation>[1] = []
+    for (const cipher of ciphers) {
+      const id = stringField(cipher, "id")
+      const payload = JSON.stringify(cipher)
+      if (
+        !id ||
+        !stringField(cipher, "name") ||
+        !numberField(cipher, "type") ||
+        field(cipher, "organizationId") != null ||
+        payload.length > 1_000_000
+      )
+        return failure("Invalid key rotation request")
+      staged.push({ kind: "cipher", id, payload })
+      const attachments = field(cipher, "attachments2") ?? {}
+      if (typeof attachments !== "object" || Array.isArray(attachments))
+        return failure("Invalid key rotation request")
+      for (const [attachmentId, value] of Object.entries(attachments as Body)) {
+        const attachment =
+          value && typeof value === "object" ? (value as Body) : null
+        const fileName = attachment && stringField(attachment, "fileName")
+        const key = attachment && stringField(attachment, "key")
+        if (
+          !fileName ||
+          fileName.length > 20_000 ||
+          !key ||
+          key.length > 20_000
+        )
+          return failure("Invalid key rotation request")
+        staged.push({
+          kind: "attachment",
+          id: attachmentId,
+          payload: JSON.stringify({ fileName, key }),
+        })
+      }
+    }
+    for (const folder of folders) {
+      const id = stringField(folder, "id")
+      const name = stringField(folder, "name")
+      if (!id || !name || name.length > 20_000)
+        return failure("Invalid key rotation request")
+      staged.push({ kind: "folder", id, payload: name })
+    }
+    for (const send of sends) {
+      const id = stringField(send, "id")
+      const key = stringField(send, "key")
+      const name = stringField(send, "name")
+      const notes = field(send, "notes")
+      const text = field(send, "text")
+      if (
+        !id ||
+        !key ||
+        key.length > 20_000 ||
+        (name !== undefined && (!name || name.length > 20_000)) ||
+        (notes != null && typeof notes !== "string") ||
+        (text != null && (typeof text !== "object" || Array.isArray(text)))
+      )
+        return failure("Invalid key rotation request")
+      staged.push({
+        kind: "send",
+        id,
+        // Only fields the user key protects; the rest of the Send is kept.
+        payload: JSON.stringify({
+          key,
+          ...(name ? { name } : {}),
+          ...(typeof notes === "string" ? { notes } : {}),
+          ...(text ? { text } : {}),
+        }),
+      })
+    }
+    if (
+      new Set(staged.map((item) => `${item.kind}:${item.id}`)).size !==
+      staged.length
+    )
+      return failure("Invalid key rotation request")
+    const token = await beginVaultKeyRotation(env, user)
+    if (!token) return failure("Another key rotation is in progress", 409)
+    let committed = false
+    try {
+      await vault.beginVaultRotation(token)
+      let batch: typeof staged = []
+      let size = 0
+      const flush = async () => {
+        if (batch.length && !(await vault.stageVaultRotation(token, batch)))
+          throw new Error("stage")
+        batch = []
+        size = 0
+      }
+      for (const item of staged) {
+        if (size + item.payload.length > 4_000_000 || batch.length >= 2000)
+          await flush()
+        batch.push(item)
+        size += item.payload.length
+      }
+      await flush()
+      const sealed = await vault.sealVaultRotation(token)
+      if (sealed !== "ready") {
+        await vault.abortVaultRotation(token)
+        await abandonVaultKeyRotation(env, user.id, token)
+        return failure(
+          sealed === "legacy-attachments"
+            ? "Some attachments use an old format and must be re-uploaded before rotating keys"
+            : sealed === "sharing"
+              ? "An item is still being moved to an organization; try again shortly"
+              : "Key rotation must include every item, folder, Send, and attachment",
+          sealed === "sharing" ? 409 : 400
+        )
+      }
+      committed = await commitVaultKeyRotation(
+        env,
+        user,
+        token,
+        {
+          masterPasswordHash: nextPassword,
+          key: nextKey,
+          privateKey: nextPrivateKey,
+          passwordHint,
+          userKeyId: newUserKeyId,
+        },
+        (db, held) => [
+          ...emergencyRotation(db, held),
+          ...passkeyKeyRotation(db, held),
+        ]
+      )
+    } catch {
+      // D1 decides: once it holds the new keys the staged data must be
+      // applied, whatever failed afterwards.
+      const current = await findVaultUserById(env, user.id)
+      committed =
+        current?.rotationToken === token && current.rotationState === "commit"
+    }
+    if (!committed) {
+      await vault.abortVaultRotation(token)
+      await abandonVaultKeyRotation(env, user.id, token)
+      return failure("Key rotation did not complete; nothing was changed", 409)
+    }
+    await settleVaultKeyRotation(env, {
+      id: user.id,
+      rotationToken: token,
+      rotationState: "commit",
+    })
+    await publishVaultNotification(env, { type: 11, userId: user.id })
+    return new Response(null, { status: 200 })
   }
 
   if (path === "/api/two-factor" && method === "GET") {
@@ -2529,6 +2989,41 @@ export async function handleBitwarden(
       )
     )
   }
+  if (
+    path === "/api/accounts/avatar" &&
+    (method === "POST" || method === "PUT")
+  ) {
+    const body = await bodyOf(request)
+    const color = body ? field(body, "avatarColor") : undefined
+    if (
+      !body ||
+      (color != null &&
+        (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)))
+    )
+      return failure("Invalid avatar color")
+    const updated = await updateVaultAvatar(
+      env,
+      user.id,
+      (color as string | null | undefined) ?? null
+    )
+    await publishVaultNotification(env, { type: 5, userId: user.id })
+    return json(
+      profile(
+        updated,
+        !!(await getTotp(env, user.id)) ||
+          !!(await getEmailTwoFactor(env, user.id))?.email ||
+          !!(await getWebauthn(env, user.id)).factor,
+        await profileOrganizations()
+      )
+    )
+  }
+  if (path === "/api/accounts/verify-password" && method === "POST") {
+    const body = await bodyOf(request)
+    const password = body && stringField(body, "masterPasswordHash")
+    return password && (await verifyVaultPassword(user, password))
+      ? json({ object: "masterPasswordPolicy" })
+      : failure("Invalid password")
+  }
   if (path === "/api/accounts/keys" && method === "POST") {
     const body = await bodyOf(request)
     const privateKey = body && stringField(body, "encryptedPrivateKey")
@@ -2543,6 +3038,18 @@ export async function handleBitwarden(
     await updateVaultKeys(env, user.id, privateKey, publicKey)
     await publishVaultNotification(env, { type: 5, userId: user.id })
     return json({ privateKey, publicKey, object: "keys" })
+  }
+  if (
+    path === "/api/accounts/key-management/user-key-id" &&
+    method === "POST"
+  ) {
+    const body = await bodyOf(request)
+    const userKeyId = body && stringField(body, "userKeyId")
+    if (!userKeyId || !/^[0-9a-f]{32}$/.test(userKeyId))
+      return failure("UserKeyId is not a valid key id.")
+    if (!(await setVaultUserKeyId(env, user.id, userKeyId)))
+      return failure("User key id is already set.")
+    return new Response(null, { status: 200 })
   }
   if (path === "/api/accounts/revision-date" && method === "GET") {
     const organizations = await listVaultOrganizations(env, user.id)
@@ -2569,11 +3076,59 @@ export async function handleBitwarden(
     )
   }
   if (path === "/api/settings/domains" && method === "GET")
-    return json({
-      equivalentDomains: [],
-      globalEquivalentDomains: [],
-      object: "domains",
-    })
+    return json(domainsResponse(user))
+  if (
+    path === "/api/settings/domains" &&
+    (method === "PUT" || method === "POST")
+  ) {
+    const body = await bodyOf(request)
+    const equivalent = (body && field(body, "equivalentDomains")) ?? []
+    const excluded =
+      (body && field(body, "excludedGlobalEquivalentDomains")) ?? []
+    if (
+      !Array.isArray(equivalent) ||
+      equivalent.length > 200 ||
+      !equivalent.every(
+        (group) =>
+          Array.isArray(group) &&
+          group.length <= 100 &&
+          group.every(
+            (domain) =>
+              typeof domain === "string" &&
+              domain.length > 0 &&
+              domain.length <= 253
+          )
+      ) ||
+      !Array.isArray(excluded) ||
+      excluded.length > 500 ||
+      !excluded.every((type) => Number.isInteger(type))
+    )
+      return failure("Invalid equivalent domains")
+    const updated = await updateVaultDomains(
+      env,
+      user.id,
+      equivalent as string[][],
+      excluded as number[]
+    )
+    await publishVaultNotification(env, { type: 5, userId: user.id })
+    return json(domainsResponse(updated))
+  }
+  if (path === "/api/hibp/breach" && method === "GET") {
+    const apiKey = (env as CloudflareEnv & { HIBP_API_KEY?: string })
+      .HIBP_API_KEY
+    const username = new URL(request.url).searchParams.get("username")
+    if (!username || username.length > 254)
+      return failure("A username is required")
+    if (!apiKey)
+      return failure("Breach reports need a Have I Been Pwned API key")
+    const breaches = await fetch(
+      `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(username)}?truncateResponse=false&includeUnverified=false`,
+      { headers: { "hibp-api-key": apiKey, "user-agent": "Cloudwarden" } }
+    )
+    if (breaches.status === 404) return json([])
+    if (!breaches.ok) return failure("Breach lookup failed", 502)
+    return json(await breaches.json())
+  }
   if (path === "/api/collections" && method === "GET") {
     const organizations = await listVaultOrganizations(env, user.id)
     const collections = (
@@ -2660,6 +3215,173 @@ export async function handleBitwarden(
       isOnSecretsManagerStandalone: false,
       organizationOccupiedSeats: 0,
     })
+  }
+  if (
+    (path === "/api/ciphers/organization-details" ||
+      path === "/api/ciphers/organization-details/assigned") &&
+    method === "GET"
+  ) {
+    const orgId = url.searchParams.get("organizationId") ?? ""
+    const membership =
+      /^[0-9a-f-]{36}$/i.test(orgId) &&
+      (await getVaultMembership(env, orgId, user.id))
+    if (!membership) return failure("Organization not found", 404)
+    const rights = await listVaultCollectionRights(env, orgId, membership)
+    const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
+    const ciphers = await Promise.all(
+      (await listOrgCipherLocators(env, orgId)).map(async (locator) => {
+        const access =
+          locator && cipherCollectionRights(rights, locator.collectionIds)
+        const row = access && (await orgVault.getVaultCipher(locator.id))
+        return row
+          ? cipherResponse(row, orgVault, env, user.id, origin, {
+              id: orgId,
+              ...access,
+            })
+          : null
+      })
+    )
+    return json(list(ciphers.filter((cipher) => cipher !== null)))
+  }
+  if (path === "/api/ciphers/bulk-collections" && method === "POST") {
+    const body = await bodyOf(request)
+    const orgId = (body && stringField(body, "organizationId")) ?? ""
+    const cipherIds = body && field(body, "cipherIds")
+    const collectionIds = body && collectionIdsField(body)
+    const removing = !!body && field(body, "removeCollections") === true
+    const member =
+      /^[0-9a-f-]{36}$/i.test(orgId) &&
+      (await getVaultMembership(env, orgId, user.id))
+    if (!member) return failure("Organization not found", 404)
+    if (
+      !collectionIds?.length ||
+      !Array.isArray(cipherIds) ||
+      !cipherIds.length ||
+      cipherIds.length > 100 ||
+      !cipherIds.every(
+        (id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id)
+      ) ||
+      !(await validOrgCollections(env, orgId, member, collectionIds))
+    )
+      return failure("Invalid collections")
+    const plans: { id: string; before: string[]; after: string[] }[] = []
+    for (const id of new Set(cipherIds as string[])) {
+      const locator = await getOrgCipherLocator(env, id)
+      if (!locator || locator.orgId !== orgId)
+        return failure("Cipher not found", 404)
+      const view = await orgCipherView(
+        env,
+        orgId,
+        member,
+        locator.collectionIds
+      )
+      if (!view) return failure("Cipher not found", 404)
+      if (!view.manage && (!view.edit || !view.viewPassword))
+        return failure("Collection editing is forbidden", 403)
+      const after = removing
+        ? locator.collectionIds.filter((item) => !collectionIds.includes(item))
+        : [...new Set([...locator.collectionIds, ...collectionIds])]
+      if (!after.length)
+        return failure("A shared item needs at least one collection")
+      if (
+        !(await writableVaultCollections(env, orgId, member, after)) ||
+        !(await orgCipherView(env, orgId, member, after))
+      )
+        return failure("Collection editing is forbidden", 403)
+      plans.push({ id, before: locator.collectionIds, after })
+    }
+    for (const plan of plans)
+      await setOrgCipherCollections(env, plan.id, plan.after)
+    await publishOrganizationSync(env, orgId, [
+      ...new Set(plans.flatMap((plan) => [...plan.before, ...plan.after])),
+    ])
+    return new Response(null, { status: 200 })
+  }
+  const orgPolicyMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/policies(?:\/(\d{1,3}))?$/.exec(
+      path
+    )
+  if (orgPolicyMatch) {
+    const orgId = orgPolicyMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role > 1)
+      return failure("Policy management is forbidden", 403)
+    if (method === "GET")
+      return json(
+        orgPolicyMatch[2]
+          ? {
+              id: crypto.randomUUID(),
+              organizationId: orgId,
+              type: Number(orgPolicyMatch[2]),
+              data: null,
+              enabled: false,
+              object: "policy",
+            }
+          : list([])
+      )
+    // Accepting a policy that nothing enforces would misstate the vault's rules.
+    return failure("Organization policies are not supported")
+  }
+  const orgEventsMatch = /^\/api\/organizations\/([0-9a-f-]{36})\/events$/.exec(
+    path
+  )
+  if (orgEventsMatch && method === "GET") {
+    const membership = await getVaultMembership(
+      env,
+      orgEventsMatch[1]!,
+      user.id
+    )
+    if (!membership) return failure("Organization not found", 404)
+    if (membership.role > 1) return failure("Event logs are forbidden", 403)
+    // Cloudwarden records no event log.
+    return json(list([]))
+  }
+  const collectionAccessMatch =
+    /^\/api\/organizations\/([0-9a-f-]{36})\/collections\/(?:(details|bulk-access)|([0-9a-f-]{36})\/(details|users))$/.exec(
+      path
+    )
+  if (collectionAccessMatch) {
+    const orgId = collectionAccessMatch[1]!
+    const membership = await getVaultMembership(env, orgId, user.id)
+    if (!membership) return failure("Organization not found", 404)
+    if (collectionAccessMatch[2] === "bulk-access") {
+      if (method !== "POST") return failure("Not found", 404)
+      if (membership.role > 1)
+        return failure("Collection management is forbidden", 403)
+      const body = await bodyOf(request)
+      const collectionIds = body && collectionIdsField(body)
+      const users = body && collectionGrantsField(body, "users")
+      const groups = body && collectionGrantsField(body, "groups")
+      return collectionIds &&
+        users &&
+        groups &&
+        (await grantCollectionAccess(env, orgId, collectionIds, users, groups))
+        ? new Response(null, { status: 200 })
+        : failure("Invalid collection access")
+    }
+    if (method !== "GET") return failure("Not found", 404)
+    const rights = await listVaultCollectionRights(env, orgId, membership)
+    const access =
+      membership.role <= 1 ? await listCollectionAccess(env, orgId) : null
+    const details = (await listVaultCollections(env, orgId, membership)).map(
+      (collection) => ({
+        ...collectionResponse(
+          collection,
+          membership,
+          rights.get(collection.id)!
+        ),
+        assigned: true,
+        unmanaged: false,
+        users: access?.get(collection.id)?.users ?? [],
+        groups: access?.get(collection.id)?.groups ?? [],
+        object: "collectionAccessDetails",
+      })
+    )
+    if (collectionAccessMatch[2] === "details") return json(list(details))
+    const one = details.find((item) => item.id === collectionAccessMatch[3])
+    if (!one) return failure("Collection not found", 404)
+    return json(collectionAccessMatch[4] === "users" ? one.users : one)
   }
   const orgExportMatch = /^\/api\/organizations\/([0-9a-f-]{36})\/export$/.exec(
     path
@@ -3356,6 +4078,7 @@ export async function handleBitwarden(
         })
       )
     ).flat()
+    const passkeyPrf = await passkeyPrfOptions(env, user.id)
     return json({
       profile: profile(
         user,
@@ -3377,24 +4100,12 @@ export async function handleBitwarden(
         )),
         ...(await sharedCipherResponses(env, user.id, origin)),
       ],
-      domains: {
-        equivalentDomains: [],
-        globalEquivalentDomains: [],
-        object: "domains",
-      },
+      domains: domainsResponse(user),
       sends: (await vault.listVaultSends()).map(sendResponse),
       userDecryption: {
-        masterPasswordUnlock: {
-          kdf: {
-            kdfType: user.kdf,
-            iterations: user.kdfIterations,
-            memory: user.kdfMemory,
-            parallelism: user.kdfParallelism,
-          },
-          masterKeyEncryptedUserKey: user.key,
-          masterKeyWrappedUserKey: user.key,
-          salt: user.email,
-        },
+        masterPasswordUnlock: masterPasswordUnlockResponse(user),
+        ...(passkeyPrf.length ? { webAuthnPrfOptions: passkeyPrf } : {}),
+        ...(user.userKeyId ? { userKeyId: user.userKeyId } : {}),
       },
       object: "sync",
     })
@@ -4496,6 +5207,27 @@ export async function handleBitwarden(
     if (!name) return failure("Invalid folder")
     const stored = await vault.putVaultFolder(crypto.randomUUID(), name)
     return json(folderResponse(stored.folder!))
+  }
+  if (
+    (path === "/api/folders" && method === "DELETE") ||
+    (path === "/api/folders/delete" && method === "POST") ||
+    (path === "/api/folders/all" && method === "DELETE")
+  ) {
+    let ids: unknown
+    if (path === "/api/folders/all")
+      ids = (await vault.listVault()).folders.map((folder) => folder.id)
+    else {
+      const body = await bodyOf(request)
+      ids = body && field(body, "ids")
+    }
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 500 ||
+      !ids.every((id) => typeof id === "string" && /^[0-9a-f-]{36}$/.test(id))
+    )
+      return failure("Invalid folders")
+    for (const id of ids as string[]) await vault.deleteVaultFolder(id)
+    return new Response(null, { status: 200 })
   }
   const folderMatch = /^\/api\/folders\/([0-9a-f-]{36})(?:\/delete)?$/.exec(
     path
