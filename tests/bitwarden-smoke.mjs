@@ -2672,6 +2672,22 @@ assert.deepEqual(
   ).body.groups,
   [{ id: groupId, readOnly: true, hidePasswords: true, manage: false }]
 )
+// A group saved the way current clients send it, without accessAll.
+const plainGroup = await authorized(
+  `/api/organizations/${orgId}/groups`,
+  "POST",
+  { name: "Plain group", collections: [{ id: grantedCollection }], users: [] }
+)
+assert.equal(plainGroup.status, 200, JSON.stringify(plainGroup.body))
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/groups/${plainGroup.body.id}`,
+      "DELETE"
+    )
+  ).status,
+  200
+)
 // Saving a collection replaces its grants with the ones the client sends.
 const savedCollection = await authorized(
   `/api/organizations/${orgId}/collections/${grantedCollection}`,
@@ -2764,6 +2780,69 @@ assert.equal(
     })
   ).status,
   400
+)
+// Roles: owners and admins can be assigned, owners only by owners, and the
+// last owner cannot be demoted or removed.
+const setRole = (caller, memberId, type) =>
+  caller === authorized
+    ? authorized(`/api/organizations/${orgId}/users/${memberId}`, "PUT", {
+        type,
+        collections: [],
+      })
+    : otherAuthorized(
+        `/api/organizations/${orgId}/users/${memberId}`,
+        { type, collections: [] },
+        "PUT"
+      )
+const roleOf = async (memberId) =>
+  (await authorized(`/api/organizations/${orgId}/users`)).body.data.find(
+    (member) => member.id === memberId
+  ).type
+assert.equal((await setRole(authorized, restrictedMember.id, 1)).status, 200)
+assert.equal(await roleOf(restrictedMember.id), 1)
+assert.equal((await setRole(authorized, restrictedMember.id, 0)).status, 200)
+assert.equal(await roleOf(restrictedMember.id), 0)
+assert.equal((await setRole(authorized, restrictedMember.id, 3)).status, 400)
+assert.equal((await setRole(authorized, restrictedMember.id, 2)).status, 200)
+assert.equal(await roleOf(restrictedMember.id), 2)
+const ownerMember = (
+  await authorized(`/api/organizations/${orgId}/users`)
+).body.data.find((member) => member.email === email)
+assert.equal(ownerMember.type, 0)
+assert.equal((await setRole(authorized, ownerMember.id, 2)).status, 400)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${ownerMember.id}`,
+      "DELETE"
+    )
+  ).status,
+  400
+)
+assert.equal(await roleOf(ownerMember.id), 0)
+const adminEmail = `admin-${crypto.randomUUID()}@example.test`
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/invite`, "POST", {
+      emails: [adminEmail],
+      type: 1,
+      collections: [],
+    })
+  ).status,
+  200
+)
+const adminMember = (
+  await authorized(`/api/organizations/${orgId}/users`)
+).body.data.find((member) => member.email === adminEmail)
+assert.equal(adminMember.type, 1)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/users/${adminMember.id}`,
+      "DELETE"
+    )
+  ).status,
+  200
 )
 assert.equal(
   (
@@ -3741,8 +3820,30 @@ const enrollment = await otherAuthorized("/api/two-factor/get-authenticator", {
 assert.equal(enrollment.status, 200)
 assert.match(enrollment.body.key, /^[A-Z2-7]{32}$/)
 const step = Math.floor(Date.now() / 30_000)
+// The token returned above authorizes the change without the password.
+assert.ok(enrollment.body.userVerificationToken)
+assert.notEqual(
+  (
+    await otherAuthorized("/api/two-factor/authenticator", {
+      userVerificationToken: `${enrollment.body.userVerificationToken}x`,
+      key: enrollment.body.key,
+      token: totp(enrollment.body.key, step - 1),
+    })
+  ).status,
+  200
+)
+assert.notEqual(
+  (
+    await authorized("/api/two-factor/authenticator", "PUT", {
+      userVerificationToken: enrollment.body.userVerificationToken,
+      key: enrollment.body.key,
+      token: totp(enrollment.body.key, step - 1),
+    })
+  ).status,
+  200
+)
 const activated = await otherAuthorized("/api/two-factor/authenticator", {
-  masterPasswordHash: "second-secret",
+  userVerificationToken: enrollment.body.userVerificationToken,
   key: enrollment.body.key,
   token: totp(enrollment.body.key, step - 1),
 })

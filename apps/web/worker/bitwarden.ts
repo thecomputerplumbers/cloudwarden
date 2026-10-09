@@ -65,6 +65,8 @@ import {
 } from "./bitwarden-delete-token"
 import {
   issueRegistrationToken,
+  issueTwoFactorVerification,
+  validTwoFactorVerification,
   verifyRegistrationToken,
 } from "./bitwarden-register"
 import {
@@ -109,6 +111,7 @@ import {
   updateVaultOrganization,
   grantCollectionAccess,
   setCollectionAccess,
+  setOrgMemberRole,
   listCollectionAccess,
   type CollectionGrant,
 } from "./bitwarden-org"
@@ -276,6 +279,21 @@ async function validateProtectedAction(
   return password
     ? verifyVaultPassword(user, password)
     : consumeProtectedOtp(env, user.id, otp!)
+}
+
+// A two-factor change is authorized by the token its "get" request returned,
+// or by reauthenticating again.
+async function twoFactorChangeVerified(
+  env: CloudflareEnv,
+  user: VaultUser,
+  body: Body | null,
+  otpAllowed = false
+) {
+  const token = body && stringField(body, "userVerificationToken")
+  if (token && (await validTwoFactorVerification(env, token, user))) return true
+  if (otpAllowed) return validateProtectedAction(env, user, body)
+  const password = body && stringField(body, "masterPasswordHash")
+  return !!password && verifyVaultPassword(user, password)
 }
 
 function numberField(body: Body, name: string) {
@@ -2768,14 +2786,14 @@ export async function handleBitwarden(
     return json({
       email: factor?.email ?? null,
       enabled: !!factor?.email,
+      userVerificationToken: await issueTwoFactorVerification(env, user),
       object: "twoFactorEmail",
     })
   }
   if (path === "/api/two-factor/send-email" && method === "POST") {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
     const email = body && stringField(body, "email")
-    if (!password || !(await verifyVaultPassword(user, password)))
+    if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email) return failure("Email is required")
     const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
@@ -2802,10 +2820,9 @@ export async function handleBitwarden(
     (method === "PUT" || method === "POST")
   ) {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
     const email = body && stringField(body, "email")
     const code = body && stringField(body, "token")
-    if (!password || !(await verifyVaultPassword(user, password)))
+    if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email || !code) return failure("Invalid email factor")
     const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
@@ -2834,6 +2851,7 @@ export async function handleBitwarden(
     return json({
       enabled: !!factor,
       key: factor?.secret ?? newTotpSecret(),
+      userVerificationToken: await issueTwoFactorVerification(env, user),
       object: "twoFactorAuthenticator",
     })
   }
@@ -2842,10 +2860,9 @@ export async function handleBitwarden(
     (method === "POST" || method === "PUT")
   ) {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
     const key = body && stringField(body, "key")
     const code = body && String(field(body, "token") ?? "")
-    if (!password || !(await verifyVaultPassword(user, password)))
+    if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!key || !code) return failure("Invalid authenticator fields")
     const step = await matchingTotpStep(key.toUpperCase(), code, 0)
@@ -2872,12 +2889,13 @@ export async function handleBitwarden(
         name: credential.name,
         migrated: false,
       })),
+      userVerificationToken: await issueTwoFactorVerification(env, user),
       object: "twoFactorWebAuthn",
     })
   }
   if (path === "/api/two-factor/get-webauthn-challenge" && method === "POST") {
     const body = await bodyOf(request)
-    if (!(await validateProtectedAction(env, user, body)))
+    if (!(await twoFactorChangeVerified(env, user, body, true)))
       return failure("Invalid reauthentication", 403)
     return json(await startWebauthnRegistration(env, user))
   }
@@ -2886,7 +2904,7 @@ export async function handleBitwarden(
     (method === "POST" || method === "PUT")
   ) {
     const body = await bodyOf(request)
-    if (!(await validateProtectedAction(env, user, body)))
+    if (!(await twoFactorChangeVerified(env, user, body, true)))
       return failure("Invalid reauthentication", 403)
     const slot = body && integerField(body, "id")
     const name = body && stringField(body, "name")
@@ -2919,7 +2937,7 @@ export async function handleBitwarden(
   }
   if (path === "/api/two-factor/webauthn" && method === "DELETE") {
     const body = await bodyOf(request)
-    if (!(await validateProtectedAction(env, user, body)))
+    if (!(await twoFactorChangeVerified(env, user, body, true)))
       return failure("Invalid reauthentication", 403)
     const slot = body && integerField(body, "id")
     if (!slot || !(await deleteWebauthnCredential(env, user.id, slot)))
@@ -2959,8 +2977,7 @@ export async function handleBitwarden(
     (method === "POST" || method === "PUT" || method === "DELETE")
   ) {
     const body = await bodyOf(request)
-    const password = body && stringField(body, "masterPasswordHash")
-    if (!password || !(await verifyVaultPassword(user, password)))
+    if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     const type = body && integerField(body, "type")
     if (type !== 0 && type !== 1 && type !== 7)
@@ -3598,10 +3615,12 @@ export async function handleBitwarden(
         emails.length === 0 ||
         emails.length > 20 ||
         !emails.every((email) => typeof email === "string") ||
-        role !== 2 ||
+        (role !== 0 && role !== 1 && role !== 2) ||
         collectionIds.some((id) => !id)
       )
         return failure("Invalid invitation")
+      if (role === 0 && membership.role !== 0)
+        return failure("Only owners can invite owners", 403)
       const ids = collectionIds as string[]
       if (
         !accessAll &&
@@ -3737,8 +3756,9 @@ export async function handleBitwarden(
       const body = await bodyOf(request)
       const rawCollections = body && field(body, "collections")
       const groups = body && field(body, "groups")
+      const nextRole = body ? integerField(body, "type") : undefined
       if (
-        (body && integerField(body, "type") !== 2) ||
+        (nextRole !== 0 && nextRole !== 1 && nextRole !== 2) ||
         !Array.isArray(rawCollections) ||
         (groups !== undefined &&
           (!Array.isArray(groups) ||
@@ -3768,17 +3788,41 @@ export async function handleBitwarden(
       )
       if (groupIds?.some((id) => !availableGroups.has(id)))
         return failure("Invalid member groups")
-      const updated = await setOrgMemberCollections(
+      const roleChange = await setOrgMemberRole(
         env,
         orgId,
         memberId,
-        collections as {
-          id: string
-          readOnly: boolean
-          hidePasswords: boolean
-        }[]
+        nextRole,
+        membership.role
       )
-      if (!updated) return failure("Member or collection not found", 404)
+      if (roleChange !== "updated")
+        return failure(
+          roleChange === "last-owner"
+            ? "An organization needs at least one owner"
+            : roleChange === "forbidden"
+              ? "Only owners can manage owners"
+              : "Member not found",
+          roleChange === "missing"
+            ? 404
+            : roleChange === "forbidden"
+              ? 403
+              : 400
+        )
+      // Owners and admins reach every collection; grants apply to members.
+      if (
+        nextRole === 2 &&
+        !(await setOrgMemberCollections(
+          env,
+          orgId,
+          memberId,
+          collections as {
+            id: string
+            readOnly: boolean
+            hidePasswords: boolean
+          }[]
+        ))
+      )
+        return failure("Member or collection not found", 404)
       if (groupIds && !(await setMemberGroups(env, orgId, memberId, groupIds)))
         return failure("Invalid member groups")
       await publishOrganizationSync(env, orgId, null)
@@ -3794,9 +3838,22 @@ export async function handleBitwarden(
         : failure("Pending member not found", 404)
     }
     if (memberId && !memberMatch[3] && method === "DELETE") {
-      return (await removeOrgMember(env, orgId, memberId))
+      const removal = await removeOrgMember(
+        env,
+        orgId,
+        memberId,
+        membership.role
+      )
+      return removal === "removed"
         ? new Response(null, { status: 200 })
-        : failure("Member not found", 404)
+        : failure(
+            removal === "last-owner"
+              ? "An organization needs at least one owner"
+              : removal === "forbidden"
+                ? "Only owners can manage owners"
+                : "Member not found",
+            removal === "missing" ? 404 : removal === "forbidden" ? 403 : 400
+          )
     }
   }
   const groupMatch =
@@ -3843,9 +3900,11 @@ export async function handleBitwarden(
       const body = await bodyOf(request)
       const name = body && stringField(body, "name")
       const externalId = body && field(body, "externalId")
-      const rawCollections = body && field(body, "collections")
-      const users = body && field(body, "users")
-      const accessAll = body && field(body, "accessAll")
+      // Current clients send only name, collections and users, and may omit
+      // the lists and the per-collection flags.
+      const rawCollections = (body && field(body, "collections")) ?? []
+      const users = (body && field(body, "users")) ?? []
+      const accessAll = (body && field(body, "accessAll")) ?? false
       if (
         !name ||
         name.length > 100 ||
@@ -3864,9 +3923,9 @@ export async function handleBitwarden(
           return null
         const entry = item as Body
         const id = stringField(entry, "id")
-        const readOnly = field(entry, "readOnly")
-        const hidePasswords = field(entry, "hidePasswords")
-        const manage = field(entry, "manage")
+        const readOnly = field(entry, "readOnly") ?? false
+        const hidePasswords = field(entry, "hidePasswords") ?? false
+        const manage = field(entry, "manage") ?? false
         return id &&
           /^[0-9a-f-]{36}$/i.test(id) &&
           typeof readOnly === "boolean" &&

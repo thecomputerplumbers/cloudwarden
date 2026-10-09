@@ -242,22 +242,91 @@ export async function confirmOrgMember(
     .get()
 }
 
+async function confirmedOwners(env: CloudflareEnv, orgId: string) {
+  return (
+    await drizzle(env.DB)
+      .select({ id: vaultMembership.id })
+      .from(vaultMembership)
+      .where(
+        and(
+          eq(vaultMembership.orgId, orgId),
+          eq(vaultMembership.role, 0),
+          eq(vaultMembership.status, 2)
+        )
+      )
+      .all()
+  ).map((owner) => owner.id)
+}
+
+// Only an owner may touch an owner, and an organization keeps at least one
+// confirmed owner.
+async function manageableMember(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string,
+  actorRole: number,
+  keepsOwnership: boolean
+) {
+  const member = await drizzle(env.DB)
+    .select()
+    .from(vaultMembership)
+    .where(
+      and(eq(vaultMembership.id, memberId), eq(vaultMembership.orgId, orgId))
+    )
+    .get()
+  if (!member) return "missing" as const
+  if (actorRole > 1 || (member.role === 0 && actorRole !== 0))
+    return "forbidden" as const
+  if (member.role === 0 && !keepsOwnership) {
+    const owners = await confirmedOwners(env, orgId)
+    if (owners.includes(member.id) && owners.length <= 1)
+      return "last-owner" as const
+  }
+  return member
+}
+
 export async function removeOrgMember(
   env: CloudflareEnv,
   orgId: string,
-  memberId: string
+  memberId: string,
+  actorRole: number
 ) {
-  return drizzle(env.DB)
+  const member = await manageableMember(env, orgId, memberId, actorRole, false)
+  if (typeof member === "string") return member
+  await drizzle(env.DB)
     .delete(vaultMembership)
     .where(
-      and(
-        eq(vaultMembership.id, memberId),
-        eq(vaultMembership.orgId, orgId),
-        eq(vaultMembership.role, 2)
-      )
+      and(eq(vaultMembership.id, memberId), eq(vaultMembership.orgId, orgId))
     )
-    .returning()
-    .get()
+    .run()
+  return "removed" as const
+}
+
+export async function setOrgMemberRole(
+  env: CloudflareEnv,
+  orgId: string,
+  memberId: string,
+  role: number,
+  actorRole: number
+) {
+  if (role === 0 && actorRole !== 0) return "forbidden" as const
+  const member = await manageableMember(
+    env,
+    orgId,
+    memberId,
+    actorRole,
+    role === 0
+  )
+  if (typeof member === "string") return member
+  if (member.role !== role)
+    await drizzle(env.DB)
+      .update(vaultMembership)
+      .set({ role })
+      .where(
+        and(eq(vaultMembership.id, memberId), eq(vaultMembership.orgId, orgId))
+      )
+      .run()
+  return "updated" as const
 }
 
 export async function getOrgCipherLocator(env: CloudflareEnv, id: string) {

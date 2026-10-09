@@ -85,3 +85,61 @@ export async function verifyRegistrationToken(
     return null
   }
 }
+
+// Returned once a two-factor settings request has been reauthenticated, so
+// the change that follows need not carry the master password again.
+export async function issueTwoFactorVerification(
+  env: CloudflareEnv,
+  user: { id: string; securityStamp: string }
+) {
+  const payload = base64Url(
+    encoder.encode(
+      JSON.stringify({
+        purpose: "cloudwarden-two-factor-verification",
+        userId: user.id,
+        securityStamp: user.securityStamp,
+        expiresAt: Date.now() + 15 * 60_000,
+      })
+    )
+  )
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await key(env),
+    encoder.encode(payload)
+  )
+  return `${payload}.${base64Url(new Uint8Array(signature))}`
+}
+
+export async function validTwoFactorVerification(
+  env: CloudflareEnv,
+  token: string,
+  user: { id: string; securityStamp: string }
+) {
+  const parts = token.split(".")
+  if (
+    parts.length !== 2 ||
+    parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))
+  )
+    return false
+  try {
+    const valid = await crypto.subtle.verify(
+      "HMAC",
+      await key(env),
+      decodeBase64Url(parts[1]!),
+      encoder.encode(parts[0]!)
+    )
+    if (!valid) return false
+    const claims = JSON.parse(
+      new TextDecoder().decode(decodeBase64Url(parts[0]!))
+    ) as Record<string, unknown>
+    return (
+      claims.purpose === "cloudwarden-two-factor-verification" &&
+      claims.userId === user.id &&
+      claims.securityStamp === user.securityStamp &&
+      typeof claims.expiresAt === "number" &&
+      claims.expiresAt > Date.now()
+    )
+  } catch {
+    return false
+  }
+}

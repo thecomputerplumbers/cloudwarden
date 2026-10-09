@@ -379,3 +379,17 @@ collections on several ciphers with the same checks as the single-item route.
 Policies are not enforced: the policy list is empty, each type reads as
 disabled, and saving a policy is rejected rather than accepted without effect.
 No event log is recorded, so event routes return an empty list.
+
+Owners and admins can be invited and assigned as well as members. Only an
+owner can invite, change, or remove an owner, and an organization keeps at
+least one confirmed owner. Invitations keep the read-only and hide-passwords
+choice for each collection and the selected groups. Saving a collection with
+`users` or `groups` replaces that kind of grant; omitting a list leaves it
+unchanged. Groups are saved from `name`, `collections`, and `users` alone.
+
+The two-factor "get" routes return a `userVerificationToken`, valid for fifteen
+minutes and bound to the account's security stamp. The change that follows can
+present it in place of the master-password hash, as current clients do.
+
+Bank account, driver's license, and passport items are stored and returned
+with their type-specific data.
