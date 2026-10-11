@@ -2128,6 +2128,20 @@ const editedShared = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
 })
 assert.equal(editedShared.status, 200)
 assert.equal(editedShared.body.name, "2.edited-shared-name")
+// The web vault edits a shared item without restating its collections.
+const { collectionIds: _unsentCollections, ...clientSharedBody } =
+  sharedCipherBody
+const clientEditedShared = await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+  ...clientSharedBody,
+  name: "2.edited-shared-name",
+  favorite: false,
+  lastKnownRevisionDate: editedShared.body.revisionDate,
+})
+assert.equal(clientEditedShared.status, 200)
+assert.deepEqual(
+  clientEditedShared.body.collectionIds,
+  editedShared.body.collectionIds
+)
 assert.ok(
   Date.parse((await authorized("/api/accounts/revision-date")).body) >
     Date.parse(beforeSharedEditRevision)

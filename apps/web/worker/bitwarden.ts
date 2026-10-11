@@ -4928,7 +4928,12 @@ export async function handleBitwarden(
           return failure("Invalid cipher preferences")
         if (folderId && !(await vault.getVaultFolder(folderId)))
           return failure("Folder not found", 404)
-        const collectionIds = collectionIdsField(body)
+        // Clients edit an item without restating its collections; only a
+        // request that names different ones is asking to move it.
+        const collectionIds =
+          field(body, "collectionIds") == null
+            ? locator.collectionIds
+            : collectionIdsField(body)
         if (
           !collectionIds ||
           collectionIds.length !== locator.collectionIds.length ||
