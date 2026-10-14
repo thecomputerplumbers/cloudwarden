@@ -1415,6 +1415,25 @@ assert.equal(
   ).status,
   200
 )
+// Sync once made a Durable Object call per cipher, so a vault of a few hundred
+// items timed out the Android client.
+const beforeBulk = (await authorized("/api/sync")).body.ciphers.length
+assert.equal(
+  (
+    await authorized("/api/ciphers/import", "POST", {
+      folders: [],
+      ciphers: Array.from({ length: 300 }, (_, index) => ({
+        type: 1,
+        name: `2.bulk-${index}`,
+      })),
+      folderRelationships: [],
+    })
+  ).status,
+  200
+)
+const bulkSync = await authorized("/api/sync")
+assert.equal(bulkSync.status, 200)
+assert.equal(bulkSync.body.ciphers.length, beforeBulk + 300)
 const reused = await authorized("/api/sync")
 assert.equal(reused.body.folders.length, imported.body.folders.length)
 assert.equal(

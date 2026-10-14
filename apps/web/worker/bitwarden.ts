@@ -719,6 +719,22 @@ async function attachmentResponse(
     userId
   )
   if (!token) throw new Error("Attachment became unavailable")
+  return attachmentBody(attachment, token, userId, origin, orgId)
+}
+
+function attachmentBody(
+  attachment: {
+    id: string
+    cipherId: string
+    fileName: string
+    key: string | null
+    size: number
+  },
+  token: string,
+  userId: string,
+  origin: string,
+  orgId?: string
+) {
   return {
     id: attachment.id,
     url: `${origin}/attachments/${attachment.cipherId}/${attachment.id}?token=${orgId ? `${orgId}:${userId}` : userId}.${token}`,
@@ -729,26 +745,85 @@ async function attachmentResponse(
   }
 }
 
+type CipherOrganization = {
+  id: string
+  collectionIds: string[]
+  edit: boolean
+  viewPassword: boolean
+}
+
 async function cipherResponse(
   row: CipherRow,
   vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
   env: CloudflareEnv,
   userId: string,
   origin: string,
-  organization?: {
-    id: string
-    collectionIds: string[]
-    edit: boolean
-    viewPassword: boolean
-  }
+  organization?: CipherOrganization
+) {
+  return (
+    await cipherResponses([{ row, organization }], vault, env, userId, origin)
+  )[0]!
+}
+
+// Every cipher in `items` must live in `vault`. Lookups are batched so a
+// response costs at most two Durable Object calls regardless of its size.
+async function cipherResponses(
+  items: { row: CipherRow; organization?: CipherOrganization }[],
+  vault: Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>,
+  env: CloudflareEnv,
+  userId: string,
+  origin: string
+) {
+  if (!items.length) return []
+  const ids = items.map(({ row }) => row.id)
+  const [details, preferences] = await Promise.all([
+    vault.listVaultCipherDetails(ids, userId),
+    items.some(({ organization }) => organization)
+      ? env.APP_DATABASE.getByName(
+          `vault:${userId}`
+        ).listVaultCipherPreferences(ids)
+      : [],
+  ])
+  const attachmentsByCipher = new Map<
+    string,
+    (typeof details.attachments)[number][]
+  >()
+  for (const attachment of details.attachments)
+    attachmentsByCipher.set(attachment.cipherId, [
+      ...(attachmentsByCipher.get(attachment.cipherId) ?? []),
+      attachment,
+    ])
+  const archivedAt = new Map(
+    details.archived.map((row) => [row.cipherId, row.archivedAt])
+  )
+  const preferenceByCipher = new Map(
+    preferences.map((preference) => [preference.cipherId, preference])
+  )
+  return items.map(({ row, organization }) =>
+    cipherBody(
+      row,
+      organization,
+      attachmentsByCipher.get(row.id) ?? [],
+      archivedAt.get(row.id) ?? null,
+      organization ? (preferenceByCipher.get(row.id) ?? null) : null,
+      userId,
+      origin
+    )
+  )
+}
+
+function cipherBody(
+  row: CipherRow,
+  organization: CipherOrganization | undefined,
+  attachments: Awaited<
+    ReturnType<AppDatabase["listVaultCipherDetails"]>
+  >["attachments"],
+  archivedAt: Date | null,
+  preference: { folderId: string | null; favorite: boolean } | null,
+  userId: string,
+  origin: string
 ) {
   const data = JSON.parse(row.payload) as Body
-  const attachments = await vault.listVaultAttachments(row.id)
-  const preference = organization
-    ? await (
-        await env.APP_DATABASE.getByName(`vault:${userId}`)
-      ).getVaultCipherPreference(row.id)
-    : null
   return {
     object: "cipherDetails",
     id: row.id,
@@ -760,15 +835,13 @@ async function cipherResponse(
     organizationId: organization?.id ?? null,
     key: field(data, "key") ?? null,
     attachments: attachments.length
-      ? await Promise.all(
-          attachments.map((attachment) =>
-            attachmentResponse(
-              vault,
-              attachment,
-              userId,
-              origin,
-              organization?.id
-            )
+      ? attachments.map((attachment) =>
+          attachmentBody(
+            attachment,
+            attachment.token,
+            userId,
+            origin,
+            organization?.id
           )
         )
       : null,
@@ -792,9 +865,7 @@ async function cipherResponse(
     favorite: organization
       ? (preference?.favorite ?? false)
       : field(data, "favorite") === true,
-    archivedDate:
-      (await vault.getVaultCipherArchivedAt(row.id, userId))?.toISOString() ??
-      null,
+    archivedDate: archivedAt?.toISOString() ?? null,
     edit: organization?.edit ?? true,
     viewPassword: organization?.viewPassword ?? true,
     permissions: {
@@ -821,21 +892,24 @@ async function sharedCipherResponses(
       const orgVault = await env.APP_DATABASE.getByName(
         `org:${organization.id}`
       )
-      const ciphers = await Promise.all(
-        locators.map(async (locator) => {
-          if (!locator) return null
-          const access = cipherCollectionRights(rights, locator.collectionIds)
-          if (!access) return null
-          const row = await orgVault.getVaultCipher(locator.id)
-          return row
-            ? cipherResponse(row, orgVault, env, userId, origin, {
-                id: organization.id,
-                ...access,
-              })
-            : null
+      const access = new Map(
+        locators.flatMap((locator) => {
+          const allowed =
+            locator && cipherCollectionRights(rights, locator.collectionIds)
+          return allowed ? [[locator.id, allowed] as const] : []
         })
       )
-      return ciphers.filter((cipher) => cipher !== null)
+      const rows = await orgVault.listVaultCiphers([...access.keys()])
+      return cipherResponses(
+        rows.map((row) => ({
+          row,
+          organization: { id: organization.id, ...access.get(row.id)! },
+        })),
+        orgVault,
+        env,
+        userId,
+        origin
+      )
     })
   )
   return responses.flat()
@@ -3331,20 +3405,28 @@ export async function handleBitwarden(
     if (!membership) return failure("Organization not found", 404)
     const rights = await listVaultCollectionRights(env, orgId, membership)
     const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
-    const ciphers = await Promise.all(
-      (await listOrgCipherLocators(env, orgId)).map(async (locator) => {
-        const access =
+    const access = new Map(
+      (await listOrgCipherLocators(env, orgId)).flatMap((locator) => {
+        const allowed =
           locator && cipherCollectionRights(rights, locator.collectionIds)
-        const row = access && (await orgVault.getVaultCipher(locator.id))
-        return row
-          ? cipherResponse(row, orgVault, env, user.id, origin, {
-              id: orgId,
-              ...access,
-            })
-          : null
+        return allowed ? [[locator.id, allowed] as const] : []
       })
     )
-    return json(list(ciphers.filter((cipher) => cipher !== null)))
+    const rows = await orgVault.listVaultCiphers([...access.keys()])
+    return json(
+      list(
+        await cipherResponses(
+          rows.map((row) => ({
+            row,
+            organization: { id: orgId, ...access.get(row.id)! },
+          })),
+          orgVault,
+          env,
+          user.id,
+          origin
+        )
+      )
+    )
   }
   if (path === "/api/ciphers/bulk-collections" && method === "POST") {
     const body = await bodyOf(request)
@@ -3503,19 +3585,27 @@ export async function handleBitwarden(
     )
     const locators = await listOrgCipherLocators(env, orgId)
     const orgVault = await env.APP_DATABASE.getByName(`org:${orgId}`)
-    const ciphers = await Promise.all(
-      locators.map(async (locator) => {
-        if (!locator) return null
-        const row = await orgVault.getVaultCipher(locator.id)
-        return row
-          ? cipherResponse(row, orgVault, env, user.id, origin, {
-              id: orgId,
-              collectionIds: locator.collectionIds,
-              edit: true,
-              viewPassword: true,
-            })
-          : null
-      })
+    const collectionIdsByCipher = new Map(
+      locators.flatMap((locator) =>
+        locator ? [[locator.id, locator.collectionIds] as const] : []
+      )
+    )
+    const ciphers = await cipherResponses(
+      (await orgVault.listVaultCiphers([...collectionIdsByCipher.keys()])).map(
+        (row) => ({
+          row,
+          organization: {
+            id: orgId,
+            collectionIds: collectionIdsByCipher.get(row.id)!,
+            edit: true,
+            viewPassword: true,
+          },
+        })
+      ),
+      orgVault,
+      env,
+      user.id,
+      origin
     )
     return json({
       collections: collections.map((collection) =>
@@ -4297,10 +4387,12 @@ export async function handleBitwarden(
       collections,
       policies: [],
       ciphers: [
-        ...(await Promise.all(
-          data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, env, user.id, origin)
-          )
+        ...(await cipherResponses(
+          data.ciphers.map((row) => ({ row })),
+          vault,
+          env,
+          user.id,
+          origin
         )),
         ...(await sharedCipherResponses(env, user.id, origin)),
       ],
@@ -4330,10 +4422,12 @@ export async function handleBitwarden(
     const data = await vault.listVault()
     return json(
       list([
-        ...(await Promise.all(
-          data.ciphers.map((cipher) =>
-            cipherResponse(cipher, vault, env, user.id, origin)
-          )
+        ...(await cipherResponses(
+          data.ciphers.map((row) => ({ row })),
+          vault,
+          env,
+          user.id,
+          origin
         )),
         ...(await sharedCipherResponses(env, user.id, origin)),
       ])

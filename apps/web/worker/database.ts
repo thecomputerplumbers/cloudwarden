@@ -1069,6 +1069,16 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     )
   }
 
+  async listVaultCiphers(ids: string[]) {
+    this.assertVaultActive()
+    const wanted = new Set(ids)
+    return this.db
+      .select()
+      .from(schema.vaultCipher)
+      .all()
+      .filter((cipher) => wanted.has(cipher.id))
+  }
+
   private vaultShareKey(id: string) {
     return `vault:share:${id}`
   }
@@ -1852,6 +1862,63 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     this.assertVaultActive()
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return null
+    this.db
+      .delete(schema.vaultAttachmentToken)
+      .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
+      .run()
+    return this.insertVaultAttachmentToken(id, userId)
+  }
+
+  // One round trip for everything a list of cipher responses needs, so sync
+  // costs a fixed number of calls however many ciphers the vault holds.
+  async listVaultCipherDetails(cipherIds: string[], userId: string) {
+    this.assertVaultActive()
+    const ids = new Set(cipherIds)
+    const attachments = this.db
+      .select()
+      .from(schema.vaultAttachment)
+      .where(eq(schema.vaultAttachment.uploaded, true))
+      .all()
+      .filter((attachment) => ids.has(attachment.cipherId))
+    const archived = this.db
+      .select({
+        cipherId: schema.vaultCipherArchive.cipherId,
+        archivedAt: schema.vaultCipherArchive.archivedAt,
+      })
+      .from(schema.vaultCipherArchive)
+      .where(eq(schema.vaultCipherArchive.userId, userId))
+      .all()
+      .filter((row) => ids.has(row.cipherId))
+    if (attachments.length)
+      this.db
+        .delete(schema.vaultAttachmentToken)
+        .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
+        .run()
+    const tokens = await Promise.all(
+      attachments.map((attachment) =>
+        this.insertVaultAttachmentToken(attachment.id, userId)
+      )
+    )
+    return {
+      attachments: attachments.map((attachment, index) => ({
+        ...attachment,
+        token: tokens[index]!,
+      })),
+      archived,
+    }
+  }
+
+  async listVaultCipherPreferences(cipherIds: string[]) {
+    this.assertVaultActive()
+    const ids = new Set(cipherIds)
+    return this.db
+      .select()
+      .from(schema.vaultCipherPreference)
+      .all()
+      .filter((preference) => ids.has(preference.cipherId))
+  }
+
+  private async insertVaultAttachmentToken(id: string, userId: string) {
     const bytes = crypto.getRandomValues(new Uint8Array(32))
     const token = btoa(String.fromCharCode(...bytes))
       .replaceAll("+", "-")
@@ -1864,10 +1931,6 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     const hash = Array.from(new Uint8Array(digest), (byte) =>
       byte.toString(16).padStart(2, "0")
     ).join("")
-    this.db
-      .delete(schema.vaultAttachmentToken)
-      .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
-      .run()
     this.db
       .insert(schema.vaultAttachmentToken)
       .values({
