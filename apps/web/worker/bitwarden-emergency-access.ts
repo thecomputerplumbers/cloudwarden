@@ -28,14 +28,16 @@ type Grant = typeof vaultEmergencyAccess.$inferSelect
 type Vault = Awaited<ReturnType<CloudflareEnv["APP_DATABASE"]["getByName"]>>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
 
-// bitwarden.ts owns the cipher response shape and passes it in.
+// bitwarden.ts owns the cipher response shape and passes it in. It renders a
+// whole vault in one batch so a large vault is not one Durable Object call
+// per cipher.
 export type EmergencyCipherRenderer = (
-  row: CipherRow,
+  rows: CipherRow[],
   vault: Vault,
   env: CloudflareEnv,
   userId: string,
   origin: string
-) => Promise<unknown>
+) => Promise<unknown[]>
 
 const INVITED = 0
 const ACCEPTED = 1
@@ -920,10 +922,12 @@ export async function handleEmergencyAccess(
     const vault = await env.APP_DATABASE.getByName(`vault:${access.grantor.id}`)
     const { ciphers } = await vault.listVault()
     return json({
-      ciphers: await Promise.all(
-        ciphers.map((row) =>
-          renderCipher(row, vault, env, access.grantor.id, origin)
-        )
+      ciphers: await renderCipher(
+        ciphers,
+        vault,
+        env,
+        access.grantor.id,
+        origin
       ),
       keyEncrypted: access.grant.keyEncrypted,
       object: "emergencyAccessView",
