@@ -381,13 +381,39 @@ export async function getOrgCipherLocator(env: CloudflareEnv, id: string) {
   return { ...locator, collectionIds: mappings.map((row) => row.collectionId) }
 }
 
+// Two queries per organization, not two per cipher: sync reads every locator,
+// and an organization of a thousand items otherwise outlasts the client.
 export async function listOrgCipherLocators(env: CloudflareEnv, orgId: string) {
-  const ids = await drizzle(env.DB)
-    .select({ id: vaultOrgCipher.id })
-    .from(vaultOrgCipher)
-    .where(eq(vaultOrgCipher.orgId, orgId))
-    .all()
-  return Promise.all(ids.map((row) => getOrgCipherLocator(env, row.id)))
+  const db = drizzle(env.DB)
+  const [locators, mappings] = await Promise.all([
+    db
+      .select()
+      .from(vaultOrgCipher)
+      .where(eq(vaultOrgCipher.orgId, orgId))
+      .all(),
+    db
+      .select({
+        cipherId: vaultOrgCipherCollection.cipherId,
+        collectionId: vaultOrgCipherCollection.collectionId,
+      })
+      .from(vaultOrgCipherCollection)
+      .innerJoin(
+        vaultOrgCipher,
+        eq(vaultOrgCipher.id, vaultOrgCipherCollection.cipherId)
+      )
+      .where(eq(vaultOrgCipher.orgId, orgId))
+      .all(),
+  ])
+  const collectionIds = new Map<string, string[]>()
+  for (const { cipherId, collectionId } of mappings)
+    collectionIds.set(cipherId, [
+      ...(collectionIds.get(cipherId) ?? []),
+      collectionId,
+    ])
+  return locators.map((locator) => ({
+    ...locator,
+    collectionIds: collectionIds.get(locator.id) ?? [],
+  }))
 }
 
 export async function createOrgCipherLocator(
