@@ -404,6 +404,36 @@ export async function listOrgCipherLocators(env: CloudflareEnv, orgId: string) {
       .where(eq(vaultOrgCipher.orgId, orgId))
       .all(),
   ])
+  return withCollectionIds(locators, mappings)
+}
+
+// Bulk routes cap a request at 100 IDs, which is also D1's bound parameter
+// limit, so each lookup fits in one query.
+export async function getOrgCipherLocators(env: CloudflareEnv, ids: string[]) {
+  if (!ids.length) return []
+  const db = drizzle(env.DB)
+  const [locators, mappings] = await Promise.all([
+    db
+      .select()
+      .from(vaultOrgCipher)
+      .where(inArray(vaultOrgCipher.id, ids))
+      .all(),
+    db
+      .select({
+        cipherId: vaultOrgCipherCollection.cipherId,
+        collectionId: vaultOrgCipherCollection.collectionId,
+      })
+      .from(vaultOrgCipherCollection)
+      .where(inArray(vaultOrgCipherCollection.cipherId, ids))
+      .all(),
+  ])
+  return withCollectionIds(locators, mappings)
+}
+
+function withCollectionIds(
+  locators: (typeof vaultOrgCipher.$inferSelect)[],
+  mappings: { cipherId: string; collectionId: string }[]
+) {
   const collectionIds = new Map<string, string[]>()
   for (const { cipherId, collectionId } of mappings)
     collectionIds.set(cipherId, [
@@ -443,6 +473,29 @@ export async function setOrgCipherCollections(
       .where(eq(vaultOrgCipherCollection.cipherId, cipherId)),
     ...collectionIds.map((collectionId) =>
       db.insert(vaultOrgCipherCollection).values({ cipherId, collectionId })
+    ),
+  ])
+}
+
+export async function setOrgCipherCollectionsMany(
+  env: CloudflareEnv,
+  plans: { id: string; collectionIds: string[] }[]
+) {
+  if (!plans.length) return
+  const db = drizzle(env.DB)
+  await db.batch([
+    db.delete(vaultOrgCipherCollection).where(
+      inArray(
+        vaultOrgCipherCollection.cipherId,
+        plans.map((plan) => plan.id)
+      )
+    ),
+    ...plans.flatMap((plan) =>
+      plan.collectionIds.map((collectionId) =>
+        db
+          .insert(vaultOrgCipherCollection)
+          .values({ cipherId: plan.id, collectionId })
+      )
     ),
   ])
 }
@@ -794,10 +847,20 @@ export async function writableVaultCollections(
   collectionIds: string[]
 ) {
   if (!collectionIds.length || collectionIds.length > 50) return false
-  const rights = await listVaultCollectionRights(env, orgId, membership)
+  return writableCollectionRights(
+    await listVaultCollectionRights(env, orgId, membership),
+    collectionIds
+  )
+}
+
+export function writableCollectionRights(
+  rights: Map<string, VaultCollectionRights>,
+  collectionIds: string[]
+) {
+  if (!collectionIds.length || collectionIds.length > 50) return false
   return collectionIds.every((id) => {
     const grant = rights.get(id)
-    return grant && (!grant.readOnly || grant.manage)
+    return !!grant && (!grant.readOnly || grant.manage)
   })
 }
 
