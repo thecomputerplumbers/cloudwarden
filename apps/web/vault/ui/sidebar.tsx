@@ -10,6 +10,7 @@ import {
 } from "@workspace/ui/components/dropdown-menu"
 import { cn } from "@workspace/ui/lib/utils"
 import {
+  Building2Icon,
   ChevronsUpDownIcon,
   CreditCardIcon,
   FolderIcon,
@@ -110,6 +111,7 @@ export function Sidebar({
   filter,
   onFilter,
   onSecrets,
+  onAdmin,
   onSettings,
 }: {
   filter: ItemFilter
@@ -117,6 +119,8 @@ export function Sidebar({
   onSettings: () => void
   /** Opens Secrets Manager; absent when the account administers no organization. */
   onSecrets?: () => void
+  /** Opens organization admin; absent when the account administers no organization. */
+  onAdmin?: () => void
 }) {
   const state = vault.useVault()
   const ids = state.vaults.map((entry) => entry.id)
@@ -289,6 +293,13 @@ export function Sidebar({
               ).length
             }
           />
+          {onAdmin && (
+            <Row
+              onClick={onAdmin}
+              icon={<Building2Icon className="size-4" />}
+              label="Organization admin"
+            />
+          )}
           {onSecrets && (
             <Row
               onClick={onSecrets}
