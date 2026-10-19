@@ -39,6 +39,10 @@ export const vaultUser = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
     deletingAt: integer("deleting_at", { mode: "timestamp_ms" }),
+    // The native vault's saved vault selection: JSON `{ "excluded": [...] }`,
+    // where "personal" is the account's own vault and the rest are
+    // organization IDs. Stored as exclusions so a new organization shows up.
+    vaultSelection: text("vault_selection"),
   },
   (table) => [uniqueIndex("vault_user_email_unique").on(table.email)]
 )

@@ -294,7 +294,13 @@ export default {
         return auth.handler(request)
       }
       if (product.slug === "cloudwarden") {
-        if (path === "/api/health") {
+        // /api/health and the native vault (app/vault) are vinext; everything
+        // else at the root is still the Bitwarden web vault.
+        if (
+          path === "/api/health" ||
+          path === "/vault" ||
+          path.startsWith("/vault/")
+        ) {
           const { default: vinextWorker } =
             await import("vinext/server/app-router-entry")
           return vinextWorker.fetch(request, env, ctx)

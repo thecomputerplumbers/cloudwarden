@@ -3,6 +3,8 @@ export const metadata = {
   title: { default: product.name, template: `%s | ${product.name}` },
   description: product.description,
 }
+// Imported here, not from the stylesheet, so Vite emits the font files the CSS points at.
+import "@fontsource-variable/inter"
 import "@workspace/ui/globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 

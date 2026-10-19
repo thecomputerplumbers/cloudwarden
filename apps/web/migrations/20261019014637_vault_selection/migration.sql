@@ -1,0 +1,1 @@
+ALTER TABLE `vault_user` ADD `vault_selection` text;
