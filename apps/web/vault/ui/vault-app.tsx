@@ -3,7 +3,7 @@
 import { lazy, Suspense, useEffect, useState } from "react"
 import * as vault from "../store.ts"
 import { SignIn, Unlock } from "./auth.tsx"
-import { Toaster } from "./toast.tsx"
+import { Toaster, toast } from "./toast.tsx"
 import { VaultLoading } from "./vault-loading.tsx"
 
 const loadUnlocked = () => import("./unlocked-vault.tsx")
@@ -18,11 +18,13 @@ export function VaultApp() {
   >(null)
   const VaultView = loadedVault ?? Unlocked
   useEffect(() => {
-    // Bitwarden-style links in emails (#/accept-organization, #/settings, ...)
-    // belong to the web client, which now lives at /legacy/.
+    // Emails still carry Bitwarden web vault links (#/accept-organization,
+    // #/finish-signup, ...), whose screens this vault does not have yet.
     if (window.location.hash.startsWith("#/")) {
-      window.location.replace(`/legacy/${window.location.hash}`)
-      return
+      history.replaceState(null, "", window.location.pathname)
+      toast(
+        "That link is for a screen this vault does not have yet. Use a Bitwarden app for now."
+      )
     }
     vault.restore()
   }, [])

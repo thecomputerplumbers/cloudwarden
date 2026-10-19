@@ -87,13 +87,13 @@ for (let attempt = 0; attempt < 12; attempt++) {
       }),
       health = await response.json()
     if (response.ok && health.ok && health.buildId === buildId) {
-      const [api, webVault, nativeVault] = await Promise.all([
+      const [api, connector, nativeVault] = await Promise.all([
         fetch(`${config.vars.APP_URL}/api/config`, {
           signal: AbortSignal.timeout(10000),
           cache: "no-store",
         }),
-        // The native vault is the site root; Bitwarden's web client is at /legacy/.
-        fetch(`${config.vars.APP_URL}/legacy/`, {
+        // Bitwarden's apps open the connector pages at the root.
+        fetch(`${config.vars.APP_URL}/sso-connector.html`, {
           signal: AbortSignal.timeout(10000),
           cache: "no-store",
         }),
@@ -103,12 +103,11 @@ for (let attempt = 0; attempt < 12; attempt++) {
         }),
       ])
       const apiConfig = await api.json()
-      const html = await webVault.text()
       if (
         api.ok &&
         apiConfig.environment?.identity === `${config.vars.APP_URL}/identity` &&
-        webVault.ok &&
-        html.includes("<title page-title>Vaultwarden Web</title>") &&
+        connector.ok &&
+        (await connector.text()).includes("connectors/sso.") &&
         nativeVault.ok &&
         (await nativeVault.text()).includes("<title>Cloudwarden</title>")
       ) {

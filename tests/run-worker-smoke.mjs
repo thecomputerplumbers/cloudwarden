@@ -210,5 +210,12 @@ try {
   }
   closeSync(log)
   if (passed) rmSync(storage, { recursive: true, force: true })
-  else console.error(`Local diagnostics retained at ${storage}`)
+  else {
+    // CI keeps no files, so show the end of the Worker's log with the failure.
+    const lines = readFileSync(`${storage}/worker.log`, "utf8").split("\n")
+    console.error(
+      `--- last 60 lines of worker.log ---\n${lines.slice(-60).join("\n")}`
+    )
+    console.error(`Local diagnostics retained at ${storage}`)
+  }
 }

@@ -11,7 +11,7 @@ import { getServerSession } from "@/lib/session"
 import product from "@/config/product.json"
 import { VaultApp } from "@/vault/ui/vault-app"
 export default async function Home() {
-  // Cloudwarden's root is the native vault; Bitwarden's web client is at /legacy.
+  // Cloudwarden's root is the native vault.
   if (product.slug === "cloudwarden") return <VaultApp />
   const session = await getServerSession()
   return (

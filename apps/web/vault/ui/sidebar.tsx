@@ -19,7 +19,6 @@ import {
   LockIcon,
   LogOutIcon,
   RefreshCwIcon,
-  SettingsIcon,
   ServerCogIcon,
   StarIcon,
   StickyNoteIcon,
@@ -324,15 +323,6 @@ export function Sidebar({
             <DropdownMenuItem onClick={() => vault.resync()}>
               <RefreshCwIcon className={cn(state.syncing && "animate-spin")} />
               Sync now
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => window.location.assign("/legacy/")}
-            >
-              <SettingsIcon />
-              Account settings
-              <span className="ml-auto text-xs text-muted-foreground">
-                Classic vault
-              </span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => vault.lock()}>
