@@ -198,6 +198,10 @@ export function ItemDetail({
 }) {
   const state = vault.useVault()
   const [busy, setBusy] = useState(false)
+  // The vault opens with summaries; decrypt this item's secrets now that it is open.
+  useEffect(() => {
+    if (item && !item.complete) void vault.loadItem(item).catch(() => {})
+  }, [item])
   if (!item)
     return (
       <div className="hidden h-full flex-col items-center justify-center gap-2 bg-background text-center text-sm text-muted-foreground md:flex">
@@ -251,7 +255,7 @@ export function ItemDetail({
               aria-label={
                 item.favorite ? "Remove from favorites" : "Add to favorites"
               }
-              disabled={busy || !item.canEdit || !!item.error}
+              disabled={busy || !item.canEdit || !!item.error || !item.complete}
               onClick={() => run(() => vault.toggleFavorite(item))}
             >
               <StarIcon
@@ -269,7 +273,7 @@ export function ItemDetail({
             </Button>
             <Button
               size="sm"
-              disabled={!item.canEdit || !!item.error}
+              disabled={!item.canEdit || !!item.error || !item.complete}
               onClick={() => onEdit(item)}
             >
               <PencilIcon /> Edit
@@ -303,7 +307,7 @@ export function ItemDetail({
             </p>
           )}
 
-          {item.login && (
+          {item.complete && item.login && (
             <Group>
               <FieldRow label="Username" value={item.login.username} />
               <FieldRow
@@ -315,7 +319,7 @@ export function ItemDetail({
               {item.login.totp && <TotpRow secret={item.login.totp} />}
             </Group>
           )}
-          {item.login && item.login.uris.length > 0 && (
+          {item.complete && item.login && item.login.uris.length > 0 && (
             <Group>
               {item.login.uris.map((entry, index) => (
                 <FieldRow
@@ -327,7 +331,7 @@ export function ItemDetail({
               ))}
             </Group>
           )}
-          {item.card && (
+          {item.complete && item.card && (
             <Group>
               <FieldRow label="Cardholder" value={item.card.cardholderName} />
               <FieldRow label="Number" value={item.card.number} secret mono />
@@ -343,7 +347,7 @@ export function ItemDetail({
               <FieldRow label="Security code" value={item.card.code} secret />
             </Group>
           )}
-          {item.identity && (
+          {item.complete && item.identity && (
             <Group>
               <FieldRow
                 label="Name"
@@ -389,7 +393,7 @@ export function ItemDetail({
               />
             </Group>
           )}
-          {item.sshKey && (
+          {item.complete && item.sshKey && (
             <Group>
               <FieldRow
                 label="Fingerprint"
@@ -404,7 +408,7 @@ export function ItemDetail({
               />
             </Group>
           )}
-          {item.fields.length > 0 && (
+          {item.complete && item.fields.length > 0 && (
             <Group>
               {item.fields.map((entry, index) => (
                 <FieldRow
@@ -422,7 +426,7 @@ export function ItemDetail({
               ))}
             </Group>
           )}
-          {item.notes && (
+          {item.complete && item.notes && (
             <div className="rounded-xl border bg-card p-4 shadow-panel">
               <p className="mb-1 text-xs text-muted-foreground">Notes</p>
               <p className="text-sm whitespace-pre-wrap">{item.notes}</p>

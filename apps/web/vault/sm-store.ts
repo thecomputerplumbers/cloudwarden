@@ -16,6 +16,8 @@ import {
   getState as vaultState,
 } from "./store.ts"
 
+const collator = new Intl.Collator(undefined, { sensitivity: "base" })
+
 /**
  * Secrets Manager state for one organization at a time. Decrypted names and
  * values live only here, in memory, and go when the vault locks or the
@@ -87,7 +89,7 @@ export const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
 const byName = <T extends { name: string }>(a: T, b: T) =>
-  a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+  collator.compare(a.name, b.name)
 
 async function decryptAccount(
   raw: sm.RawMachineAccount,
