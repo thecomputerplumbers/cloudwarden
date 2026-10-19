@@ -27,6 +27,7 @@ import { BrandMark } from "./brand.tsx"
 import { ItemDetail } from "./item-detail.tsx"
 import { ItemEditor, KIND_LABELS } from "./item-editor.tsx"
 import { ItemList } from "./item-list.tsx"
+import { SecretsApp } from "./secrets/secrets-app.tsx"
 import { Sidebar } from "./sidebar.tsx"
 import { Toaster } from "./toast.tsx"
 
@@ -79,7 +80,12 @@ function Unlocked() {
     kind: ItemKind
   } | null>(null)
   const [pane, setPane] = useState<"nav" | "list" | "detail">("list")
+  const [area, setArea] = useState<"vault" | "secrets">("vault")
   useIdleLock(true)
+  // Secrets Manager is for organization owners and admins whose key unwrapped.
+  const adminOrgs = state.vaults.filter(
+    (entry) => entry.admin && entry.readable
+  )
 
   const items = useMemo(
     () => visibleItems(state.items, state.excluded, filter),
@@ -98,6 +104,11 @@ function Unlocked() {
 
   const select = (id: string) => (setSelectedId(id), setPane("detail"))
 
+  if (area === "secrets" && adminOrgs.length)
+    return (
+      <SecretsApp organizations={adminOrgs} onExit={() => setArea("vault")} />
+    )
+
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
       <div
@@ -109,6 +120,7 @@ function Unlocked() {
         <Sidebar
           filter={filter}
           onFilter={(next) => (setFilter(next), setPane("list"))}
+          {...(adminOrgs.length ? { onSecrets: () => setArea("secrets") } : {})}
         />
       </div>
       <div

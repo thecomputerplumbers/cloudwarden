@@ -11,6 +11,7 @@ import {
   LockIcon,
   LogOutIcon,
   RefreshCwIcon,
+  ServerCogIcon,
   StarIcon,
   StickyNoteIcon,
   TerminalSquareIcon,
@@ -101,9 +102,12 @@ function Row({
 export function Sidebar({
   filter,
   onFilter,
+  onSecrets,
 }: {
   filter: ItemFilter
   onFilter: (filter: ItemFilter) => void
+  /** Opens Secrets Manager; absent when the account administers no organization. */
+  onSecrets?: () => void
 }) {
   const state = vault.useVault()
   const ids = state.vaults.map((entry) => entry.id)
@@ -276,6 +280,13 @@ export function Sidebar({
               ).length
             }
           />
+          {onSecrets && (
+            <Row
+              onClick={onSecrets}
+              icon={<ServerCogIcon className="size-4" />}
+              label="Secrets Manager"
+            />
+          )}
         </Section>
       </div>
 

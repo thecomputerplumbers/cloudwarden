@@ -22,7 +22,7 @@ import { VaultDot } from "./brand.tsx"
 import { ItemIcon } from "./item-icon.tsx"
 import { copy } from "./toast.tsx"
 
-function Group({ children }: { children: ReactNode }) {
+export function Group({ children }: { children: ReactNode }) {
   return (
     <div className="divide-y overflow-hidden rounded-xl border bg-card shadow-panel">
       {children}
@@ -30,7 +30,7 @@ function Group({ children }: { children: ReactNode }) {
   )
 }
 
-function FieldRow({
+export function FieldRow({
   label,
   value,
   secret = false,

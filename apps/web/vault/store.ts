@@ -35,6 +35,8 @@ export interface Vault {
   color: number
   /** False when its key could not be unwrapped; its items show as unreadable. */
   readable: boolean
+  /** The account is an owner or admin of this organization: it may manage Secrets Manager. */
+  admin: boolean
 }
 
 export interface Folder {
@@ -150,6 +152,16 @@ async function token() {
   return secrets.token
 }
 
+/** A current vault session token, for other parts of the vault (Secrets Manager) that call the API. */
+export const sessionToken = () => token()
+
+/** An organization's key, while the vault is unlocked. Never leaves memory. */
+export function organizationKey(orgId: string) {
+  const key = secrets?.keys.orgKeys.get(orgId)
+  if (!key) throw new Error("This organization's key is not available")
+  return key
+}
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
@@ -253,7 +265,7 @@ async function open(
 
 async function apply(data: api.SyncResponse, keys: AccountKeys) {
   const vaults: Vault[] = [
-    { id: PERSONAL, name: "My vault", color: 1, readable: true },
+    { id: PERSONAL, name: "My vault", color: 1, readable: true, admin: false },
     ...data.profile.organizations
       .filter((org) => org.enabled !== false)
       .sort((a, b) => a.name.localeCompare(b.name))
@@ -262,6 +274,7 @@ async function apply(data: api.SyncResponse, keys: AccountKeys) {
         name: org.name,
         color: ((index + 1) % 8) + 1,
         readable: keys.orgKeys.has(org.id),
+        admin: org.type <= 1,
       })),
   ]
   const folders = await Promise.all(
