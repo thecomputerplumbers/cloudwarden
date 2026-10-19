@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "808399db-9d8f-4144-9237-f9849ea8dd39",
-  "prevIds": ["baeecf92-758a-4f52-a40e-b68a447180ed"],
+  "id": "3a7ad0b9-fc11-4895-a9ef-f1eb2f22e5c8",
+  "prevIds": ["4f106215-0fb8-4ebb-a4fc-b9a736ef5e7e"],
   "ddl": [
     {
       "name": "account",
@@ -210,6 +210,26 @@
     },
     {
       "name": "vault_emergency_access",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_access_token",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_machine_access",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_machine_account",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_project",
+      "entityType": "tables"
+    },
+    {
+      "name": "sm_secret",
       "entityType": "tables"
     },
     {
@@ -4618,6 +4638,306 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "machine_account_id",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_id",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "secret_hash",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "encrypted_payload",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_used_at",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "sm_access_token"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "machine_account_id",
+      "entityType": "columns",
+      "table": "sm_machine_access"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "sm_machine_access"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "write",
+      "entityType": "columns",
+      "table": "sm_machine_access"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "sm_machine_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_id",
+      "entityType": "columns",
+      "table": "sm_machine_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "sm_machine_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "sm_machine_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "sm_machine_account"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "sm_project"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_id",
+      "entityType": "columns",
+      "table": "sm_project"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "sm_project"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "sm_project"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "sm_project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_id",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "note",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "sm_secret"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
       "table": "vault_passkey_challenge"
     },
     {
@@ -5481,6 +5801,94 @@
       "table": "vault_emergency_access"
     },
     {
+      "columns": ["machine_account_id"],
+      "tableTo": "sm_machine_account",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_access_token_machine_account_id_sm_machine_account_id_fk",
+      "entityType": "fks",
+      "table": "sm_access_token"
+    },
+    {
+      "columns": ["org_id"],
+      "tableTo": "vault_organization",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_access_token_org_id_vault_organization_id_fk",
+      "entityType": "fks",
+      "table": "sm_access_token"
+    },
+    {
+      "columns": ["machine_account_id"],
+      "tableTo": "sm_machine_account",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_machine_access_machine_account_id_sm_machine_account_id_fk",
+      "entityType": "fks",
+      "table": "sm_machine_access"
+    },
+    {
+      "columns": ["project_id"],
+      "tableTo": "sm_project",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_machine_access_project_id_sm_project_id_fk",
+      "entityType": "fks",
+      "table": "sm_machine_access"
+    },
+    {
+      "columns": ["org_id"],
+      "tableTo": "vault_organization",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_machine_account_org_id_vault_organization_id_fk",
+      "entityType": "fks",
+      "table": "sm_machine_account"
+    },
+    {
+      "columns": ["org_id"],
+      "tableTo": "vault_organization",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_project_org_id_vault_organization_id_fk",
+      "entityType": "fks",
+      "table": "sm_project"
+    },
+    {
+      "columns": ["org_id"],
+      "tableTo": "vault_organization",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_org_id_vault_organization_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret"
+    },
+    {
+      "columns": ["project_id"],
+      "tableTo": "sm_project",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_sm_secret_project_id_sm_project_id_fk",
+      "entityType": "fks",
+      "table": "sm_secret"
+    },
+    {
       "columns": ["user_id"],
       "tableTo": "vault_user",
       "columnsTo": ["id"],
@@ -5501,6 +5909,13 @@
       "name": "fk_vault_passkey_credential_user_id_vault_user_id_fk",
       "entityType": "fks",
       "table": "vault_passkey_credential"
+    },
+    {
+      "columns": ["machine_account_id", "project_id"],
+      "nameExplicit": false,
+      "name": "sm_machine_access_pk",
+      "entityType": "pks",
+      "table": "sm_machine_access"
     },
     {
       "columns": ["id"],
@@ -5829,6 +6244,34 @@
       "nameExplicit": false,
       "name": "vault_emergency_access_pk",
       "table": "vault_emergency_access",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "sm_access_token_pk",
+      "table": "sm_access_token",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "sm_machine_account_pk",
+      "table": "sm_machine_account",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "sm_project_pk",
+      "table": "sm_project",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "sm_secret_pk",
+      "table": "sm_secret",
       "entityType": "pks"
     },
     {
@@ -6778,6 +7221,76 @@
       "name": "vault_emergency_access_status_idx",
       "entityType": "indexes",
       "table": "vault_emergency_access"
+    },
+    {
+      "columns": [
+        {
+          "value": "machine_account_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "sm_access_token_machine_idx",
+      "entityType": "indexes",
+      "table": "sm_access_token"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "sm_machine_account_org_idx",
+      "entityType": "indexes",
+      "table": "sm_machine_account"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "sm_project_org_idx",
+      "entityType": "indexes",
+      "table": "sm_project"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "sm_secret_org_idx",
+      "entityType": "indexes",
+      "table": "sm_secret"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "sm_secret_project_idx",
+      "entityType": "indexes",
+      "table": "sm_secret"
     },
     {
       "columns": [
