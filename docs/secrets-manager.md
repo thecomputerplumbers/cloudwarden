@@ -162,15 +162,20 @@ provider on the cluster network:
 | GET    | `/healthz`                 | 200 once it has authenticated                                                                                                             |
 
 Callers authenticate with `Authorization: Bearer <READER_TOKEN>`, a random
-token from the same Kubernetes Secret, which the ESO `SecretStore` sends. The
-chart also ships a NetworkPolicy that admits only the External Secrets
-Operator namespace.
+token the ESO store sends. It lives in its own Kubernetes Secret, apart from
+`CLOUDWARDEN_ACCESS_TOKEN`: ESO exposes every key of a Secret it references to
+its templates (as `.<name>.<key>`), and it only reads Secrets labelled
+`external-secrets.io/type: webhook`. The chart also ships a NetworkPolicy that
+admits only the External Secrets Operator namespace. See
+`services/secrets-reader/README.md` for installing it.
 
-Example `SecretStore`:
+Example `ClusterSecretStore` (the chart renders this, and a second store,
+`cloudwarden-projects`, whose URL is `/v1/projects/{{ .remoteRef.key }}` and
+whose `jsonPath` is `$`, for `dataFrom`):
 
 ```yaml
 apiVersion: external-secrets.io/v1
-kind: SecretStore
+kind: ClusterSecretStore
 metadata:
   name: cloudwarden
 spec:
@@ -184,6 +189,6 @@ spec:
       secrets:
         - name: auth
           secretRef:
-            name: cloudwarden-secrets-reader
-            key: READER_TOKEN
+            name: cloudwarden-secrets-reader-auth
+            namespace: cloudwarden
 ```

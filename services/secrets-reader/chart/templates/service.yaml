@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cloudwarden-secrets.fullname" . }}
+  labels:
+    {{- include "cloudwarden-secrets.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "cloudwarden-secrets.selector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cloudwarden-secrets
+description: Serves cloudwarden Secrets Manager secrets to External Secrets Operator inside the cluster.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

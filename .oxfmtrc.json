@@ -24,6 +24,7 @@
     "**/drizzle/",
     "**/worker-env.d.ts",
     "pnpm-lock.yaml",
-    ".pnpm-store/"
+    ".pnpm-store/",
+    "services/secrets-reader/chart/templates/"
   ]
 }

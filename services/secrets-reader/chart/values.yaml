@@ -1,0 +1,55 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/thecomputerplumbers/cloudwarden-secrets-reader
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The cloudwarden instance the reader authenticates against.
+cloudwardenUrl: https://vault.thecomputerplumbers.com
+cacheTTL: 60s
+
+# An existing Secret with CLOUDWARDEN_ACCESS_TOKEN: the cw1 token from the
+# vault's machine account screen. Only the reader reads it.
+accessTokenSecret:
+  name: cloudwarden-secrets-reader
+  key: CLOUDWARDEN_ACCESS_TOKEN
+
+# An existing Secret with READER_TOKEN: a random string ESO sends as a bearer.
+# Kept apart from the access token because ESO exposes every key of a
+# referenced Secret to its templates, and it must carry the label
+# external-secrets.io/type: webhook for ESO to read it.
+readerTokenSecret:
+  name: cloudwarden-secrets-reader-auth
+  key: READER_TOKEN
+
+service:
+  port: 80
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 24Mi
+  limits:
+    cpu: 200m
+    memory: 64Mi
+
+# Admit only External Secrets Operator.
+networkPolicy:
+  enabled: true
+  esoNamespaceLabels:
+    kubernetes.io/metadata.name: external-secrets
+
+# Optional stores for ESO's webhook provider: one for single keys, and one for
+# whole projects (dataFrom).
+secretStore:
+  enabled: false
+  # SecretStore (this namespace) or ClusterSecretStore.
+  kind: ClusterSecretStore
+  name: cloudwarden
+  projectsName: cloudwarden-projects
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

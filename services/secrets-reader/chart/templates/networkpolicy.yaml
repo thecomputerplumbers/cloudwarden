@@ -1,0 +1,21 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cloudwarden-secrets.fullname" . }}
+  labels:
+    {{- include "cloudwarden-secrets.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cloudwarden-secrets.selector" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.esoNamespaceLabels | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}

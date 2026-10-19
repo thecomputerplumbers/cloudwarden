@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cloudwarden-secrets.fullname" . }}
+  labels:
+    {{- include "cloudwarden-secrets.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cloudwarden-secrets.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cloudwarden-secrets.selector" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reader
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CLOUDWARDEN_URL
+              value: {{ .Values.cloudwardenUrl | quote }}
+            - name: CACHE_TTL
+              value: {{ .Values.cacheTTL | quote }}
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: CLOUDWARDEN_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.accessTokenSecret.name }}
+                  key: {{ .Values.accessTokenSecret.key }}
+            - name: READER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.readerTokenSecret.name }}
+                  key: {{ .Values.readerTokenSecret.key }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            # /healthz is 503 until the first authentication; give it time before restarting.
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
