@@ -74,7 +74,7 @@ export function deviceId() {
   }
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init: RequestInit & { token?: string } = {}
 ): Promise<T> {
@@ -100,7 +100,7 @@ async function request<T>(
   return body as T
 }
 
-const json = (body: unknown): RequestInit => ({
+export const json = (body: unknown): RequestInit => ({
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
