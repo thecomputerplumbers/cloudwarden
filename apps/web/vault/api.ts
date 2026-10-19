@@ -404,3 +404,97 @@ export const verifyPassword = (token: string, masterPasswordHash: string) =>
     ...json({ masterPasswordHash }),
     token,
   })
+
+// Sends ----------------------------------------------------------------------
+
+export interface RawSend {
+  id: string
+  accessId: string
+  type: number
+  name: string
+  notes: string | null
+  text: { text: string | null; hidden: boolean } | null
+  file: { id: string; fileName: string; size: string; sizeName: string } | null
+  key: string
+  maxAccessCount: number | null
+  accessCount: number
+  password: string | null
+  authType: number
+  disabled: boolean
+  hideEmail: boolean
+  revisionDate: string
+  expirationDate: string | null
+  deletionDate: string
+}
+
+export interface RawSendAccess {
+  id: string
+  type: number
+  authType: number
+  name: string
+  text: { text: string | null; hidden: boolean } | null
+  file: { id: string; fileName: string; size: string; sizeName: string } | null
+  expirationDate: string | null
+  creatorIdentifier: string | null
+}
+
+export const sends = (token: string) =>
+  request<{ data: RawSend[] }>("/api/sends", { token })
+
+export const createSend = (token: string, body: Record<string, unknown>) =>
+  request<RawSend>("/api/sends", { ...json(body), token })
+
+export const createFileSend = (token: string, body: Record<string, unknown>) =>
+  request<{ url: string; sendResponse: RawSend }>("/api/sends/file/v2", {
+    ...json(body),
+    token,
+  })
+
+/** Uploads a file Send's encrypted bytes; the file's name is its encrypted name. */
+export function uploadSendFile(
+  token: string,
+  send: RawSend,
+  encrypted: Uint8Array
+) {
+  const form = new FormData()
+  form.append(
+    "data",
+    new Blob([encrypted as Uint8Array<ArrayBuffer>]),
+    send.file!.fileName
+  )
+  return request<null>(`/api/sends/${send.id}/file/${send.file!.id}`, {
+    method: "POST",
+    body: form,
+    token,
+  })
+}
+
+export const updateSend = (
+  token: string,
+  id: string,
+  body: Record<string, unknown>
+) =>
+  request<RawSend>(`/api/sends/${id}`, { ...json(body), method: "PUT", token })
+
+export const removeSendPassword = (token: string, id: string) =>
+  request<RawSend>(`/api/sends/${id}/remove-password`, { method: "PUT", token })
+
+export const deleteSend = (token: string, id: string) =>
+  request<null>(`/api/sends/${id}`, { method: "DELETE", token })
+
+/** Opens a Send as its recipient. 401 means it needs a password. */
+export const accessSend = (accessId: string, password: string | null) =>
+  request<RawSendAccess>(
+    `/api/sends/access/${accessId}`,
+    json(password ? { password } : {})
+  )
+
+export const sendFileLink = (
+  sendId: string,
+  fileId: string,
+  password: string | null
+) =>
+  request<{ url: string }>(
+    `/api/sends/${sendId}/access/file/${fileId}`,
+    json(password ? { password } : {})
+  )

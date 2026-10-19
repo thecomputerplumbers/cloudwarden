@@ -242,6 +242,12 @@ export async function changeMasterPassword(input: {
   persist({ email, kdf, refreshToken: secrets.refreshToken })
 }
 
+/** The account's own key, while the vault is unlocked. Never leaves memory. */
+export function userKey() {
+  if (!secrets) throw new Error("The vault is locked")
+  return secrets.keys.userKey
+}
+
 /** An organization's key, while the vault is unlocked. Never leaves memory. */
 export function organizationKey(orgId: string) {
   const key = secrets?.keys.orgKeys.get(orgId)

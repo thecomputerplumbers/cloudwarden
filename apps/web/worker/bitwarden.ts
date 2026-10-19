@@ -1206,6 +1206,7 @@ async function publicSendRecord(env: CloudflareEnv, bearer: string) {
   if (!locator) return null
   const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
   const send = await vault.accessVaultSend(id, await tokenHash(bearer))
+  if (send === "invalid_token") return "invalid_token" as const
   const user = send && (await findVaultUserById(env, locator.userId))
   return send && user
     ? { send, userId: user.id, email: user.email, vault }
@@ -1214,7 +1215,11 @@ async function publicSendRecord(env: CloudflareEnv, bearer: string) {
 
 async function readPublicSend(env: CloudflareEnv, bearer: string) {
   const record = await publicSendRecord(env, bearer)
-  return record ? sendAccessResponse(record.send, record.email) : null
+  return record === "invalid_token"
+    ? record
+    : record
+      ? sendAccessResponse(record.send, record.email)
+      : null
 }
 
 async function publicSendFileLink(
@@ -1225,6 +1230,7 @@ async function publicSendFileLink(
   fileId: string
 ) {
   const record = await publicSendRecord(env, bearer)
+  if (record === "invalid_token") return record
   if (!record || record.send.id !== id) return null
   const token = await newSendAccessToken(id)
   if (!(await record.vault.issueVaultSendDownload(id, fileId, token.hash)))
@@ -1322,7 +1328,12 @@ export async function handleBitwarden(
       bearer &&
       id &&
       (await publicSendFileLink(env, origin, bearer, id, fileAccess[1]!))
-    return link ? json(link) : failure("Send file not found", 404)
+    // As Bitwarden's server: an expired access token is a 401, so the client asks for another.
+    return link === "invalid_token"
+      ? failure("Send access token is invalid or expired", 401)
+      : link
+        ? json(link)
+        : failure("Send file not found", 404)
   }
   const legacyFileAccess =
     /^\/api\/sends\/([0-9a-f-]{36})\/access\/file\/([0-9a-f]{64})$/.exec(path)
@@ -1346,7 +1357,9 @@ export async function handleBitwarden(
       legacyFileAccess[1]!,
       legacyFileAccess[2]!
     )
-    return link ? json(link) : failure("Send file not found", 404)
+    return link && link !== "invalid_token"
+      ? json(link)
+      : failure("Send file not found", 404)
   }
 
   if (path === "/api/sends/access" && method === "POST") {
@@ -1354,7 +1367,11 @@ export async function handleBitwarden(
       request.headers.get("Authorization") ?? ""
     )?.[1]
     const send = bearer && (await readPublicSend(env, bearer))
-    return send ? json(send) : failure("Send is unavailable", 404)
+    return send === "invalid_token"
+      ? failure("Send access token is invalid or expired", 401)
+      : send
+        ? json(send)
+        : failure("Send is unavailable", 404)
   }
   const legacySendAccess = /^\/api\/sends\/access\/([a-z0-9_-]{22})$/i.exec(
     url.pathname
@@ -1368,19 +1385,26 @@ export async function handleBitwarden(
       legacySendAccess[1]!,
       password ?? null
     )
+    // As Bitwarden's server: 401 asks for a password, 400 says it was wrong.
     if ("error" in result)
       return failure(
         result.error === "password_required"
           ? "Password required"
-          : "Send is unavailable",
+          : result.error === "password_invalid"
+            ? "Invalid password"
+            : "Send is unavailable",
         result.error === "password_required"
           ? 401
-          : result.error === "limited"
-            ? 429
-            : 404
+          : result.error === "password_invalid"
+            ? 400
+            : result.error === "limited"
+              ? 429
+              : 404
       )
     const send = await readPublicSend(env, result.token)
-    return send ? json(send) : failure("Send is unavailable", 404)
+    return send && send !== "invalid_token"
+      ? json(send)
+      : failure("Send is unavailable", 404)
   }
 
   const downloadMatch =

@@ -153,3 +153,28 @@ export async function decryptRsa(
 export async function encryptRsa(plain: Uint8Array, publicKey: CryptoKey) {
   return `4.${toBase64(new Uint8Array(await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, buffer(plain))))}`
 }
+
+/**
+ * A file's bytes, as Bitwarden stores attachments and Send files: one byte of
+ * type (2), the 16-byte IV, the 32-byte MAC, then the AES-CBC data.
+ */
+export async function encryptFile(plain: Uint8Array, key: SymmetricKey) {
+  if (!key.mac) throw new Error("New data is always encrypted with a MAC")
+  const iv = randomBytes(16)
+  const data = await aesCbc("encrypt", key.enc, iv, plain)
+  const mac = await hmacSha256(key.mac, concat(iv, data))
+  return concat(new Uint8Array([2]), iv, mac, data)
+}
+
+export async function decryptFile(file: Uint8Array, key: SymmetricKey) {
+  if (file[0] !== 2 || file.length < 49 || !key.mac)
+    throw new DecryptionError("Not an encrypted file this vault can read")
+  const iv = file.subarray(1, 17)
+  const mac = file.subarray(17, 49)
+  const data = file.subarray(49)
+  if (!equalBytes(await hmacSha256(key.mac, concat(iv, data)), mac))
+    throw new DecryptionError(
+      "MAC mismatch: wrong key, or the file was altered"
+    )
+  return aesCbc("decrypt", key.enc, iv, data)
+}

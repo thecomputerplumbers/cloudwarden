@@ -17,6 +17,7 @@ export type VaultLink =
       token: string
       existingUser: boolean
     }
+  | { kind: "send"; accessId: string; key: string }
   | { kind: "unsupported" }
 
 export function parseLink(hash: string): VaultLink | null {
@@ -26,6 +27,9 @@ export function parseLink(hash: string): VaultLink | null {
   const params = new URLSearchParams(query)
   const get = (name: string) => params.get(name) ?? ""
   if (route === "signup" || route === "register") return { kind: "signup" }
+  // A Send link: #/send/<access ID>/<key material>, as Bitwarden's apps build it.
+  const send = /^send\/([A-Za-z0-9_-]{22})\/([A-Za-z0-9_-]+)$/.exec(route)
+  if (send) return { kind: "send", accessId: send[1]!, key: send[2]! }
   if (route === "finish-signup" && get("email") && get("token"))
     return { kind: "finish-signup", email: get("email"), token: get("token") }
   if (
@@ -75,6 +79,7 @@ export function navigate(link: VaultLink | null) {
 
 function linkHash(link: VaultLink | null) {
   if (!link || link.kind === "unsupported") return ""
+  if (link.kind === "send") return `#/send/${link.accessId}/${link.key}`
   if (link.kind === "signup") return "#/signup"
   if (link.kind === "finish-signup")
     return `#/finish-signup/?${new URLSearchParams({ email: link.email, token: link.token })}`

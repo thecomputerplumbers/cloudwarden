@@ -1155,12 +1155,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .from(schema.vaultSendToken)
       .where(eq(schema.vaultSendToken.hash, tokenHash))
       .get()
+    // An unknown or expired token is told apart from an unavailable Send,
+    // so a client knows to ask for a new token.
     if (
       !token ||
       token.sendId !== id ||
       token.expiresAt.getTime() <= Date.now()
     )
-      return null
+      return "invalid_token" as const
     const send = this.db
       .select()
       .from(schema.vaultSend)
