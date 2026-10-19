@@ -6,6 +6,9 @@
     // config turns them on for libraries — so there is nothing to lose.
     "declaration": false,
     "declarationMap": false,
+    // vault/ modules import each other with explicit .ts extensions so Node's
+    // test runner can load them directly; Vite resolves the same paths.
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": ["./*"],
       "@workspace/mcp": ["../../packages/mcp/src/index.ts"],

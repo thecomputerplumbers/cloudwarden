@@ -1,6 +1,7 @@
 import { createMailer } from "@workspace/email"
 
 import {
+  setVaultSelection,
   authenticatedVaultUser,
   beginVaultDeletion,
   clearRememberedVaultDevices,
@@ -1053,6 +1054,7 @@ export function isBitwardenPath(path: string) {
     path === "/api/version" ||
     path === "/api/plans" ||
     path === "/api/sync" ||
+    path === "/api/cloudwarden/vault-selection" ||
     path === "/api/collections" ||
     path === "/api/organizations" ||
     path.startsWith("/api/organizations/") ||
@@ -4456,6 +4458,44 @@ export async function handleBitwarden(
       return json(sendResponse(send))
     }
   }
+  // The native vault's saved vault selection (cloudwarden's own route, not
+  // Bitwarden's). Stored as the vaults left out, so a new organization is in.
+  if (path === "/api/cloudwarden/vault-selection") {
+    if (method === "GET") {
+      let excluded: string[] = []
+      try {
+        const saved = JSON.parse(user.vaultSelection ?? "{}") as {
+          excluded?: unknown
+        }
+        if (Array.isArray(saved.excluded))
+          excluded = saved.excluded.filter(
+            (id): id is string => typeof id === "string"
+          )
+      } catch {
+        // An unreadable selection is the same as none: every vault.
+      }
+      return json({ excluded, object: "vaultSelection" })
+    }
+    if (method === "PUT") {
+      const body = await bodyOf(request)
+      const excluded = body && field(body, "excluded")
+      if (
+        !Array.isArray(excluded) ||
+        excluded.length > 500 ||
+        !excluded.every(
+          (id) =>
+            typeof id === "string" &&
+            (id === "personal" || /^[0-9a-f-]{36}$/i.test(id))
+        )
+      )
+        return failure("Invalid vault selection")
+      const unique = [...new Set(excluded as string[])]
+      await setVaultSelection(env, user.id, unique)
+      return json({ excluded: unique, object: "vaultSelection" })
+    }
+    return failure("Method not allowed", 405)
+  }
+
   if (path === "/api/sync" && method === "GET") {
     const data = await vault.listVault()
     const organizations = await listVaultOrganizations(env, user.id)

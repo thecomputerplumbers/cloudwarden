@@ -895,6 +895,19 @@ export async function authenticatedVaultUser(
   return user && session.securityStamp === user.securityStamp ? user : null
 }
 
+/** Saves the native vault's vault selection (see `vaultUser.vaultSelection`). */
+export async function setVaultSelection(
+  env: CloudflareEnv,
+  userId: string,
+  excluded: string[]
+) {
+  await drizzle(env.DB)
+    .update(vaultUser)
+    .set({ vaultSelection: JSON.stringify({ excluded }) })
+    .where(eq(vaultUser.id, userId))
+    .run()
+}
+
 export async function listVaultDevices(env: CloudflareEnv, userId: string) {
   return drizzle(env.DB)
     .select()

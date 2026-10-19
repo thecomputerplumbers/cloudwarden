@@ -231,6 +231,9 @@ export default {
       if (path.startsWith("/.well-known/")) return auth.handler(request)
       if (product.slug === "cloudwarden") {
         if (path === "/api/health") return vinextWorker.fetch(request, env, ctx)
+        // The native vault (app/vault); everything else at the root is still the Bitwarden web vault.
+        if (path === "/vault" || path.startsWith("/vault/"))
+          return vinextWorker.fetch(request, env, ctx)
         if (path.startsWith("/api/"))
           return new Response("Not found", { status: 404 })
         return env.ASSETS.fetch(request)
