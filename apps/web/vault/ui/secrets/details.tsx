@@ -47,7 +47,7 @@ function DetailFrame({
   return (
     <article className="flex h-full min-w-0 flex-col bg-background">
       <header className="shrink-0 border-b">
-        <div className="flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
+        <div className="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -62,7 +62,9 @@ function DetailFrame({
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="max-w-2xl space-y-4 px-4 py-5 md:px-6">{children}</div>
+        <div className="mx-auto max-w-2xl space-y-4 px-4 py-5 md:px-6">
+          {children}
+        </div>
       </div>
     </article>
   )
