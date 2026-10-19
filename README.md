@@ -58,12 +58,28 @@ mise run check  # oxlint, oxfmt --check, type checking, regression tests, and a 
 mise run format # Format the workspace with oxfmt
 pnpm test:worker # Isolated local Bitwarden Worker smoke test
 pnpm test:cli    # Optional native Bitwarden CLI check with a disposable account
+pnpm test:vault  # Native vault crypto against the official bw CLI (needs bw)
+pnpm test:secrets # Secrets Manager end to end; set SECRETS_READER_BIN to include the Go reader
+pnpm test:reader  # Go vet and tests for the in-cluster secrets reader
 pnpm project:init # Configure Cloudflare account and environments
 pnpm run doctor  # Check local setup; also accepts staging or production
 pnpm db:seed     # Repeatable local demo users, organizations and projects
 pnpm db:reset --yes # Reset local state; stop the dev server first
 pnpm cf:typegen # Regenerate Cloudflare binding and runtime types
 ```
+
+## Native vault and Secrets Manager
+
+`/vault` is Cloudwarden's own vault (`apps/web/vault`): Bitwarden-compatible
+client crypto in the browser, multi-select vaults saved per account, and the
+Cloudwarden design kit in `packages/ui`. The Bitwarden web vault still serves `/`.
+
+Secrets Manager is cloudwarden's own, for machines and Kubernetes; the contract
+for all three parts is [docs/secrets-manager.md](docs/secrets-manager.md):
+
+- Server: `/api/cloudwarden/sm/` (`apps/web/worker/secrets-manager.ts`, D1 tables in `apps/web/db/schema/secrets.ts`).
+- Screens: Secrets Manager in the native vault, for organization owners and admins.
+- In-cluster reader: `services/secrets-reader`, a Go binary with a Helm chart, serving External Secrets Operator's webhook provider.
 
 ## Packages
 

@@ -44,6 +44,16 @@ Each config lists its schema modules individually. Do not point one at the folde
 
 After changing a schema module run `pnpm db:generate` (both configs) and commit the generated migration. Never hand-edit an existing migration that may have been deployed.
 
+## Secrets Manager stays zero-knowledge
+
+`docs/secrets-manager.md` is the contract shared by the Worker
+(`worker/secrets-manager.ts`), the vault screens (`vault/crypto/secrets.ts`,
+`vault/ui/secrets/`), and the Go reader (`services/secrets-reader`). Change it
+first, then all three. The server stores only encrypted strings and hashes:
+never accept or return a plaintext secret, client secret, or token key. Keep
+`services/secrets-reader/testdata/vectors.json` regenerated from the JS crypto
+(`testdata/gen-vectors.mjs`) whenever the crypto changes.
+
 ## Packages
 
 Put a component in the narrowest package that fits:

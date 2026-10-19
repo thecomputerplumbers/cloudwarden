@@ -46,7 +46,8 @@ export function kubernetesSnippet(
   readerToken: string,
   exampleKey: string
 ) {
-  return `apiVersion: v1
+  return `# The reader's access token. Only the reader reads this Secret.
+apiVersion: v1
 kind: Secret
 metadata:
   name: cloudwarden-secrets-reader
@@ -54,7 +55,18 @@ metadata:
 type: Opaque
 stringData:
   CLOUDWARDEN_ACCESS_TOKEN: "${token}"
-  # The reader's own bearer token; External Secrets Operator sends it. Any long random string.
+---
+# The reader's own bearer token, which External Secrets Operator sends. Kept in
+# its own Secret, labelled for ESO, because ESO exposes every key of it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudwarden-secrets-reader-auth
+  namespace: cloudwarden
+  labels:
+    external-secrets.io/type: webhook
+type: Opaque
+stringData:
   READER_TOKEN: "${readerToken}"
 ---
 apiVersion: external-secrets.io/v1
@@ -65,7 +77,7 @@ spec:
   refreshInterval: 1m
   secretStoreRef:
     name: cloudwarden
-    kind: SecretStore
+    kind: ClusterSecretStore
   target:
     name: app-secrets
   data:
@@ -239,8 +251,8 @@ export function TokenDialog({
                 {kubernetesSnippet(token, readerToken, exampleKey)}
               </pre>
               <p className="text-xs text-muted-foreground">
-                The SecretStore that points External Secrets Operator at the
-                reader is in the reader's Helm chart and
+                The ClusterSecretStore that points External Secrets Operator at
+                the reader is in the reader's Helm chart and
                 docs/secrets-manager.md.
               </p>
             </div>
