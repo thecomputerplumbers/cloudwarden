@@ -41,3 +41,28 @@ test("a build that would exceed Cloudflare's 100 rules fails instead of dropping
   )
   assert.throws(() => assetHeaders(files), /101 rules/)
 })
+
+test("vinext's hashed JS, CSS, and fonts are cached by generated directory", () => {
+  const text = assetHeaders([
+    "index.html",
+    "_next/static/chunks/vault-app-DN16957Z.js",
+    "_next/static/css/app-router-entry.DxFul-ED.css",
+    "_next/static/media/inter-latin-wght-normal.Dx4kXJAl.woff2",
+    "_next/unversioned.json",
+  ])
+  assert.deepEqual(rules(text), [
+    "/_next/static/chunks/*",
+    "/_next/static/css/*",
+    "/_next/static/media/*",
+  ])
+  assert.ok(!text.includes("unversioned.json"))
+})
+
+test("an unversioned static file prevents wildcard caching of that directory", () => {
+  const text = assetHeaders([
+    "_next/static/chunks/vault-app-DN16957Z.js",
+    "_next/static/chunks/manifest.json",
+  ])
+  assert.deepEqual(rules(text), ["/_next/static/chunks/vault-app-DN16957Z.js"])
+  assert.ok(!text.includes("manifest.json"))
+})

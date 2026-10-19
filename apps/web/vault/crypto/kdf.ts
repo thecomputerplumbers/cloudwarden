@@ -1,4 +1,3 @@
-import { argon2id } from "hash-wasm"
 import { buffer, toBase64, utf8 } from "./bytes.ts"
 import { hkdfExpand, type SymmetricKey } from "./keys.ts"
 
@@ -40,6 +39,7 @@ export async function makeMasterKey(
   const hashedSalt = new Uint8Array(
     await crypto.subtle.digest("SHA-256", buffer(utf8(salt)))
   )
+  const { argon2id } = await import("hash-wasm")
   return argon2id({
     password: utf8(password),
     salt: hashedSalt,

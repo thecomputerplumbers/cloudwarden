@@ -9,6 +9,7 @@ import {
   utf8,
 } from "./bytes.ts"
 import { hmacSha256, type SymmetricKey } from "./keys.ts"
+import { importVaultKey } from "./import-key.ts"
 
 /**
  * Bitwarden's encrypted string: `<type>.<base64 parts joined by |>`.
@@ -61,13 +62,7 @@ async function aesCbc(
   iv: Uint8Array,
   data: Uint8Array
 ) {
-  const imported = await crypto.subtle.importKey(
-    "raw",
-    buffer(key),
-    "AES-CBC",
-    false,
-    [direction]
-  )
+  const imported = await importVaultKey(key, "AES-CBC")
   const out = await crypto.subtle[direction](
     { name: "AES-CBC", iv: buffer(iv) },
     imported,

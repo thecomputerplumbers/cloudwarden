@@ -16,16 +16,24 @@ const MAX_RULES = 100
 /** A webpack content hash in the name: `main.a46e2355765814789865.js`, `cca56971e438d22818d6.json`. */
 export const isHashed = (name) => /(^|\.)[0-9a-f]{16,}\./.test(name)
 
+// vinext's generated static output uses Vite's eight-character content hashes.
+const isViteHashed = (name) =>
+  /[.-][A-Za-z0-9_-]{8}\.(?:js|css|woff2?|ttf|svg|png|wasm)$/.test(name)
+
 /**
  * The `_headers` text for a list of asset paths relative to the assets root,
  * with `/` separators. A directory whose files are all hashed gets one rule;
- * other hashed files get a rule each. Vite puts its hashed output in `assets/`.
+ * other hashed files get a rule each. Vite puts its hashed output in `assets/` or `_next/static/` subdirectories.
  */
 export function assetHeaders(paths) {
   const byDirectory = new Map()
   for (const path of paths) {
     const slash = path.indexOf("/")
-    const top = slash === -1 ? "" : path.slice(0, slash)
+    const top = path.startsWith("_next/static/")
+      ? path.slice(0, path.lastIndexOf("/"))
+      : slash === -1
+        ? ""
+        : path.slice(0, slash)
     if (!byDirectory.has(top)) byDirectory.set(top, [])
     byDirectory.get(top).push(path)
   }
@@ -33,9 +41,12 @@ export function assetHeaders(paths) {
   for (const [top, files] of [...byDirectory].sort(([a], [b]) =>
     a.localeCompare(b)
   )) {
-    const hashed = files.filter((path) =>
-      isHashed(path.slice(path.lastIndexOf("/") + 1))
-    )
+    const hashed = files.filter((path) => {
+      const name = path.slice(path.lastIndexOf("/") + 1)
+      return (
+        isHashed(name) || (top.startsWith("_next/static") && isViteHashed(name))
+      )
+    })
     if (top !== "" && (top === "assets" || hashed.length === files.length))
       rules.push(`/${top}/*`)
     else for (const path of hashed.sort()) rules.push(`/${path}`)

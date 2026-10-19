@@ -75,6 +75,12 @@ pnpm cf:typegen # Regenerate Cloudflare binding and runtime types
 client crypto in the browser, multi-select vaults saved per account, and the
 Cloudwarden design kit in `packages/ui`. The Bitwarden web vault still serves `/`.
 
+Native sign-in defers the unlocked UI, editor, Secrets Manager screens, and
+account-specific Argon2 code. The production build enforces a 600 KB decoded
+startup JavaScript budget, including React and the vinext browser runtime.
+Generated static JS, CSS, and fonts use immutable caching. The item list renders
+only its viewport and a small overscan while retaining keyboard navigation.
+
 Secrets Manager is cloudwarden's own, for machines and Kubernetes; the contract
 for all three parts is [docs/secrets-manager.md](docs/secrets-manager.md):
 

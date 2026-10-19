@@ -1,4 +1,5 @@
 import { buffer, concat } from "./bytes.ts"
+import { importVaultKey } from "./import-key.ts"
 
 /**
  * A Bitwarden symmetric key: 32 bytes for AES-256-CBC and 32 for
@@ -21,13 +22,7 @@ export const keyBytes = (key: SymmetricKey) =>
   key.mac ? concat(key.enc, key.mac) : key.enc.slice()
 
 export async function hmacSha256(key: Uint8Array, data: Uint8Array) {
-  const imported = await crypto.subtle.importKey(
-    "raw",
-    buffer(key),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  )
+  const imported = await importVaultKey(key, "HMAC")
   return new Uint8Array(
     await crypto.subtle.sign("HMAC", imported, buffer(data))
   )

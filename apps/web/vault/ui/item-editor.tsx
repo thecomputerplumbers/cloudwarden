@@ -20,14 +20,7 @@ import type { ItemDraft, ItemKind, VaultItem } from "../crypto/cipher.ts"
 import { generatePassword } from "../password.ts"
 import * as vault from "../store.ts"
 import { VaultDot } from "./brand.tsx"
-
-export const KIND_LABELS: Record<ItemKind, string> = {
-  login: "Login",
-  card: "Card",
-  identity: "Identity",
-  note: "Secure note",
-  sshKey: "SSH key",
-}
+import { KIND_LABELS } from "./item-kinds.ts"
 
 function draftOf(
   item: VaultItem | null,
