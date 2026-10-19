@@ -66,3 +66,18 @@ test("an unversioned static file prevents wildcard caching of that directory", (
   assert.deepEqual(rules(text), ["/_next/static/chunks/vault-app-DN16957Z.js"])
   assert.ok(!text.includes("manifest.json"))
 })
+
+test("Bitwarden's web client under legacy/ groups its hashed directories, not the whole tree", () => {
+  const text = assetHeaders([
+    "legacy/index.html",
+    "legacy/app/main.a46e2355765814789865.js",
+    "legacy/fonts/inter.c504db5c06caaf7cdfba.woff2",
+    "legacy/theme_head.6991036cc6ce1ab5eee1.js",
+    "legacy/locales/en/messages.json",
+  ])
+  assert.deepEqual(rules(text), [
+    "/legacy/theme_head.6991036cc6ce1ab5eee1.js",
+    "/legacy/app/*",
+    "/legacy/fonts/*",
+  ])
+})
