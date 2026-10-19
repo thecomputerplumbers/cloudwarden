@@ -122,7 +122,7 @@ export function Unlocked() {
     <div className="flex h-dvh overflow-hidden bg-background">
       <div
         className={cn(
-          "w-full shrink-0 border-r md:block md:w-64",
+          "w-full shrink-0 border-r border-sidebar-border md:block md:w-60",
           pane === "nav" ? "block" : "hidden"
         )}
       >
@@ -134,7 +134,7 @@ export function Unlocked() {
       </div>
       <div
         className={cn(
-          "w-full shrink-0 md:block md:w-[22rem]",
+          "w-full shrink-0 md:block md:w-[21rem]",
           pane === "list" ? "block" : "hidden"
         )}
       >
@@ -146,17 +146,19 @@ export function Unlocked() {
           onQuery={(query) => setFilter({ ...filter, query })}
           selectedId={selectedId}
           onSelect={select}
+          leading={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Menu"
+              className="-ml-1.5 md:hidden"
+              onClick={() => setPane("nav")}
+            >
+              <MenuIcon />
+            </Button>
+          }
           actions={
             <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Menu"
-                className="md:hidden"
-                onClick={() => setPane("nav")}
-              >
-                <MenuIcon />
-              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger render={<Button size="sm" />}>
                   <PlusIcon /> New
@@ -198,7 +200,7 @@ export function Unlocked() {
           fallback={
             <p
               role="status"
-              className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-background px-4 py-2 shadow-panel"
+              className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md bg-background px-4 py-2 shadow-panel"
             >
               Opening item…
             </p>

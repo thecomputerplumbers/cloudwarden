@@ -177,9 +177,9 @@ export function TokenDialog({
                     aria-checked={days === option.days}
                     onClick={() => setDays(option.days)}
                     className={cn(
-                      "h-8 rounded-lg border px-3 text-sm transition-colors",
+                      "h-8 rounded-md border px-3 text-sm transition-colors",
                       days === option.days
-                        ? "border-ring bg-brand-soft"
+                        ? "border-primary bg-primary/8 text-foreground"
                         : "hover:bg-muted"
                     )}
                   >
@@ -189,7 +189,7 @@ export function TokenDialog({
               </div>
             </div>
             {!account.access.length && (
-              <p className="rounded-lg bg-warning/15 px-3 py-2 text-sm">
+              <p className="rounded-md bg-warning/15 px-3 py-2 text-sm">
                 This machine account has no project access yet, so the token
                 would read nothing. Grant a project first.
               </p>
@@ -198,7 +198,7 @@ export function TokenDialog({
           </form>
         ) : (
           <div className="-mx-4 min-h-0 space-y-4 overflow-y-auto border-t px-4 pt-4">
-            <div className="flex gap-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm">
+            <div className="flex gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
               <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" />
               <p>
                 <span className="font-medium">
@@ -210,7 +210,7 @@ export function TokenDialog({
             </div>
             <div className="space-y-1.5">
               <p className="text-xs text-muted-foreground">Access token</p>
-              <div className="flex items-center gap-2 rounded-lg border bg-surface-1 p-2 pl-3">
+              <div className="flex items-center gap-2 rounded-md border bg-surface-1 p-2 pl-3">
                 <code
                   data-testid="cw-new-token"
                   className="min-w-0 flex-1 font-mono text-xs break-all"
@@ -247,7 +247,7 @@ export function TokenDialog({
                   <CopyIcon /> Copy
                 </Button>
               </div>
-              <pre className="max-h-64 overflow-auto rounded-lg border bg-surface-1 p-3 font-mono text-xs leading-relaxed">
+              <pre className="max-h-64 overflow-auto rounded-md border bg-surface-1 p-3 font-mono text-xs leading-relaxed">
                 {kubernetesSnippet(token, readerToken, exampleKey)}
               </pre>
               <p className="text-xs text-muted-foreground">

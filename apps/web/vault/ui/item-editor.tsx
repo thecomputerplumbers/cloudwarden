@@ -11,6 +11,13 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
@@ -21,6 +28,9 @@ import { generatePassword } from "../password.ts"
 import * as vault from "../store.ts"
 import { VaultDot } from "./brand.tsx"
 import { KIND_LABELS } from "./item-kinds.ts"
+
+/** The folder picker's value for "no folder"; never a real folder id. */
+const NO_FOLDER = "none"
 
 function draftOf(
   item: VaultItem | null,
@@ -157,6 +167,13 @@ export function ItemEditor({
   }
 
   const text = (value: string | null | undefined) => value ?? ""
+  const folderItems = [
+    { value: NO_FOLDER, label: "No folder" },
+    ...state.folders.map((folder) => ({
+      value: folder.id,
+      label: folder.name,
+    })),
+  ]
 
   return (
     <Dialog
@@ -165,7 +182,7 @@ export function ItemEditor({
     >
       <DialogContent className="max-h-[90dvh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-xl">
         <DialogHeader className="gap-3 pr-8">
-          <DialogTitle className="text-xs font-normal tracking-wide text-muted-foreground uppercase">
+          <DialogTitle className="label-caps font-normal text-muted-foreground">
             {item
               ? `Edit ${KIND_LABELS[draft.kind].toLowerCase()}`
               : `New ${KIND_LABELS[draft.kind].toLowerCase()}`}
@@ -175,7 +192,7 @@ export function ItemEditor({
             placeholder="Untitled"
             value={draft.name}
             onChange={(e) => patch({ name: e.target.value })}
-            className="w-full bg-transparent text-xl font-semibold tracking-tight outline-none placeholder:text-muted-foreground/60"
+            className="-mx-2 w-[calc(100%+1rem)] rounded-md border border-transparent bg-transparent px-2 py-1 text-xl font-semibold tracking-[-0.015em] font-wide transition-colors outline-none placeholder:text-muted-foreground/60 hover:border-input focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25"
           />
           <DialogDescription className="text-xs">
             Encrypted in your browser before it is saved.
@@ -202,9 +219,9 @@ export function ItemEditor({
                       })
                     }
                     className={cn(
-                      "flex h-8 items-center gap-2 rounded-lg border px-3 text-sm transition-colors",
+                      "flex h-8 items-center gap-2 rounded-md border px-3 text-sm transition-colors",
                       vaultChoice === entry.id
-                        ? "border-ring bg-brand-soft"
+                        ? "border-primary bg-primary/8 text-foreground"
                         : "hover:bg-muted"
                     )}
                   >
@@ -234,8 +251,10 @@ export function ItemEditor({
                         })
                       }
                       className={cn(
-                        "h-8 rounded-lg border px-3 text-sm transition-colors",
-                        on ? "border-ring bg-brand-soft" : "hover:bg-muted"
+                        "h-8 rounded-md border px-3 text-sm transition-colors",
+                        on
+                          ? "border-primary bg-primary/8 text-foreground"
+                          : "hover:bg-muted"
                       )}
                     >
                       {entry.name}
@@ -252,23 +271,29 @@ export function ItemEditor({
           )}
           {!draft.organizationId && state.folders.length > 0 && (
             <Field label="Folder">
-              <select
-                value={draft.folderId ?? ""}
-                onChange={(e) => patch({ folderId: e.target.value || null })}
-                className="h-9 w-full rounded-lg border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+              <Select
+                items={folderItems}
+                value={draft.folderId ?? NO_FOLDER}
+                onValueChange={(value) =>
+                  patch({ folderId: value === NO_FOLDER ? null : value })
+                }
               >
-                <option value="">No folder</option>
-                {state.folders.map((folder) => (
-                  <option key={folder.id} value={folder.id}>
-                    {folder.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {folderItems.map((entry) => (
+                    <SelectItem key={entry.value} value={entry.value}>
+                      {entry.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
           )}
 
           {draft.kind === "login" && draft.login && (
-            <div className="space-y-4 rounded-xl border bg-surface-1 p-4">
+            <div className="space-y-4 rounded-md border bg-surface-1 p-4">
               <Field label="Username">
                 <Input
                   autoComplete="off"
@@ -359,7 +384,7 @@ export function ItemEditor({
           )}
 
           {draft.kind === "card" && (
-            <div className="grid grid-cols-2 gap-4 rounded-xl border bg-surface-1 p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-md border bg-surface-1 p-4">
               <Field label="Cardholder" className="col-span-2">
                 <Input
                   value={text(draft.card?.cardholderName)}
@@ -419,7 +444,7 @@ export function ItemEditor({
           )}
 
           {draft.kind === "identity" && (
-            <div className="grid grid-cols-2 gap-4 rounded-xl border bg-surface-1 p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-md border bg-surface-1 p-4">
               {(
                 [
                   ["firstName", "First name"],
@@ -448,7 +473,7 @@ export function ItemEditor({
           )}
 
           {draft.kind === "sshKey" && (
-            <div className="space-y-4 rounded-xl border bg-surface-1 p-4">
+            <div className="space-y-4 rounded-md border bg-surface-1 p-4">
               <Field label="Private key">
                 <Textarea
                   rows={4}
@@ -492,7 +517,7 @@ export function ItemEditor({
           {error && (
             <p
               role="alert"
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
               {error}
             </p>

@@ -1,6 +1,8 @@
 "use client"
 
 import { Button } from "@workspace/ui/components/button"
+import { Kbd } from "@workspace/ui/components/kbd"
+import { formatRelativeTime } from "@workspace/ui-data/lib/format"
 import { cn } from "@workspace/ui/lib/utils"
 import {
   ArchiveRestoreIcon,
@@ -24,7 +26,7 @@ import { copy } from "./toast.tsx"
 
 export function Group({ children }: { children: ReactNode }) {
   return (
-    <div className="divide-y overflow-hidden rounded-xl border bg-card shadow-panel">
+    <div className="divide-y overflow-hidden rounded-md border bg-card">
       {children}
     </div>
   )
@@ -38,6 +40,7 @@ export function FieldRow({
   canView = true,
   href,
   trailing,
+  live = false,
 }: {
   label: string
   value: string | null | undefined
@@ -46,19 +49,27 @@ export function FieldRow({
   canView?: boolean
   href?: string
   trailing?: ReactNode
+  /** A value that changes on its own, like a one-time code. */
+  live?: boolean
 }) {
   const [shown, setShown] = useState(false)
   if (!value) return null
   const masked = secret && !shown
+  // Keys and certificates span lines; show them whole once revealed.
+  const multiline = !masked && value.includes("\n")
   return (
-    <div className="group flex items-center gap-3 px-4 py-2.5">
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-muted-foreground">{label}</p>
+    <div className="group flex min-h-14 items-center gap-3 px-4 py-2 transition-colors hover:bg-surface-1">
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <p className="label-caps text-muted-foreground">{label}</p>
         <p
           className={cn(
-            "truncate text-sm",
-            (mono || secret) && "font-mono tracking-tight",
-            masked && "tracking-[0.2em]"
+            "text-[0.9rem]",
+            !multiline && "truncate",
+            (mono || secret) && "font-mono text-[0.84rem]",
+            masked && "tracking-[0.04em] text-muted-foreground",
+            multiline &&
+              "text-[0.78rem] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap",
+            live && "text-base font-semibold tracking-[0.06em] text-primary"
           )}
         >
           {masked ? (
@@ -78,7 +89,7 @@ export function FieldRow({
         </p>
       </div>
       {trailing}
-      <div className="flex items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <div className="flex items-center gap-0.5 text-muted-foreground opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         {secret && canView && (
           <Button
             variant="ghost"
@@ -144,6 +155,7 @@ function TotpRow({ secret }: { secret: string }) {
       label="One-time code"
       value={pretty}
       mono
+      live
       trailing={
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
           {value.remaining}s
@@ -166,7 +178,7 @@ function TotpRow({ secret }: { secret: string }) {
               r="8"
               fill="none"
               stroke={
-                value.remaining <= 5 ? "var(--destructive)" : "var(--brand)"
+                value.remaining <= 5 ? "var(--destructive)" : "var(--primary)"
               }
               strokeWidth="2.5"
               strokeLinecap="round"
@@ -204,9 +216,21 @@ export function ItemDetail({
   }, [item])
   if (!item)
     return (
-      <div className="hidden h-full flex-col items-center justify-center gap-2 bg-background text-center text-sm text-muted-foreground md:flex">
-        <p className="font-medium text-foreground">Choose an item</p>
-        <p>Its details appear here.</p>
+      <div className="hidden h-full flex-col items-center justify-center gap-5 bg-background text-center text-sm text-muted-foreground md:flex">
+        <div className="space-y-1">
+          <p className="font-medium text-foreground">Choose an item</p>
+          <p>Its details appear here.</p>
+        </div>
+        <dl className="grid grid-cols-[auto_auto] items-center gap-x-3 gap-y-2 text-left text-xs">
+          <dt className="justify-self-end">
+            <Kbd>⌘K</Kbd>
+          </dt>
+          <dd>Search the vault</dd>
+          <dt className="justify-self-end">
+            <Kbd>↑</Kbd> <Kbd>↓</Kbd>
+          </dt>
+          <dd>Move through the list</dd>
+        </dl>
       </div>
     )
   const owner = state.vaults.find((entry) => entry.id === vaultOf(item))
@@ -225,84 +249,88 @@ export function ItemDetail({
 
   return (
     <article className="flex h-full min-w-0 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        {onBack && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Back to the list"
-            onClick={onBack}
-            className="md:hidden"
-          >
-            <ArrowLeftIcon />
-          </Button>
-        )}
-        <div className="flex-1" />
-        {item.deleted ? (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => run(() => vault.restoreItem(item))}
-          >
-            <ArchiveRestoreIcon /> Restore
-          </Button>
-        ) : (
-          <>
+      <header className="shrink-0 border-b">
+        <div className="flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
+          {onBack && (
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={
-                item.favorite ? "Remove from favorites" : "Add to favorites"
-              }
-              disabled={busy || !item.canEdit || !!item.error || !item.complete}
-              onClick={() => run(() => vault.toggleFavorite(item))}
+              aria-label="Back to the list"
+              onClick={onBack}
+              className="-ml-1 md:hidden"
             >
-              <StarIcon
-                className={cn(item.favorite && "fill-warning text-warning")}
-              />
+              <ArrowLeftIcon />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Move to trash"
-              disabled={busy || !item.canEdit}
-              onClick={() => run(() => vault.trash(item))}
-            >
-              <Trash2Icon />
-            </Button>
-            <Button
-              size="sm"
-              disabled={!item.canEdit || !!item.error || !item.complete}
-              onClick={() => onEdit(item)}
-            >
-              <PencilIcon /> Edit
-            </Button>
-          </>
-        )}
+          )}
+          <ItemIcon key={item.id} item={item} size="lg" />
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-lg font-semibold tracking-[-0.015em] font-wide">
+              {item.name || "Untitled"}
+            </h1>
+            <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+              <VaultDot color={owner?.color ?? 1} />
+              <span className="truncate">
+                {owner?.name ?? "Vault"}
+                {folder && ` · ${folder.name}`}
+              </span>
+              {item.deleted && (
+                <span className="shrink-0 text-destructive">· In trash</span>
+              )}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {item.deleted ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => run(() => vault.restoreItem(item))}
+              >
+                <ArchiveRestoreIcon /> Restore
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={
+                    item.favorite ? "Remove from favorites" : "Add to favorites"
+                  }
+                  disabled={
+                    busy || !item.canEdit || !!item.error || !item.complete
+                  }
+                  onClick={() => run(() => vault.toggleFavorite(item))}
+                >
+                  <StarIcon
+                    className={cn(item.favorite && "fill-warning text-warning")}
+                  />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Move to trash"
+                  disabled={busy || !item.canEdit}
+                  onClick={() => run(() => vault.trash(item))}
+                >
+                  <Trash2Icon />
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!item.canEdit || !!item.error || !item.complete}
+                  onClick={() => onEdit(item)}
+                >
+                  <PencilIcon /> Edit
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-5 p-6">
-          <div className="flex items-center gap-4">
-            <ItemIcon item={item} color={owner?.color ?? 1} size="lg" />
-            <div className="min-w-0">
-              <h1 className="truncate text-xl font-semibold tracking-tight">
-                {item.name || "Untitled"}
-              </h1>
-              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                <VaultDot color={owner?.color ?? 1} />
-                {owner?.name ?? "Vault"}
-                {folder && <span>· {folder.name}</span>}
-                {item.deleted && (
-                  <span className="text-destructive">· In trash</span>
-                )}
-              </p>
-            </div>
-          </div>
-
+        <div className="max-w-2xl space-y-4 px-4 py-5 md:px-6">
           {item.error && (
-            <p className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+            <p className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
               This item could not be decrypted: {item.error}
             </p>
           )}
@@ -427,9 +455,11 @@ export function ItemDetail({
             </Group>
           )}
           {item.complete && item.notes && (
-            <div className="rounded-xl border bg-card p-4 shadow-panel">
-              <p className="mb-1 text-xs text-muted-foreground">Notes</p>
-              <p className="text-sm whitespace-pre-wrap">{item.notes}</p>
+            <div className="rounded-md border bg-card px-4 py-3">
+              <p className="mb-1.5 label-caps text-muted-foreground">Notes</p>
+              <p className="text-[0.9rem] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap">
+                {item.notes}
+              </p>
             </div>
           )}
           {item.attachments.length > 0 && (
@@ -444,13 +474,21 @@ export function ItemDetail({
             </Group>
           )}
 
-          <footer className="space-y-1 px-1 text-xs text-muted-foreground">
+          <footer className="space-y-1 px-1 pt-1 font-mono text-[0.7rem] text-muted-foreground">
             {collections.length > 0 && (
               <p>
                 Collections: {collections.map((entry) => entry.name).join(", ")}
               </p>
             )}
-            <p>Updated {new Date(item.revisionDate).toLocaleString()}</p>
+            <p>
+              Edited{" "}
+              <time
+                dateTime={item.revisionDate}
+                title={new Date(item.revisionDate).toLocaleString()}
+              >
+                {formatRelativeTime(new Date(item.revisionDate))}
+              </time>
+            </p>
           </footer>
         </div>
       </div>

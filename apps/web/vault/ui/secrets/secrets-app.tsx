@@ -1,6 +1,7 @@
 "use client"
 
 import { Button } from "@workspace/ui/components/button"
+import { formatRelativeTime } from "@workspace/ui-data/lib/format"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,9 +39,7 @@ function SectionTitle({
 }) {
   return (
     <div className="flex h-7 items-center justify-between px-3">
-      <h3 className="text-[0.7rem] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-        {title}
-      </h3>
+      <h3 className="label-caps text-muted-foreground/80">{title}</h3>
       {action}
     </div>
   )
@@ -64,15 +63,16 @@ function NavRow({
   return (
     <div
       className={cn(
-        "group/row flex h-8 items-center rounded-lg text-sm text-sidebar-foreground/85 transition-colors hover:bg-sidebar-accent",
-        active && "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+        "group/row relative flex h-8 items-center rounded-md text-[0.84rem] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70",
+        active &&
+          "bg-sidebar-accent font-medium text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-primary"
       )}
     >
       <button
         type="button"
         onClick={onClick}
         aria-current={active ? "page" : undefined}
-        className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-lg pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+        className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-md pl-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
       >
         <span
           className={cn(
@@ -89,7 +89,7 @@ function NavRow({
         {count !== undefined && (
           <span
             className={cn(
-              "text-xs text-muted-foreground tabular-nums transition-opacity",
+              "font-mono text-[0.7rem] text-muted-foreground tabular-nums transition-opacity",
               menu &&
                 "group-focus-within/row:opacity-0 group-hover/row:opacity-0"
             )}
@@ -204,7 +204,7 @@ export function SecretsApp({
           <button
             type="button"
             onClick={onExit}
-            className="flex h-8 w-full items-center gap-2 rounded-lg px-3 text-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            className="flex h-8 w-full items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           >
             <ArrowLeftIcon className="size-4" /> Back to vault
           </button>
@@ -225,7 +225,7 @@ export function SecretsApp({
                       setOrgId(event.target.value)
                       go({ kind: "secrets", projectId: null })
                     }}
-                    className="h-9 w-full rounded-lg border bg-background pr-3 pl-7 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                    className="h-9 w-full rounded-md border bg-background pr-3 pl-7 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
                   >
                     {organizations.map((entry) => (
                       <option key={entry.id} value={entry.id}>
@@ -373,7 +373,7 @@ export function SecretsApp({
               )}
             </div>
           </div>
-          <label className="flex h-9 items-center gap-2 rounded-lg border bg-background px-3 text-sm shadow-panel focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
+          <label className="flex h-8 items-center gap-2 rounded-md border bg-background px-2.5 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
             <SearchIcon className="size-4 text-muted-foreground" />
             <input
               value={query}
@@ -407,7 +407,7 @@ export function SecretsApp({
           {sm.error && (
             <li
               role="alert"
-              className="m-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              className="m-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
               {sm.error}
             </li>
@@ -421,21 +421,21 @@ export function SecretsApp({
                   aria-current={secret.id === selected ? "true" : undefined}
                   onClick={() => select(secret.id)}
                   className={cn(
-                    "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring",
+                    "relative flex h-12 w-full items-center gap-3 rounded-md px-2.5 text-left transition-colors outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring",
                     secret.id === selected &&
-                      "bg-brand-soft shadow-panel hover:bg-brand-soft"
+                      "bg-accent before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-primary hover:bg-accent"
                   )}
                 >
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-primary">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground">
                     <KeyRoundIcon className="size-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-sm font-medium">
+                    <span className="block truncate font-mono text-[0.8rem] font-medium">
                       {secret.key}
                     </span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {projectName(secret.projectId)} ·{" "}
-                      <span className="tracking-[0.15em]">••••••••</span>
+                      {projectName(secret.projectId)} · edited{" "}
+                      {formatRelativeTime(new Date(secret.revisionDate))}
                     </span>
                   </span>
                 </button>
@@ -450,12 +450,12 @@ export function SecretsApp({
                   aria-current={account.id === selected ? "true" : undefined}
                   onClick={() => select(account.id)}
                   className={cn(
-                    "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring",
+                    "relative flex h-12 w-full items-center gap-3 rounded-md px-2.5 text-left transition-colors outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring",
                     account.id === selected &&
-                      "bg-brand-soft shadow-panel hover:bg-brand-soft"
+                      "bg-accent before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-primary hover:bg-accent"
                   )}
                 >
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-primary">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground">
                     <BotIcon className="size-4" />
                   </span>
                   <span className="min-w-0 flex-1">
