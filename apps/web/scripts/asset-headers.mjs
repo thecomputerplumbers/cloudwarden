@@ -29,11 +29,17 @@ export function assetHeaders(paths) {
   const byDirectory = new Map()
   for (const path of paths) {
     const slash = path.indexOf("/")
+    // Bitwarden's web client sits under legacy/, so its directories group one level down.
+    const legacyDir = path.startsWith("legacy/") ? path.indexOf("/", 7) : -1
     const top = path.startsWith("_next/static/")
       ? path.slice(0, path.lastIndexOf("/"))
-      : slash === -1
-        ? ""
-        : path.slice(0, slash)
+      : path.startsWith("legacy/")
+        ? legacyDir === -1
+          ? "legacy"
+          : path.slice(0, legacyDir)
+        : slash === -1
+          ? ""
+          : path.slice(0, slash)
     if (!byDirectory.has(top)) byDirectory.set(top, [])
     byDirectory.get(top).push(path)
   }

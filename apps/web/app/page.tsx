@@ -9,7 +9,10 @@ import {
 import { ThemeToggle } from "@workspace/ui-shell/components/theme-toggle"
 import { getServerSession } from "@/lib/session"
 import product from "@/config/product.json"
+import { VaultApp } from "@/vault/ui/vault-app"
 export default async function Home() {
+  // Cloudwarden's root is the native vault; Bitwarden's web client is at /legacy.
+  if (product.slug === "cloudwarden") return <VaultApp />
   const session = await getServerSession()
   return (
     <div className="mx-auto flex min-h-screen max-w-5xl flex-col px-6">

@@ -11,6 +11,7 @@ import {
   LockIcon,
   LogOutIcon,
   RefreshCwIcon,
+  SettingsIcon,
   ServerCogIcon,
   StarIcon,
   StickyNoteIcon,
@@ -302,6 +303,12 @@ export function Sidebar({
             {state.email}
           </p>
         </div>
+        <IconButton
+          label="Classic web vault: account settings, organization admin, Sends"
+          onClick={() => window.location.assign("/legacy/")}
+        >
+          <SettingsIcon className="size-4" />
+        </IconButton>
         <IconButton label="Sync" onClick={() => vault.resync()}>
           <RefreshCwIcon
             className={cn("size-4", state.syncing && "animate-spin")}

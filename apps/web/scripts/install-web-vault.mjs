@@ -21,7 +21,9 @@ const archiveName = `bw_web_v${version}.tar.gz`
 const source = `https://github.com/dani-garcia/bw_web_builds/releases/download/v${version}/${archiveName}`
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const cache = join(root, ".cache", archiveName)
-const assets = join(root, "dist", "client")
+const client = join(root, "dist", "client")
+// Bitwarden's web client lives at /legacy; the native vault (app/vault) is the site root.
+const assets = join(client, "legacy")
 
 async function verifiedArchive() {
   let data
@@ -86,9 +88,9 @@ try {
 }
 `
   )
-  const { rules } = await writeAssetHeaders(assets)
+  const { rules } = await writeAssetHeaders(client)
   console.log(
-    `Installed Vaultwarden web vault v${version} into production assets (${rules} immutable cache rules)`
+    `Installed Vaultwarden web vault v${version} into production assets at /legacy (${rules} immutable cache rules)`
   )
 } finally {
   await rm(temporary, { recursive: true, force: true })

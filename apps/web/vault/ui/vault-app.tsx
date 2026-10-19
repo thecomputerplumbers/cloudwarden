@@ -17,7 +17,15 @@ export function VaultApp() {
     typeof import("./unlocked-vault.tsx").Unlocked | null
   >(null)
   const VaultView = loadedVault ?? Unlocked
-  useEffect(() => vault.restore(), [])
+  useEffect(() => {
+    // Bitwarden-style links in emails (#/accept-organization, #/settings, ...)
+    // belong to the web client, which now lives at /legacy/.
+    if (window.location.hash.startsWith("#/")) {
+      window.location.replace(`/legacy/${window.location.hash}`)
+      return
+    }
+    vault.restore()
+  }, [])
   // Fetch the unlocked UI while authentication and key derivation are running.
   useEffect(() => {
     if (state.status !== "loading" && state.status !== "unlocked") return

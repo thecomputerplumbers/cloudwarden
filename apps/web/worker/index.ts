@@ -38,8 +38,26 @@ import {
   publishVaultNotification,
 } from "./bitwarden-notifications"
 
+/**
+ * Bitwarden's web client, served at /legacy/, takes its API base from its own
+ * address and calls /legacy/api, /legacy/identity, and so on. Those are the
+ * same endpoints as at the root, so the prefix is dropped before routing.
+ */
+const LEGACY_API =
+  /^\/legacy(\/(?:api|identity|notifications|icons|events|attachments)(?:\/.*)?)$/i
+
+function fromLegacy(request: Request) {
+  if (product.slug !== "cloudwarden") return request
+  const url = new URL(request.url)
+  const match = LEGACY_API.exec(url.pathname)
+  if (!match) return request
+  url.pathname = match[1]!
+  return new Request(url, request)
+}
+
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
+    request = fromLegacy(request)
     return observeRequest(request, async () => {
       const path = canonicalBitwardenPath(
         new URL(request.url).pathname.toLowerCase()
@@ -298,9 +316,10 @@ export default {
         return auth.handler(request)
       }
       if (product.slug === "cloudwarden") {
-        // /api/health and the native vault (app/vault) are vinext; everything
-        // else at the root is still the Bitwarden web vault.
+        // The native vault is the site: / and /vault (app/page.tsx,
+        // app/vault). Bitwarden's web client is static under /legacy/.
         if (
+          path === "/" ||
           path === "/api/health" ||
           path === "/vault" ||
           path.startsWith("/vault/")
@@ -308,6 +327,21 @@ export default {
           const { default: vinextWorker } =
             await import("vinext/server/app-router-entry")
           return vinextWorker.fetch(request, env, ctx)
+        }
+        // The client resolves its files against /legacy/, so it needs the slash.
+        if (path === "/legacy")
+          return Response.redirect(new URL("/legacy/", request.url), 308)
+        // Bitwarden's apps and browser extensions open the connector pages
+        // (SSO, WebAuthn, Duo) at the site root, and the web client loads a
+        // few images from there too; they are served from /legacy/.
+        if (
+          /^\/[a-z-]+-connector\.html$/.test(path) ||
+          path.startsWith("/connectors/") ||
+          path.startsWith("/images/")
+        ) {
+          const url = new URL(request.url)
+          url.pathname = `/legacy${url.pathname}`
+          return env.ASSETS.fetch(new Request(url, request))
         }
         if (path.startsWith("/api/"))
           return new Response("Not found", { status: 404 })

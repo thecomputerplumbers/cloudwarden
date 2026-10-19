@@ -230,13 +230,32 @@ async function registerWithEmail(input) {
   })
 }
 
-const webVault = await fetch(origin)
+// The native vault is the site root; Bitwarden's web client is at /legacy/.
+const nativeVault = await fetch(origin)
+assert.equal(nativeVault.status, 200)
+assert.match(await nativeVault.text(), /<title>Cloudwarden<\/title>/)
+const legacyRedirect = await fetch(`${origin}/legacy`, { redirect: "manual" })
+assert.ok([307, 308].includes(legacyRedirect.status))
+assert.equal(
+  new URL(legacyRedirect.headers.get("location"), origin).pathname,
+  "/legacy/"
+)
+const webVault = await fetch(`${origin}/legacy/`)
 assert.equal(webVault.status, 200)
 const webVaultHtml = await webVault.text()
 assert.match(webVaultHtml, /<title page-title>Vaultwarden Web<\/title>/)
 const webVaultScript = /src="(app\/main\.[^"]+\.js)"/.exec(webVaultHtml)?.[1]
 assert.ok(webVaultScript)
-assert.equal((await fetch(`${origin}/${webVaultScript}`)).status, 200)
+assert.equal((await fetch(`${origin}/legacy/${webVaultScript}`)).status, 200)
+// Apps open the connector pages at the root.
+for (const connector of [
+  "sso-connector.html",
+  "webauthn-mobile-connector.html",
+  "duo-redirect-connector.html",
+])
+  assert.equal((await fetch(`${origin}/${connector}`)).status, 200, connector)
+// The legacy client's API calls under /legacy/ reach the same endpoints.
+assert.equal((await fetch(`${origin}/legacy/api/config`)).status, 200)
 assert.equal((await fetch(`${origin}/sign-in`)).status, 404)
 assert.equal((await fetch(`${origin}/api/auth/ok`)).status, 404)
 assert.equal((await fetch(`${origin}/dashboard`)).status, 404)
