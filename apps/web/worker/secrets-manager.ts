@@ -685,13 +685,11 @@ async function admin(request: Request, env: CloudflareEnv, rest: string) {
           .delete(smMachineAccess)
           .where(eq(smMachineAccess.machineAccountId, id)),
         ...projectIds.map((projectId) =>
-          db
-            .insert(smMachineAccess)
-            .values({
-              machineAccountId: id,
-              projectId,
-              write: parsed.get(projectId)!,
-            })
+          db.insert(smMachineAccess).values({
+            machineAccountId: id,
+            projectId,
+            write: parsed.get(projectId)!,
+          })
         ),
         db
           .update(smMachineAccount)
