@@ -125,92 +125,108 @@ export default {
           user && path === "/api/ciphers/share" && request.method === "PUT"
             ? request.clone()
             : null
-        const response = await handleBitwarden(request, env)
+        const response = await handleBitwarden(request, env, user ?? undefined)
         if (user && response.ok) {
-          try {
-            if (vaultMutation)
-              await publishVaultNotification(env, { type: 5, userId: user.id })
-            const notices = new Map<string, Set<string> | null>()
-            const add = (
-              orgId: string | null | undefined,
-              collections: string[] | null
-            ) => {
-              if (!orgId) return
-              const existing = notices.get(orgId)
-              if (existing === null || collections === null) {
-                notices.set(orgId, null)
-                return
+          // Other devices are told after the response is sent: the client that
+          // made the change has its answer, and publishing takes several round trips.
+          const created =
+            request.method === "POST" &&
+            (path === "/api/ciphers" || path === "/api/organizations")
+              ? response.clone()
+              : null
+          const notify = async () => {
+            try {
+              if (vaultMutation)
+                await publishVaultNotification(env, {
+                  type: 5,
+                  userId: user.id,
+                })
+              const notices = new Map<string, Set<string> | null>()
+              const add = (
+                orgId: string | null | undefined,
+                collections: string[] | null
+              ) => {
+                if (!orgId) return
+                const existing = notices.get(orgId)
+                if (existing === null || collections === null) {
+                  notices.set(orgId, null)
+                  return
+                }
+                const ids = existing ?? new Set<string>()
+                for (const id of collections) ids.add(id)
+                notices.set(orgId, ids)
               }
-              const ids = existing ?? new Set<string>()
-              for (const id of collections) ids.add(id)
-              notices.set(orgId, ids)
-            }
-            if (beforeLocator)
-              add(beforeLocator.orgId, beforeLocator.collectionIds)
-            for (const locator of batchLocators)
-              if (locator) add(locator.orgId, locator.collectionIds)
-            if (cipherId) {
-              const afterLocator = await getOrgCipherLocator(env, cipherId)
-              if (afterLocator)
-                add(afterLocator.orgId, afterLocator.collectionIds)
-            }
-            if (path === "/api/ciphers/import-organization")
-              add(new URL(request.url).searchParams.get("organizationId"), null)
-            if (shareRequest) {
-              const body = (await shareRequest.json().catch(() => null)) as {
-                ciphers?: { organizationId?: string }[]
-                collectionIds?: string[]
-              } | null
-              if (
-                body?.ciphers?.[0]?.organizationId &&
-                Array.isArray(body.collectionIds)
-              )
-                add(body.ciphers[0].organizationId, body.collectionIds)
-            }
-            if (path === "/api/ciphers" && request.method === "POST") {
-              const body = (await response
-                .clone()
-                .json()
-                .catch(() => null)) as {
-                organizationId?: string
-                collectionIds?: string[]
-              } | null
-              if (body?.organizationId && Array.isArray(body.collectionIds))
-                add(body.organizationId, body.collectionIds)
-            }
-            if (orgMutation) {
-              if (orgIdFromPath) add(orgIdFromPath, null)
-              else if (
-                path === "/api/organizations" &&
-                request.method === "POST"
-              ) {
-                const body = (await response
-                  .clone()
-                  .json()
-                  .catch(() => null)) as { id?: string } | null
-                add(body?.id, null)
+              if (beforeLocator)
+                add(beforeLocator.orgId, beforeLocator.collectionIds)
+              for (const locator of batchLocators)
+                if (locator) add(locator.orgId, locator.collectionIds)
+              if (cipherId) {
+                const afterLocator = await getOrgCipherLocator(env, cipherId)
+                if (afterLocator)
+                  add(afterLocator.orgId, afterLocator.collectionIds)
               }
+              if (path === "/api/ciphers/import-organization")
+                add(
+                  new URL(request.url).searchParams.get("organizationId"),
+                  null
+                )
+              if (shareRequest) {
+                const body = (await shareRequest.json().catch(() => null)) as {
+                  ciphers?: { organizationId?: string }[]
+                  collectionIds?: string[]
+                } | null
+                if (
+                  body?.ciphers?.[0]?.organizationId &&
+                  Array.isArray(body.collectionIds)
+                )
+                  add(body.ciphers[0].organizationId, body.collectionIds)
+              }
+              if (path === "/api/ciphers" && request.method === "POST") {
+                const body = (await created?.json().catch(() => null)) as {
+                  organizationId?: string
+                  collectionIds?: string[]
+                } | null
+                if (body?.organizationId && Array.isArray(body.collectionIds))
+                  add(body.organizationId, body.collectionIds)
+              }
+              if (orgMutation) {
+                if (orgIdFromPath) add(orgIdFromPath, null)
+                else if (
+                  path === "/api/organizations" &&
+                  request.method === "POST"
+                ) {
+                  const body = (await created?.json().catch(() => null)) as {
+                    id?: string
+                  } | null
+                  add(body?.id, null)
+                }
+              }
+              for (const [orgId, collections] of notices)
+                await publishOrganizationSync(
+                  env,
+                  orgId,
+                  collections ? [...collections] : null
+                )
+              if (orgIdFromPath && beforeMembers.length) {
+                const afterMembers = new Set(
+                  await organizationNotificationTargets(
+                    env,
+                    orgIdFromPath,
+                    null
+                  )
+                )
+                for (const removed of beforeMembers)
+                  if (!afterMembers.has(removed))
+                    await publishVaultNotification(env, {
+                      type: 5,
+                      userId: removed,
+                    })
+              }
+            } catch {
+              console.error("Vault mutation notification failed")
             }
-            for (const [orgId, collections] of notices)
-              await publishOrganizationSync(
-                env,
-                orgId,
-                collections ? [...collections] : null
-              )
-            if (orgIdFromPath && beforeMembers.length) {
-              const afterMembers = new Set(
-                await organizationNotificationTargets(env, orgIdFromPath, null)
-              )
-              for (const removed of beforeMembers)
-                if (!afterMembers.has(removed))
-                  await publishVaultNotification(env, {
-                    type: 5,
-                    userId: removed,
-                  })
-            }
-          } catch {
-            console.error("Vault mutation notification failed")
           }
+          ctx.waitUntil(notify())
         }
         return response
       }

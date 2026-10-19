@@ -9,6 +9,10 @@ export const vaultCipher = sqliteTable("vault_cipher", {
   deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  // The payload's rendered response fields (worker/cipher-render.ts), filled on
+  // first read. A trigger clears both whenever `payload` changes.
+  served: text("served"),
+  servedPersonal: text("served_personal"),
 })
 
 export const vaultCipherArchive = sqliteTable(

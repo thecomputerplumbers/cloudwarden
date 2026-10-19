@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { writeAssetHeaders } from "./asset-headers.mjs"
 
 const version = "2026.7.0"
 const checksum =
@@ -85,8 +86,9 @@ try {
 }
 `
   )
+  const { rules } = await writeAssetHeaders(assets)
   console.log(
-    `Installed Vaultwarden web vault v${version} into production assets`
+    `Installed Vaultwarden web vault v${version} into production assets (${rules} immutable cache rules)`
   )
 } finally {
   await rm(temporary, { recursive: true, force: true })

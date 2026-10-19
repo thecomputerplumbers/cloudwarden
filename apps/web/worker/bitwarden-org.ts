@@ -721,14 +721,18 @@ export type VaultCollectionRights = {
   manage: boolean
 }
 
+// Pass `collections` when the caller already has this member's
+// `listVaultCollections` result, so they are not read twice.
 export async function listVaultCollectionRights(
   env: CloudflareEnv,
   orgId: string,
-  membership: Membership
+  membership: Membership,
+  known?: Awaited<ReturnType<typeof listVaultCollections>>
 ) {
   const rights = new Map<string, VaultCollectionRights>()
   if (membership.orgId !== orgId || membership.status !== 2) return rights
-  const collections = await listVaultCollections(env, orgId, membership)
+  const collections =
+    known ?? (await listVaultCollections(env, orgId, membership))
   const db = drizzle(env.DB)
   const groups = await db
     .select({ id: vaultGroup.id, accessAll: vaultGroup.accessAll })

@@ -11,8 +11,6 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm"
-import { pbkdf2 } from "@noble/hashes/pbkdf2.js"
-import { sha256 } from "@noble/hashes/sha2.js"
 
 import {
   vaultApiKey,
@@ -29,6 +27,7 @@ import {
   refreshVaultOidc,
   sealVaultOidcRefresh,
 } from "./bitwarden-oidc"
+import { hashClientPassword } from "./password-hash"
 
 export type VaultUser = typeof vaultUser.$inferSelect
 
@@ -107,14 +106,7 @@ export async function tokenHash(token: string) {
   return bytesToHex(new Uint8Array(digest))
 }
 
-export async function hashClientPassword(password: string, salt: string) {
-  return bytesToHex(
-    pbkdf2(sha256, encoder.encode(password), encoder.encode(salt), {
-      c: 120_000,
-      dkLen: 32,
-    })
-  )
-}
+export { hashClientPassword }
 
 function constantTimeEqual(a: string, b: string) {
   if (a.length !== b.length) return false
@@ -858,12 +850,24 @@ export async function authenticatedVaultUser(
     request.headers.get("Authorization") ?? ""
   )
   if (!match) return null
-  const db = drizzle(env.DB)
   const hash = await tokenHash(match[1]!)
   const now = new Date()
-  const session = await db
-    .select()
+  // One round trip on every authenticated request: the session, its user,
+  // and (for API-key sessions) the current key hash, joined.
+  const row = await drizzle(env.DB)
+    .select({
+      apiKey: vaultSession.apiKey,
+      apiKeyHash: vaultSession.apiKeyHash,
+      securityStamp: vaultSession.securityStamp,
+      currentApiKeyHash: vaultApiKey.secretHash,
+      user: vaultUser,
+    })
     .from(vaultSession)
+    .innerJoin(
+      vaultUser,
+      and(eq(vaultUser.id, vaultSession.userId), isNull(vaultUser.deletingAt))
+    )
+    .leftJoin(vaultApiKey, eq(vaultApiKey.userId, vaultSession.userId))
     .where(
       or(
         and(
@@ -877,22 +881,13 @@ export async function authenticatedVaultUser(
       )
     )
     .get()
-  if (!session) return null
-  if (session.apiKey) {
-    if (!session.apiKeyHash) return null
-    const current = await db
-      .select({ secretHash: vaultApiKey.secretHash })
-      .from(vaultApiKey)
-      .where(eq(vaultApiKey.userId, session.userId))
-      .get()
-    if (current?.secretHash !== session.apiKeyHash) return null
-  }
-  const user = await db
-    .select()
-    .from(vaultUser)
-    .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
-    .get()
-  return user && session.securityStamp === user.securityStamp ? user : null
+  if (!row) return null
+  if (
+    row.apiKey &&
+    (!row.apiKeyHash || row.currentApiKeyHash !== row.apiKeyHash)
+  )
+    return null
+  return row.securityStamp === row.user.securityStamp ? row.user : null
 }
 
 export async function listVaultDevices(env: CloudflareEnv, userId: string) {
