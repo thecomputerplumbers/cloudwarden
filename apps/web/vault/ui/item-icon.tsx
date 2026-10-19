@@ -21,6 +21,8 @@ const ICONS = {
 
 /** Hosts whose icon failed to load this session, so rows don't retry them. */
 const missingIcons = new Set<string>()
+/** Hosts whose icon has loaded, so a remounted row shows it at once. */
+const loadedIcons = new Set<string>()
 
 function hostOf(item: VaultItem) {
   const uri = item.login?.uris.find((entry) => entry.uri)?.uri
@@ -54,7 +56,10 @@ export function ItemIcon({
   const big = size === "lg"
   const host = item.kind === "login" ? hostOf(item) : null
   const [failed, setFailed] = useState(false)
-  const showImage = host && !failed && !missingIcons.has(host)
+  const [loaded, setLoaded] = useState(() => !!host && loadedIcons.has(host))
+  const tryImage = host && !failed && !missingIcons.has(host)
+  // Keep the initial or kind icon until the site icon has actually arrived.
+  const showImage = tryImage && loaded
   return (
     <span
       className={cn(
@@ -64,7 +69,7 @@ export function ItemIcon({
         big ? "size-11 text-base" : "size-8 text-[0.8rem]"
       )}
     >
-      {showImage ? (
+      {tryImage && (
         // A tiny icon from our own Worker; next/image's optimizer adds nothing.
         // oxlint-disable-next-line next/no-img-element
         <img
@@ -72,10 +77,16 @@ export function ItemIcon({
           alt=""
           loading="lazy"
           decoding="async"
-          className={cn("rounded-[3px]", big ? "size-6" : "size-[1.125rem]")}
+          className={cn(
+            "rounded-[3px]",
+            big ? "size-6" : "size-[1.125rem]",
+            !loaded && "absolute opacity-0"
+          )}
+          onLoad={() => (loadedIcons.add(host), setLoaded(true))}
           onError={() => (missingIcons.add(host), setFailed(true))}
         />
-      ) : item.kind === "login" && item.name ? (
+      )}
+      {showImage ? null : item.kind === "login" && item.name ? (
         <span className="font-semibold text-foreground/75 uppercase font-wide">
           {item.name.trim().slice(0, 1)}
         </span>
