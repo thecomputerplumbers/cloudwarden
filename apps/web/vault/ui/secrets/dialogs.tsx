@@ -20,7 +20,7 @@ export function ErrorLine({ text }: { text: string | null }) {
   return text ? (
     <p
       role="alert"
-      className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
       {text}
     </p>
@@ -260,7 +260,7 @@ export function SecretEditor({
               id="cw-secret-project"
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              className="h-9 w-full rounded-lg border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+              className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
             >
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>

@@ -7,6 +7,7 @@ import {
   StickyNoteIcon,
   TerminalSquareIcon,
 } from "lucide-react"
+import { useState } from "react"
 import type { VaultItem } from "../crypto/cipher.ts"
 
 const ICONS = {
@@ -18,33 +19,86 @@ const ICONS = {
   unknown: FileQuestionIcon,
 }
 
-/** A login shows its initial; other kinds show their icon. Tinted with its vault's color. */
+/** Hosts whose icon failed to load this session, so rows don't retry them. */
+const missingIcons = new Set<string>()
+/** Hosts whose icon has loaded, so a remounted row shows it at once. */
+const loadedIcons = new Set<string>()
+
+function hostOf(item: VaultItem) {
+  const uri = item.login?.uris.find((entry) => entry.uri)?.uri
+  if (!uri) return null
+  try {
+    const host = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(uri) ? uri : `https://${uri}`
+    ).hostname
+    // The icon route serves public DNS names only; skip IPs and bare hosts.
+    return host.includes(".") && !/^[\d.]+$/.test(host) ? host : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A login shows its website's icon (fetched through our own Worker, so the
+ * domain never reaches a third party) or its initial; other kinds show their
+ * kind icon. `vault` adds a corner badge in that vault's color.
+ */
 export function ItemIcon({
   item,
-  color,
+  vault,
   size = "md",
 }: {
   item: VaultItem
-  color: number
+  vault?: number
   size?: "md" | "lg"
 }) {
   const Icon = ICONS[item.kind]
   const big = size === "lg"
+  const host = item.kind === "login" ? hostOf(item) : null
+  const [failed, setFailed] = useState(false)
+  const [loaded, setLoaded] = useState(() => !!host && loadedIcons.has(host))
+  const tryImage = host && !failed && !missingIcons.has(host)
+  // Keep the initial or kind icon until the site icon has actually arrived.
+  const showImage = tryImage && loaded
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-xl font-semibold uppercase",
-        big ? "size-12 text-lg" : "size-9 text-sm"
+        "relative flex shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground",
+        // Most site icons are drawn for light backgrounds.
+        showImage && "border-transparent bg-white",
+        big ? "size-11 text-base" : "size-8 text-[0.8rem]"
       )}
-      style={{
-        background: `color-mix(in oklch, var(--vault-${color}) 16%, transparent)`,
-        color: `var(--vault-${color})`,
-      }}
     >
-      {item.kind === "login" && item.name ? (
-        item.name.trim().slice(0, 1)
+      {tryImage && (
+        // A tiny icon from our own Worker; next/image's optimizer adds nothing.
+        // oxlint-disable-next-line next/no-img-element
+        <img
+          src={`/icons/${host}/icon.png`}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className={cn(
+            "rounded-[3px]",
+            big ? "size-6" : "size-[1.125rem]",
+            !loaded && "absolute opacity-0"
+          )}
+          onLoad={() => (loadedIcons.add(host), setLoaded(true))}
+          onError={() => (missingIcons.add(host), setFailed(true))}
+        />
+      )}
+      {showImage ? null : item.kind === "login" && item.name ? (
+        <span className="font-semibold text-foreground/75 uppercase font-wide">
+          {item.name.trim().slice(0, 1)}
+        </span>
       ) : (
-        <Icon className={big ? "size-5" : "size-4"} />
+        <Icon className={big ? "size-5" : "size-4"} strokeWidth={1.75} />
+      )}
+      {vault !== undefined && (
+        <span
+          aria-hidden="true"
+          className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-background"
+          style={{ background: `var(--vault-${vault})` }}
+        />
       )}
     </span>
   )
@@ -77,5 +131,6 @@ export function subtitleOf(item: VaultItem) {
       "Identity"
     )
   if (item.sshKey) return item.sshKey.keyFingerprint || "SSH key"
-  return item.notes?.split("\n")[0]?.slice(0, 80) || "Secure note"
+  // A note's text is often the secret itself, so the list never previews it.
+  return "Secure note"
 }

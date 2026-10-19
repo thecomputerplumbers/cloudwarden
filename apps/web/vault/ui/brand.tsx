@@ -1,38 +1,26 @@
 import { cn } from "@workspace/ui/lib/utils"
 
-/** Cloudwarden's mark: a shield whose upper edge is a cloud line. */
+/**
+ * Cloudwarden's mark: a key whose shaft bends like a pipe elbow, on a copper
+ * tile. The glyph is drawn in the tile's foreground so it inverts with the theme.
+ */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 32 32"
       aria-hidden="true"
-      className={cn("size-7", className)}
+      className={cn("size-7 shrink-0", className)}
     >
-      <defs>
-        <linearGradient
-          id="cw-mark"
-          x1="4"
-          y1="3"
-          x2="28"
-          y2="29"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0" stopColor="var(--brand)" />
-          <stop offset="1" stopColor="var(--primary)" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M16 2.5c2.6 0 4.8 1.6 5.7 3.9a5 5 0 0 1 5.8 4.9V15c0 7.3-5 12.3-11.5 14.5C9.5 27.3 4.5 22.3 4.5 15v-3.7a5 5 0 0 1 5.8-4.9A6.1 6.1 0 0 1 16 2.5Z"
-        fill="url(#cw-mark)"
-      />
-      <path
-        d="m11.5 16.2 3.2 3.2 6-6.4"
+      <rect width="32" height="32" rx="7.5" fill="var(--brand)" />
+      <g
         fill="none"
         stroke="var(--brand-foreground)"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+        strokeWidth="3.1"
+        strokeLinecap="square"
+      >
+        <circle cx="11.6" cy="11.4" r="4.6" />
+        <path d="M16.2 11.4h4.2a4 4 0 0 1 4 4v9M24.4 20h-3.6M24.4 24.4h-3.6" />
+      </g>
     </svg>
   )
 }
@@ -41,11 +29,11 @@ export function Wordmark({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "flex items-center gap-2 font-semibold tracking-tight",
+        "flex items-center gap-2.5 font-bold tracking-[-0.01em] font-wide",
         className
       )}
     >
-      <BrandMark />
+      <BrandMark className="size-6" />
       <span>Cloudwarden</span>
     </span>
   )

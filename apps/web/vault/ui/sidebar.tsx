@@ -1,8 +1,16 @@
 "use client"
 
 import { Checkbox } from "@workspace/ui/components/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { cn } from "@workspace/ui/lib/utils"
 import {
+  ChevronsUpDownIcon,
   CreditCardIcon,
   FolderIcon,
   IdCardIcon,
@@ -49,10 +57,8 @@ function Section({
 }) {
   return (
     <section className="space-y-0.5">
-      <div className="flex h-7 items-center justify-between px-3">
-        <h3 className="text-[0.7rem] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-          {title}
-        </h3>
+      <div className="flex h-7 items-center justify-between px-2.5">
+        <h3 className="label-caps text-muted-foreground/80">{title}</h3>
         {action}
       </div>
       {children}
@@ -81,9 +87,9 @@ function Row({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex h-8 w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm text-sidebar-foreground/85 transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+        "group relative flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[0.84rem] text-sidebar-foreground/80 transition-colors outline-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         active &&
-          "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
+          "bg-sidebar-accent font-medium text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-primary hover:bg-sidebar-accent",
         className
       )}
     >
@@ -92,7 +98,7 @@ function Row({
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {count !== undefined && (
-        <span className="text-xs text-muted-foreground tabular-nums">
+        <span className="font-mono text-[0.7rem] text-muted-foreground tabular-nums">
           {count}
         </span>
       )}
@@ -133,7 +139,7 @@ export function Sidebar({
         <Wordmark className="text-[0.95rem]" />
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-2 pb-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-4">
         <Section
           title={
             selected.length === ids.length
@@ -157,7 +163,7 @@ export function Sidebar({
             return (
               <div
                 key={entry.id}
-                className="group/vault flex h-8 items-center gap-2.5 rounded-lg px-3 text-sm text-sidebar-foreground/85 hover:bg-sidebar-accent"
+                className="group/vault flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[0.84rem] text-sidebar-foreground/80 hover:bg-sidebar-accent/70"
               >
                 <Checkbox
                   checked={on}
@@ -197,7 +203,7 @@ export function Sidebar({
                 >
                   Only
                 </button>
-                <span className="text-xs text-muted-foreground tabular-nums group-hover/vault:hidden">
+                <span className="font-mono text-[0.7rem] text-muted-foreground tabular-nums group-hover/vault:hidden">
                   {countIn(entry.id)}
                 </span>
               </div>
@@ -291,34 +297,57 @@ export function Sidebar({
         </Section>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-t border-sidebar-border p-3">
-        <span className="flex size-8 items-center justify-center rounded-full bg-brand-soft text-xs font-semibold text-primary uppercase">
-          {(state.name || state.email || "?").slice(0, 1)}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">
-            {state.name || "Account"}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">
-            {state.email}
-          </p>
-        </div>
-        <IconButton
-          label="Classic web vault: account settings, organization admin, Sends"
-          onClick={() => window.location.assign("/legacy/")}
-        >
-          <SettingsIcon className="size-4" />
-        </IconButton>
-        <IconButton label="Sync" onClick={() => vault.resync()}>
-          <RefreshCwIcon
-            className={cn("size-4", state.syncing && "animate-spin")}
-          />
-        </IconButton>
+      <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border p-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1.5 text-left transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+              />
+            }
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground text-xs font-semibold text-background uppercase">
+              {(state.name || state.email || "?").slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">
+                {state.name || "Account"}
+              </span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {state.email}
+              </span>
+            </span>
+            <ChevronsUpDownIcon className="size-4 shrink-0 text-muted-foreground" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="start" className="w-60">
+            <DropdownMenuItem onClick={() => vault.resync()}>
+              <RefreshCwIcon className={cn(state.syncing && "animate-spin")} />
+              Sync now
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => window.location.assign("/legacy/")}
+            >
+              <SettingsIcon />
+              Account settings
+              <span className="ml-auto text-xs text-muted-foreground">
+                Classic vault
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => vault.lock()}>
+              <LockIcon /> Lock
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => vault.signOut()}
+            >
+              <LogOutIcon /> Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <IconButton label="Lock" onClick={() => vault.lock()}>
           <LockIcon className="size-4" />
-        </IconButton>
-        <IconButton label="Sign out" onClick={() => vault.signOut()}>
-          <LogOutIcon className="size-4" />
         </IconButton>
       </div>
     </nav>
@@ -343,7 +372,7 @@ export function IconButton({
       aria-label={label}
       onClick={onClick}
       className={cn(
-        "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
         className
       )}
     >

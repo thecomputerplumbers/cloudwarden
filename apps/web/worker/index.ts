@@ -3,6 +3,7 @@ import { handleSecretsManager, isSecretsManagerPath } from "./secrets-manager"
 import { prunePasskeyChallenges } from "./bitwarden-passkey-login"
 import product from "../config/product.json"
 import { observeRequest } from "../lib/diagnostics"
+import { handleIcon, isIconPath } from "./icons"
 
 export { AppDatabase } from "./database"
 
@@ -77,6 +78,8 @@ export default {
       // Secrets Manager (docs/secrets-manager.md): cloudwarden's own API, with its own auth.
       if (isSecretsManagerPath(path))
         return handleSecretsManager(request, env, ctx)
+      // Website icons (worker/icons.ts): unauthenticated, like Bitwarden's icon server.
+      if (isIconPath(path)) return handleIcon(request, env, ctx)
       if (
         path === "/notifications/hub" ||
         path === "/notifications/anonymous-hub"

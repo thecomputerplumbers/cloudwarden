@@ -1,5 +1,5 @@
 /** Item rows have a 52px button and a 2px gap. Keep scrolling and keyboard movement in the same coordinate system. */
-export const ITEM_ROW_HEIGHT = 54
+export const ITEM_ROW_HEIGHT = 50
 const OVERSCAN = 8
 
 export function itemWindow(

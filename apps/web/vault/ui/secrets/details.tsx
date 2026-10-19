@@ -1,6 +1,7 @@
 "use client"
 
 import { Button } from "@workspace/ui/components/button"
+import { formatRelativeTime } from "@workspace/ui-data/lib/format"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { cn } from "@workspace/ui/lib/utils"
 import {
@@ -34,30 +35,34 @@ const when = (iso: string | null) =>
 
 function DetailFrame({
   onBack,
+  title,
   actions,
   children,
 }: {
   onBack: () => void
+  title: ReactNode
   actions: ReactNode
   children: ReactNode
 }) {
   return (
     <article className="flex h-full min-w-0 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Back to the list"
-          onClick={onBack}
-          className="md:hidden"
-        >
-          <ArrowLeftIcon />
-        </Button>
-        <div className="flex-1" />
-        {actions}
+      <header className="shrink-0 border-b">
+        <div className="flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Back to the list"
+            onClick={onBack}
+            className="-ml-1 md:hidden"
+          >
+            <ArrowLeftIcon />
+          </Button>
+          <div className="min-w-0 flex-1">{title}</div>
+          <div className="flex shrink-0 items-center gap-1">{actions}</div>
+        </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-5 p-6">{children}</div>
+        <div className="max-w-2xl space-y-4 px-4 py-5 md:px-6">{children}</div>
       </div>
     </article>
   )
@@ -76,15 +81,15 @@ function Title({
   mono?: boolean
 }) {
   return (
-    <div className="flex items-center gap-4">
-      <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-primary">
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="flex size-11 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground">
         {icon}
       </span>
       <div className="min-w-0">
         <h1
           className={cn(
-            "truncate text-xl font-semibold tracking-tight",
-            mono && "font-mono"
+            "truncate text-lg font-semibold tracking-[-0.015em] font-wide",
+            mono && "font-mono font-normal tracking-normal [font-stretch:100%]"
           )}
         >
           {title}
@@ -118,6 +123,14 @@ export function SecretDetail({
   return (
     <DetailFrame
       onBack={onBack}
+      title={
+        <Title
+          icon={<KeyRoundIcon className="size-5" />}
+          mono
+          title={secret.key}
+          subtitle={project?.name ?? "Project"}
+        />
+      }
       actions={
         <>
           <Button
@@ -134,24 +147,26 @@ export function SecretDetail({
         </>
       }
     >
-      <Title
-        icon={<KeyRoundIcon className="size-5" />}
-        mono
-        title={secret.key}
-        subtitle={project?.name ?? "Project"}
-      />
       <Group>
         <FieldRow label="Key" value={secret.key} mono />
         <FieldRow label="Value" value={secret.value} secret />
       </Group>
       {secret.note && (
-        <div className="rounded-xl border bg-card p-4 shadow-panel">
-          <p className="mb-1 text-xs text-muted-foreground">Note</p>
-          <p className="text-sm whitespace-pre-wrap">{secret.note}</p>
+        <div className="rounded-md border bg-card p-4">
+          <p className="mb-1.5 label-caps text-muted-foreground">Note</p>
+          <p className="text-[0.9rem] [overflow-wrap:anywhere] whitespace-pre-wrap">
+            {secret.note}
+          </p>
         </div>
       )}
-      <p className="px-1 text-xs text-muted-foreground">
-        Updated {new Date(secret.revisionDate).toLocaleString()}
+      <p className="px-1 font-mono text-[0.7rem] text-muted-foreground">
+        Edited{" "}
+        <time
+          dateTime={secret.revisionDate}
+          title={new Date(secret.revisionDate).toLocaleString()}
+        >
+          {formatRelativeTime(new Date(secret.revisionDate))}
+        </time>
       </p>
       {dialog === "edit" && (
         <SecretEditor
@@ -245,6 +260,13 @@ export function MachineAccountDetail({
   return (
     <DetailFrame
       onBack={onBack}
+      title={
+        <Title
+          icon={<BotIcon className="size-5" />}
+          title={account.name}
+          subtitle={`${account.access.length} project${account.access.length === 1 ? "" : "s"} · ${account.tokens.length} token${account.tokens.length === 1 ? "" : "s"}`}
+        />
+      }
       actions={
         <>
           <Button
@@ -265,12 +287,6 @@ export function MachineAccountDetail({
         </>
       }
     >
-      <Title
-        icon={<BotIcon className="size-5" />}
-        title={account.name}
-        subtitle={`${account.access.length} project${account.access.length === 1 ? "" : "s"} · ${account.tokens.length} token${account.tokens.length === 1 ? "" : "s"}`}
-      />
-
       <section className="space-y-2">
         <div className="flex items-end justify-between gap-3 px-1">
           <div>
@@ -288,7 +304,7 @@ export function MachineAccountDetail({
             Save access
           </Button>
         </div>
-        <div className="divide-y overflow-hidden rounded-xl border bg-card shadow-panel">
+        <div className="divide-y overflow-hidden rounded-md border bg-card">
           {projects.map((project) => {
             const level = levels[project.id] ?? "none"
             return (
@@ -310,7 +326,7 @@ export function MachineAccountDetail({
                 <div
                   role="radiogroup"
                   aria-label={`Access to ${project.name}`}
-                  className="flex rounded-lg border bg-surface-1 p-0.5"
+                  className="flex rounded-md border bg-surface-1 p-0.5"
                 >
                   {LEVELS.map((option) => (
                     <button
@@ -360,7 +376,7 @@ export function MachineAccountDetail({
             <PlusIcon /> New access token
           </Button>
         </div>
-        <div className="divide-y overflow-hidden rounded-xl border bg-card shadow-panel">
+        <div className="divide-y overflow-hidden rounded-md border bg-card">
           {account.tokens.map((token) => {
             const expired =
               token.expiresAt && new Date(token.expiresAt).getTime() < now

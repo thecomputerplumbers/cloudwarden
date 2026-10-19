@@ -13,7 +13,6 @@ import type { VaultItem } from "../crypto/cipher.ts"
 import { vaultOf } from "../filter.ts"
 import { ITEM_ROW_HEIGHT, itemWindow } from "../window.ts"
 import type { Vault } from "../store.ts"
-import { VaultDot } from "./brand.tsx"
 import { ItemIcon, subtitleOf } from "./item-icon.tsx"
 
 export function ItemList({
@@ -24,6 +23,7 @@ export function ItemList({
   onQuery,
   selectedId,
   onSelect,
+  leading,
   actions,
 }: {
   title: string
@@ -33,6 +33,8 @@ export function ItemList({
   onQuery: (query: string) => void
   selectedId: string | null
   onSelect: (id: string) => void
+  /** Before the title; the phone layout puts its menu button here. */
+  leading?: ReactNode
   actions: ReactNode
 }) {
   const search = useRef<HTMLInputElement>(null)
@@ -68,7 +70,6 @@ export function ItemList({
   }, [title, query])
   const colorOf = (item: VaultItem) =>
     vaults.find((entry) => entry.id === vaultOf(item))?.color ?? 1
-  const showVault = vaults.length > 1
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -103,18 +104,21 @@ export function ItemList({
       aria-label={title}
       className="flex h-full min-w-0 flex-col border-r bg-surface-1"
     >
-      <header className="shrink-0 space-y-3 p-3 pb-2">
-        <div className="flex h-8 items-center justify-between gap-2 px-1">
-          <h2 className="truncate text-sm font-semibold">
-            {title}{" "}
-            <span className="font-normal text-muted-foreground tabular-nums">
+      <header className="shrink-0 space-y-2.5 px-3 pt-3 pb-2">
+        <div className="flex h-8 items-center gap-2 pl-1">
+          {leading}
+          <h2 className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="truncate text-[0.95rem] font-semibold tracking-[-0.01em] font-wide">
+              {title}
+            </span>
+            <span className="font-mono text-xs text-muted-foreground tabular-nums">
               {items.length}
             </span>
           </h2>
           {actions}
         </div>
-        <label className="flex h-9 items-center gap-2 rounded-lg border bg-background px-3 text-sm shadow-panel focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
-          <SearchIcon className="size-4 text-muted-foreground" />
+        <label className="flex h-8 items-center gap-2 rounded-md border bg-background px-2.5 text-sm transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25">
+          <SearchIcon className="size-3.5 text-muted-foreground" />
           <input
             ref={search}
             value={query}
@@ -134,7 +138,7 @@ export function ItemList({
             aria-label="Search vault"
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
           />
-          <kbd className="hidden rounded border bg-muted px-1.5 font-sans text-[0.65rem] text-muted-foreground sm:inline">
+          <kbd className="hidden rounded-sm border px-1 font-mono text-[0.65rem] text-muted-foreground sm:inline">
             ⌘K
           </kbd>
         </label>
@@ -160,7 +164,7 @@ export function ItemList({
             move(-1)
           }
         }}
-        className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 outline-none"
+        className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3 outline-none"
       >
         {start > 0 && (
           <li
@@ -185,30 +189,35 @@ export function ItemList({
                 type="button"
                 onClick={() => onSelect(item.id)}
                 className={cn(
-                  "flex h-[3.25rem] w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring",
-                  active && "bg-brand-soft shadow-panel hover:bg-brand-soft"
+                  "relative flex h-12 w-full items-center gap-3 rounded-md px-2.5 text-left transition-colors outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring",
+                  active &&
+                    "bg-accent before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-primary hover:bg-accent"
                 )}
               >
-                <ItemIcon item={item} color={colorOf(item)} />
+                <ItemIcon
+                  item={item}
+                  {...(item.organizationId && vaults.length > 1
+                    ? { vault: colorOf(item) }
+                    : {})}
+                />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span
                       className={cn(
-                        "truncate text-sm font-medium",
+                        "truncate text-[0.84rem] font-medium",
                         item.error && "text-destructive"
                       )}
                     >
                       {item.name || "Untitled"}
                     </span>
                     {item.favorite && (
-                      <StarIcon className="size-3 shrink-0 fill-warning text-warning" />
+                      <StarIcon className="size-3 shrink-0 fill-primary text-primary" />
                     )}
                   </span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {subtitleOf(item)}
                   </span>
                 </span>
-                {showVault && <VaultDot color={colorOf(item)} />}
               </button>
             </li>
           )
@@ -222,7 +231,7 @@ export function ItemList({
         )}
         {!items.length && (
           <li className="px-4 py-16 text-center text-sm text-muted-foreground">
-            {query ? "Nothing matches that search." : "Nothing here yet."}
+            {query ? `Nothing matches “${query}”.` : "Nothing here yet."}
           </li>
         )}
       </ul>

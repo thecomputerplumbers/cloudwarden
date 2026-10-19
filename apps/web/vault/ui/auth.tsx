@@ -4,12 +4,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Spinner } from "@workspace/ui/components/spinner"
-import {
-  KeyRoundIcon,
-  LockKeyholeIcon,
-  MailIcon,
-  ShieldCheckIcon,
-} from "lucide-react"
+import { LockKeyholeIcon, MailIcon } from "lucide-react"
 import { useState, type FormEvent, type ReactNode } from "react"
 import { BrandMark, Wordmark } from "./brand.tsx"
 import * as vault from "../store.ts"
@@ -20,52 +15,67 @@ const PROVIDERS: Record<number, string> = {
   7: "security key",
 }
 
-/** The frame shared by sign-in and unlock: a quiet brand panel and a focused form. */
+const POINTS = [
+  ["Encrypted in this browser", "AES-256; the server stores only ciphertext"],
+  ["Works with every Bitwarden app", "Desktop, mobile, browser and CLI"],
+  ["Runs on your Cloudflare account", "Your Worker, your database, your keys"],
+]
+
+/**
+ * The frame shared by sign-in and unlock: a graphite panel drawn like a
+ * schematic, with one copper line routed through it, and a focused form.
+ */
 function AuthFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-h-dvh bg-background lg:grid-cols-[1.05fr_1fr]">
-      <aside className="relative hidden overflow-hidden bg-[oklch(0.2_0.03_250)] text-[oklch(0.95_0.01_240)] lg:flex lg:flex-col lg:justify-between lg:p-12">
+    <div className="grid min-h-dvh bg-background lg:grid-cols-[1fr_1fr]">
+      <aside className="relative hidden overflow-hidden bg-[oklch(0.17_0.006_265)] text-[oklch(0.95_0.004_75)] lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div
           aria-hidden="true"
-          className="absolute inset-0 opacity-70"
+          className="absolute inset-0"
           style={{
-            background:
-              "radial-gradient(60rem 40rem at -10% -20%, oklch(0.55 0.12 195 / 55%), transparent 60%), radial-gradient(40rem 30rem at 110% 120%, oklch(0.5 0.14 280 / 40%), transparent 60%)",
+            backgroundImage:
+              "linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px)",
+            backgroundSize: "32px 32px",
+            maskImage:
+              "radial-gradient(ellipse 80% 70% at 30% 40%, black, transparent)",
           }}
         />
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 640 900"
+          preserveAspectRatio="xMaxYMid slice"
+          className="absolute inset-0 size-full"
+        >
+          <path
+            d="M-10 192H384a32 32 0 0 1 32 32V544a32 32 0 0 0 32 32H660"
+            fill="none"
+            stroke="oklch(0.7 0.13 52)"
+            strokeWidth="2"
+            opacity="0.55"
+          />
+          <circle cx="416" cy="384" r="5" fill="oklch(0.72 0.13 52)" />
+        </svg>
         <Wordmark className="relative text-lg" />
-        <div className="relative max-w-md space-y-5">
-          <h1 className="text-4xl leading-tight font-semibold tracking-tight text-balance">
-            Every secret, one calm place.
+        <div className="relative max-w-md space-y-8">
+          <h1 className="text-[2.6rem] leading-[1.05] font-bold tracking-[-0.025em] text-balance font-wide">
+            Your vault, on infrastructure you own.
           </h1>
-          <p className="text-pretty text-[oklch(0.82_0.02_240)]">
-            End-to-end encrypted in your browser before it leaves. Cloudwarden
-            never sees your master password or your vault.
-          </p>
-          <ul className="space-y-3 text-sm text-[oklch(0.85_0.02_240)]">
-            {[
-              [
-                ShieldCheckIcon,
-                "Zero-knowledge, AES-256 and RSA, compatible with every Bitwarden app",
-              ],
-              [
-                KeyRoundIcon,
-                "Your vaults and every organization's, together or one at a time",
-              ],
-              [LockKeyholeIcon, "Locks itself; the keys never touch storage"],
-            ].map(([Icon, text]) => {
-              const I = Icon as typeof ShieldCheckIcon
-              return (
-                <li key={text as string} className="flex items-start gap-3">
-                  <I className="mt-0.5 size-4 shrink-0 text-[oklch(0.8_0.12_192)]" />
-                  {text as string}
-                </li>
-              )
-            })}
-          </ul>
+          <dl className="space-y-4">
+            {POINTS.map(([title, detail]) => (
+              <div
+                key={title}
+                className="border-l border-[oklch(0.7_0.13_52/50%)] pl-4"
+              >
+                <dt className="text-[0.95rem] font-medium">{title}</dt>
+                <dd className="font-mono text-xs text-[oklch(0.7_0.008_265)]">
+                  {detail}
+                </dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <p className="relative text-xs text-[oklch(0.7_0.02_240)]">
-          Your data stays yours.
+        <p className="relative font-mono text-[0.7rem] tracking-[0.08em] text-[oklch(0.6_0.008_265)] uppercase">
+          Zero-knowledge · Bitwarden-compatible
         </p>
       </aside>
       <main className="flex items-center justify-center p-6 sm:p-10">
@@ -79,7 +89,7 @@ function ErrorLine({ text }: { text: string | null }) {
   return text ? (
     <p
       role="alert"
-      className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
       {text}
     </p>
@@ -131,13 +141,13 @@ export function SignIn() {
     <AuthFrame>
       <div className="mb-8 flex items-center gap-3 lg:hidden">
         <BrandMark className="size-9" />
-        <span className="text-lg font-semibold tracking-tight">
+        <span className="text-lg font-bold tracking-[-0.01em] font-wide">
           Cloudwarden
         </span>
       </div>
       <form onSubmit={submit} className="space-y-6">
         <div className="space-y-1.5">
-          <h2 className="text-2xl font-semibold tracking-tight">
+          <h2 className="text-2xl font-bold tracking-[-0.02em] font-wide">
             {providers ? "Confirm it's you" : "Sign in"}
           </h2>
           <p className="text-sm text-muted-foreground">
@@ -259,11 +269,11 @@ export function Unlock() {
     <AuthFrame>
       <form onSubmit={submit} className="space-y-6">
         <div className="flex flex-col items-center gap-4 text-center">
-          <span className="flex size-14 items-center justify-center rounded-2xl bg-brand-soft">
+          <span className="flex size-14 items-center justify-center rounded-lg bg-brand-soft">
             <LockKeyholeIcon className="size-6 text-primary" />
           </span>
           <div className="space-y-1">
-            <h2 className="text-2xl font-semibold tracking-tight">
+            <h2 className="text-2xl font-bold tracking-[-0.02em] font-wide">
               Vault locked
             </h2>
             <p className="text-sm text-muted-foreground">{state.email}</p>
