@@ -12,6 +12,23 @@ const durableObjectMigrations = (): Plugin => ({
   },
 })
 
+// vinext emits root-relative external manifest imports in this entry.
+// Keep its lazy chunk beside those manifests rather than under _next/static.
+const lazyVinextEntry = (): Plugin => ({
+  name: "lazy-vinext-entry",
+  enforce: "post",
+  outputOptions(options) {
+    const original = options.chunkFileNames ?? "[name]-[hash].js"
+    return {
+      ...options,
+      chunkFileNames(chunk) {
+        if (chunk.name === "app-router-entry") return "[name]-[hash].js"
+        return typeof original === "function" ? original(chunk) : original
+      },
+    }
+  },
+})
+
 export default defineConfig({
   optimizeDeps: {
     /**
@@ -27,6 +44,7 @@ export default defineConfig({
   },
   plugins: [
     durableObjectMigrations(),
+    lazyVinextEntry(),
     vinext(),
     cloudflare({
       viteEnvironment: {

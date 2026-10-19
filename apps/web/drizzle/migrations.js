@@ -7,6 +7,7 @@ import m0005 from './20261006080047_fast_lucky_pierre/migration.sql';
 import m0006 from './20261006131710_curious_kitty_pryde/migration.sql';
 import m0007 from './20261006133449_dizzy_loa/migration.sql';
 import m0008 from './20261009020608_goofy_wallop/migration.sql';
+import m0009 from './20261019010356_cipher_served/migration.sql';
 
   export default {
     migrations: {
@@ -18,7 +19,8 @@ import m0008 from './20261009020608_goofy_wallop/migration.sql';
 "20261006080047_fast_lucky_pierre": m0005,
 "20261006131710_curious_kitty_pryde": m0006,
 "20261006133449_dizzy_loa": m0007,
-"20261009020608_goofy_wallop": m0008
+"20261009020608_goofy_wallop": m0008,
+"20261019010356_cipher_served": m0009
 }
   }
   

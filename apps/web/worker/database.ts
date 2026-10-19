@@ -1,3 +1,4 @@
+import { issueAttachmentToken, verifyAttachmentToken } from "./attachment-token"
 import { DurableObject } from "cloudflare:workers"
 import { and, eq, like, lt } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/durable-sqlite"
@@ -5,6 +6,7 @@ import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 
 import migrations from "../drizzle/migrations.js"
 import * as schema from "./schema"
+import { attachmentBody, renderCipherOpen, serveCipher } from "./cipher-render"
 import {
   notificationFrame,
   notificationPing,
@@ -634,40 +636,23 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     })
   }
 
+  // The newest change in this vault, as epoch ms. Clients poll it to decide
+  // whether to sync, so it reads only timestamps, never the payloads.
   async vaultRevision() {
     this.assertVaultActive()
-    const ciphers = this.db.select().from(schema.vaultCipher).all()
-    const folders = this.db.select().from(schema.vaultFolder).all()
-    const sends = this.db.select().from(schema.vaultSend).all()
-    let latest = 0
-    for (const cipher of ciphers)
-      latest = Math.max(latest, cipher.updatedAt.getTime())
-    for (const folder of folders)
-      latest = Math.max(latest, folder.updatedAt.getTime())
-    for (const send of sends)
-      latest = Math.max(latest, send.updatedAt.getTime())
-    const archiveRevision = this.db
-      .select({ updatedAt: schema.setting.updatedAt })
-      .from(schema.setting)
-      .where(eq(schema.setting.key, "vault:archive-revision"))
-      .get()
-    if (archiveRevision)
-      latest = Math.max(latest, archiveRevision.updatedAt.getTime())
-    const preferenceRevision = this.db
-      .select({ updatedAt: schema.setting.updatedAt })
-      .from(schema.setting)
-      .where(eq(schema.setting.key, "vault:preference-revision"))
-      .get()
-    if (preferenceRevision)
-      latest = Math.max(latest, preferenceRevision.updatedAt.getTime())
-    const purgeRevision = this.db
-      .select({ updatedAt: schema.setting.updatedAt })
-      .from(schema.setting)
-      .where(eq(schema.setting.key, "vault:purge-revision"))
-      .get()
-    if (purgeRevision)
-      latest = Math.max(latest, purgeRevision.updatedAt.getTime())
-    return latest
+    const row = this.ctx.storage.sql
+      .exec<{ latest: number }>(
+        `SELECT max(
+          coalesce((SELECT max(updated_at) FROM vault_cipher), 0),
+          coalesce((SELECT max(updated_at) FROM vault_folder), 0),
+          coalesce((SELECT max(updated_at) FROM vault_send), 0),
+          coalesce((SELECT max(updated_at) FROM setting WHERE key IN (
+            'vault:archive-revision', 'vault:preference-revision', 'vault:purge-revision'
+          )), 0)
+        ) AS latest`
+      )
+      .one()
+    return row.latest
   }
 
   async getVaultCipherPreference(id: string) {
@@ -1862,11 +1847,139 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     this.assertVaultActive()
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return null
-    this.db
-      .delete(schema.vaultAttachmentToken)
-      .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
-      .run()
-    return this.insertVaultAttachmentToken(id, userId)
+    return issueAttachmentToken(
+      this.env.BETTER_AUTH_SECRET ?? "",
+      id,
+      cipherId,
+      userId
+    )
+  }
+
+  /**
+   * Everything sync needs from a user's own vault, in one call: folders,
+   * Sends, the user's preferences for shared ciphers, and every personal
+   * cipher already rendered as JSON (worker/cipher-render.ts).
+   */
+  async syncVault(userId: string, origin: string) {
+    this.assertVaultActive()
+    const rows = this.servedCiphers()
+    const details = await this.cipherDetails(
+      new Set(rows.map((row) => row.id)),
+      userId
+    )
+    return {
+      folders: this.db.select().from(schema.vaultFolder).all(),
+      sends: this.db.select().from(schema.vaultSend).all(),
+      preferences: this.db.select().from(schema.vaultCipherPreference).all(),
+      ciphers: rows.map(
+        (row) =>
+          `${renderCipherOpen(row, row.served, {
+            organizationId: null,
+            attachments: details.attachmentsFor(row.id, userId, origin),
+            collectionIds: [],
+            archivedAt: details.archivedAt.get(row.id) ?? null,
+            edit: true,
+            viewPassword: true,
+          })},${row.servedPersonal}}`
+      ),
+    }
+  }
+
+  /**
+   * An organization's ciphers that one member may see, rendered as JSON,
+   * each open at the end: the caller closes it with the member's own folder
+   * and favorite, which live in the member's vault (`viewerPlacement`).
+   */
+  async syncSharedCiphers(
+    userId: string,
+    origin: string,
+    orgId: string,
+    access: [
+      string,
+      { collectionIds: string[]; edit: boolean; viewPassword: boolean },
+    ][]
+  ) {
+    this.assertVaultActive()
+    const allowed = new Map(access)
+    const rows = this.servedCiphers().filter((row) => allowed.has(row.id))
+    const details = await this.cipherDetails(
+      new Set(rows.map((row) => row.id)),
+      userId
+    )
+    return rows.map((row) => {
+      const rights = allowed.get(row.id)!
+      return {
+        id: row.id,
+        open: renderCipherOpen(row, row.served, {
+          organizationId: orgId,
+          attachments: details.attachmentsFor(row.id, userId, origin, orgId),
+          collectionIds: rights.collectionIds,
+          archivedAt: details.archivedAt.get(row.id) ?? null,
+          edit: rights.edit,
+          viewPassword: rights.viewPassword,
+        }),
+      }
+    })
+  }
+
+  /** All ciphers, with their rendered fields filled in where the cache is empty. */
+  private servedCiphers() {
+    const rows = this.db.select().from(schema.vaultCipher).all()
+    const stale = rows.filter((row) => row.served === null)
+    if (stale.length)
+      this.db.transaction((tx) => {
+        for (const row of stale) {
+          const rendered = serveCipher(row.payload)
+          row.served = rendered.served
+          row.servedPersonal = rendered.servedPersonal
+          tx.update(schema.vaultCipher)
+            .set(rendered)
+            .where(eq(schema.vaultCipher.id, row.id))
+            .run()
+        }
+      })
+    return rows as ((typeof rows)[number] & {
+      served: string
+      servedPersonal: string
+    })[]
+  }
+
+  /** Attachments (with stateless download tokens) and archive dates for a set of ciphers. */
+  private async cipherDetails(ids: Set<string>, userId: string) {
+    const { attachments, archived } = await this.listVaultCipherDetails(
+      [...ids],
+      userId
+    )
+    const byCipher = new Map<string, typeof attachments>()
+    for (const attachment of attachments)
+      byCipher.set(attachment.cipherId, [
+        ...(byCipher.get(attachment.cipherId) ?? []),
+        attachment,
+      ])
+    return {
+      archivedAt: new Map(
+        archived.map((row) => [row.cipherId, row.archivedAt])
+      ),
+      attachmentsFor: (
+        cipherId: string,
+        viewer: string,
+        origin: string,
+        orgId?: string
+      ) => {
+        const list = byCipher.get(cipherId)
+        return list?.length
+          ? list.map((attachment) =>
+              attachmentBody(
+                attachment,
+                attachment.token,
+                viewer,
+                origin,
+                orgId
+              )
+            )
+          : null
+      },
+    }
   }
 
   // One round trip for everything a list of cipher responses needs, so sync
@@ -1889,14 +2002,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .where(eq(schema.vaultCipherArchive.userId, userId))
       .all()
       .filter((row) => ids.has(row.cipherId))
-    if (attachments.length)
-      this.db
-        .delete(schema.vaultAttachmentToken)
-        .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
-        .run()
     const tokens = await Promise.all(
       attachments.map((attachment) =>
-        this.insertVaultAttachmentToken(attachment.id, userId)
+        issueAttachmentToken(
+          this.env.BETTER_AUTH_SECRET ?? "",
+          attachment.id,
+          attachment.cipherId,
+          userId
+        )
       )
     )
     return {
@@ -1918,31 +2031,6 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .filter((preference) => ids.has(preference.cipherId))
   }
 
-  private async insertVaultAttachmentToken(id: string, userId: string) {
-    const bytes = crypto.getRandomValues(new Uint8Array(32))
-    const token = btoa(String.fromCharCode(...bytes))
-      .replaceAll("+", "-")
-      .replaceAll("/", "_")
-      .replaceAll("=", "")
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(token)
-    )
-    const hash = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-    this.db
-      .insert(schema.vaultAttachmentToken)
-      .values({
-        hash,
-        attachmentId: id,
-        userId,
-        expiresAt: new Date(Date.now() + 5 * 60_000),
-      })
-      .run()
-    return token
-  }
-
   async validateVaultAttachmentToken(
     id: string,
     cipherId: string,
@@ -1950,26 +2038,39 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     userId: string
   ) {
     this.assertVaultActive()
-    if (!/^[-_A-Za-z0-9]{43}$/.test(token)) return false
+    // Previously issued URLs remain valid for their original five-minute
+    // lifetime across an upgrade. New tokens never insert a grant row.
+    if (/^[-_A-Za-z0-9]{43}$/.test(token)) {
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(token)
+      )
+      const hash = Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("")
+      const grant = this.db
+        .select()
+        .from(schema.vaultAttachmentToken)
+        .where(eq(schema.vaultAttachmentToken.hash, hash))
+        .get()
+      if (
+        !grant ||
+        grant.attachmentId !== id ||
+        grant.userId !== userId ||
+        grant.expiresAt.getTime() <= Date.now()
+      )
+        return false
+    } else if (
+      !(await verifyAttachmentToken(
+        this.env.BETTER_AUTH_SECRET ?? "",
+        id,
+        cipherId,
+        userId,
+        token
+      ))
+    )
+      return false
     const attachment = await this.getVaultAttachment(id, cipherId)
-    if (!attachment?.uploaded) return false
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(token)
-    )
-    const hash = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-    const grant = this.db
-      .select()
-      .from(schema.vaultAttachmentToken)
-      .where(eq(schema.vaultAttachmentToken.hash, hash))
-      .get()
-    return (
-      !!grant &&
-      grant.attachmentId === id &&
-      grant.userId === userId &&
-      grant.expiresAt.getTime() > Date.now()
-    )
+    return !!attachment?.uploaded
   }
 }

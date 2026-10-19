@@ -1,4 +1,16 @@
+import { vaultRateLimiter } from "./vault-rate-limit"
+import { verifyAttachmentToken } from "./attachment-token"
 import { createMailer } from "@workspace/email"
+import {
+  attachmentBody,
+  viewerPlacement,
+  cipherPayloadFields,
+  field,
+  numberField,
+  personalPlacement,
+  stringField,
+  type Body,
+} from "./cipher-render"
 
 import {
   setVaultSelection,
@@ -201,7 +213,6 @@ import {
   type PasskeyPrfOption,
 } from "./bitwarden-passkey-login"
 
-type Body = Record<string, unknown>
 type CipherRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultCipher"]>>>
 
 function json(value: unknown, status = 200) {
@@ -227,20 +238,6 @@ async function keepCompletedUpload(
   }
   await env.VAULT_ATTACHMENTS.delete(key)
   return false
-}
-
-function field(body: Body, name: string) {
-  const normalized = name.toLowerCase().replaceAll(/[^a-z0-9]/g, "")
-  const key = Object.keys(body).find(
-    (candidate) =>
-      candidate.toLowerCase().replaceAll(/[^a-z0-9]/g, "") === normalized
-  )
-  return key ? body[key] : undefined
-}
-
-function stringField(body: Body, name: string) {
-  const value = field(body, name)
-  return typeof value === "string" ? value : undefined
 }
 
 function passwordHintField(body: Body): string | null | undefined | false {
@@ -300,13 +297,6 @@ async function twoFactorChangeVerified(
   if (otpAllowed) return validateProtectedAction(env, user, body)
   const password = body && stringField(body, "masterPasswordHash")
   return !!password && verifyVaultPassword(user, password)
-}
-
-function numberField(body: Body, name: string) {
-  const value = field(body, name)
-  return typeof value === "number" && Number.isInteger(value)
-    ? value
-    : undefined
 }
 
 function integerField(body: Body, name: string) {
@@ -726,29 +716,6 @@ async function attachmentResponse(
   return attachmentBody(attachment, token, userId, origin, orgId)
 }
 
-function attachmentBody(
-  attachment: {
-    id: string
-    cipherId: string
-    fileName: string
-    key: string | null
-    size: number
-  },
-  token: string,
-  userId: string,
-  origin: string,
-  orgId?: string
-) {
-  return {
-    id: attachment.id,
-    url: `${origin}/attachments/${attachment.cipherId}/${attachment.id}?token=${orgId ? `${orgId}:${userId}` : userId}.${token}`,
-    fileName: attachment.fileName,
-    size: String(attachment.size),
-    key: attachment.key,
-    object: "attachment",
-  }
-}
-
 type CipherOrganization = {
   id: string
   collectionIds: string[]
@@ -828,16 +795,15 @@ function cipherBody(
   origin: string
 ) {
   const data = JSON.parse(row.payload) as Body
+  const personal = personalPlacement(data)
   return {
     object: "cipherDetails",
     id: row.id,
-    type: numberField(data, "type"),
     creationDate: row.createdAt.toISOString(),
     revisionDate: row.updatedAt.toISOString(),
     deletedDate: row.deletedAt?.toISOString() ?? null,
-    reprompt: numberField(data, "reprompt") ?? 0,
     organizationId: organization?.id ?? null,
-    key: field(data, "key") ?? null,
+    ...cipherPayloadFields(data),
     attachments: attachments.length
       ? attachments.map((attachment) =>
           attachmentBody(
@@ -851,24 +817,10 @@ function cipherBody(
       : null,
     organizationUseTotp: true,
     collectionIds: organization?.collectionIds ?? [],
-    name: stringField(data, "name"),
-    notes: field(data, "notes") ?? null,
-    fields: field(data, "fields") ?? [],
-    passwordHistory: field(data, "passwordHistory") ?? [],
-    login: field(data, "login") ?? null,
-    secureNote: field(data, "secureNote") ?? null,
-    card: field(data, "card") ?? null,
-    identity: field(data, "identity") ?? null,
-    sshKey: field(data, "sshKey") ?? null,
-    bankAccount: field(data, "bankAccount") ?? null,
-    driversLicense: field(data, "driversLicense") ?? null,
-    passport: field(data, "passport") ?? null,
-    folderId: organization
-      ? (preference?.folderId ?? null)
-      : (field(data, "folderId") ?? null),
+    folderId: organization ? (preference?.folderId ?? null) : personal.folderId,
     favorite: organization
       ? (preference?.favorite ?? false)
-      : field(data, "favorite") === true,
+      : personal.favorite,
     archivedDate: archivedAt?.toISOString() ?? null,
     edit: organization?.edit ?? true,
     viewPassword: organization?.viewPassword ?? true,
@@ -877,46 +829,6 @@ function cipherBody(
       restore: organization?.edit ?? true,
     },
   }
-}
-
-async function sharedCipherResponses(
-  env: CloudflareEnv,
-  userId: string,
-  origin: string
-) {
-  const organizations = await listVaultOrganizations(env, userId)
-  const responses = await Promise.all(
-    organizations.map(async ({ organization, membership }) => {
-      const rights = await listVaultCollectionRights(
-        env,
-        organization.id,
-        membership
-      )
-      const locators = await listOrgCipherLocators(env, organization.id)
-      const orgVault = await env.APP_DATABASE.getByName(
-        `org:${organization.id}`
-      )
-      const access = new Map(
-        locators.flatMap((locator) => {
-          const allowed =
-            locator && cipherCollectionRights(rights, locator.collectionIds)
-          return allowed ? [[locator.id, allowed] as const] : []
-        })
-      )
-      const rows = await orgVault.listVaultCiphers([...access.keys()])
-      return cipherResponses(
-        rows.map((row) => ({
-          row,
-          organization: { id: organization.id, ...access.get(row.id)! },
-        })),
-        orgVault,
-        env,
-        userId,
-        origin
-      )
-    })
-  )
-  return responses.flat()
 }
 
 async function orgCipherView(
@@ -1026,6 +938,102 @@ async function cipherResponsesAcross(
     })
   )
   return items.map((item) => responses.get(item.row))
+}
+
+/** A response whose body is already JSON text. Same headers as `json`. */
+function rawJson(body: string, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  })
+}
+
+type OrganizationRow = Awaited<
+  ReturnType<typeof listVaultOrganizations>
+>[number]
+
+/**
+ * The collections and shared ciphers a member sees across their
+ * organizations. Per organization: collections and cipher locators are read
+ * together, collection rights reuse those collections, and the organization's
+ * Durable Object renders the visible ciphers in one call.
+ */
+async function sharedVaults(
+  env: CloudflareEnv,
+  userId: string,
+  origin: string,
+  organizations: OrganizationRow[]
+) {
+  const perOrganization = await Promise.all(
+    organizations.map(async ({ organization, membership }) => {
+      const [collections, locators] = await Promise.all([
+        listVaultCollections(env, organization.id, membership),
+        listOrgCipherLocators(env, organization.id),
+      ])
+      const rights = await listVaultCollectionRights(
+        env,
+        organization.id,
+        membership,
+        collections
+      )
+      const access = locators.flatMap((locator) => {
+        const allowed =
+          locator && cipherCollectionRights(rights, locator.collectionIds)
+        return allowed
+          ? [
+              [
+                locator.id,
+                {
+                  collectionIds: allowed.collectionIds,
+                  edit: allowed.edit,
+                  viewPassword: allowed.viewPassword,
+                },
+              ] as [
+                string,
+                {
+                  collectionIds: string[]
+                  edit: boolean
+                  viewPassword: boolean
+                },
+              ],
+            ]
+          : []
+      })
+      const ciphers = access.length
+        ? await env.APP_DATABASE.getByName(
+            `org:${organization.id}`
+          ).syncSharedCiphers(userId, origin, organization.id, access)
+        : []
+      return {
+        collections: collections.map((collection) =>
+          collectionResponse(collection, membership, rights.get(collection.id)!)
+        ),
+        ciphers,
+      }
+    })
+  )
+  return {
+    collections: perOrganization.flatMap((entry) => entry.collections),
+    ciphers: perOrganization.flatMap((entry) => entry.ciphers),
+  }
+}
+
+/** Closes each shared cipher with the viewer's own folder and favorite. */
+function sharedCipherJson(
+  ciphers: { id: string; open: string }[],
+  preferences: {
+    cipherId: string
+    folderId: string | null
+    favorite: boolean
+  }[]
+) {
+  const byCipher = new Map(preferences.map((row) => [row.cipherId, row]))
+  return ciphers.map(
+    (cipher) => `${cipher.open},${viewerPlacement(byCipher.get(cipher.id))}}`
+  )
 }
 
 function folderResponse(row: { id: string; name: string; updatedAt: Date }) {
@@ -1166,14 +1174,27 @@ export function canonicalBitwardenPath(path: string) {
   return path
 }
 
+/**
+ * `authenticated`: the caller's own `authenticatedVaultUser` result for this
+ * request, when it already looked the session up, so it is not read twice.
+ */
 export async function handleBitwarden(
   request: Request,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  authenticated?: Awaited<ReturnType<typeof authenticatedVaultUser>>,
+  cipherLookup?: {
+    id: string
+    locator: Awaited<ReturnType<typeof getOrgCipherLocator>>
+  }
 ): Promise<Response> {
   const url = new URL(request.url)
   const origin = env.APP_URL ? new URL(env.APP_URL).origin : url.origin
   const path = canonicalBitwardenPath(url.pathname.toLowerCase())
   const method = request.method.toUpperCase()
+  const cipherLocator = (id: string) =>
+    cipherLookup?.id === id
+      ? Promise.resolve(cipherLookup.locator)
+      : getOrgCipherLocator(env, id)
 
   const sendDownload = /^\/api\/sends\/([0-9a-f-]{36})\/([0-9a-f]{64})$/.exec(
     path
@@ -1296,6 +1317,17 @@ export async function handleBitwarden(
       (orgId && !/^[0-9a-f-]{36}$/.test(orgId))
     )
       return failure("Attachment not found", 404)
+    if (
+      !/^[-_A-Za-z0-9]{43}$/.test(token) &&
+      !(await verifyAttachmentToken(
+        env.BETTER_AUTH_SECRET ?? "",
+        downloadMatch[2]!,
+        downloadMatch[1]!,
+        userId,
+        token
+      ))
+    )
+      return failure("Attachment not found", 404)
     if (!(await findVaultUserById(env, userId)))
       return failure("Attachment not found", 404)
     if (orgId) {
@@ -1382,7 +1414,7 @@ export async function handleBitwarden(
       return failure("Invalid device lookup")
     }
     if (email.length > 254) return failure("Invalid device lookup")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`known-device:${ip}`, 60, 60_000))
@@ -1416,7 +1448,7 @@ export async function handleBitwarden(
     )
       return failure("Invalid auth request")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(await limiter.consumeRateLimit(`auth-request:${ip}`, 10, 15 * 60_000))
         .allowed
@@ -1466,7 +1498,7 @@ export async function handleBitwarden(
     if (!code || code.length > 200 || !Number.isInteger(deviceType))
       return failure("Invalid auth request", 400)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(await limiter.consumeRateLimit(`auth-response:${ip}`, 60, 60_000))
         .allowed
@@ -1573,7 +1605,7 @@ export async function handleBitwarden(
       return failure("Invalid email")
     if (!env.APP_URL || !env.EMAIL_FROM)
       return failure("Password hints are unavailable", 503)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`password-hint:${ip}`, 5, 60 * 60_000))
@@ -1867,7 +1899,7 @@ export async function handleBitwarden(
       return failure("Invalid email")
     if (!env.APP_URL || !env.EMAIL_FROM)
       return failure("Account email is unavailable", 503)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`delete-recover:${ip}`, 5, 60 * 60_000))
@@ -1913,7 +1945,7 @@ export async function handleBitwarden(
     const token = body && stringField(body, "token")
     if (!userId || !/^[0-9a-f-]{36}$/i.test(userId) || !token)
       return failure("Invalid deletion token", 400)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`delete-confirm:${ip}`, 10, 5 * 60_000))
@@ -1943,7 +1975,7 @@ export async function handleBitwarden(
     const email = body && stringField(body, "email")
     const password = body && stringField(body, "masterPasswordHash")
     if (!email || !password) return failure("Credentials are required")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`email-login:${ip}`, 10, 60 * 60_000))
@@ -1979,7 +2011,7 @@ export async function handleBitwarden(
       if (!deviceId || deviceId.length > 200)
         return json({ error: "invalid_grant" }, 400)
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
         return failure("Too many login attempts", 429)
       const passkey = await verifyPasskeyGrant(
@@ -2031,7 +2063,7 @@ export async function handleBitwarden(
       if (!code || !verifier || !deviceId || deviceId.length > 200)
         return failure("Invalid SSO token request")
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
         return failure("Too many login attempts", 429)
       let sso: Awaited<ReturnType<typeof redeemVaultSso>>
@@ -2146,7 +2178,7 @@ export async function handleBitwarden(
       )
         return json({ error: "invalid_grant" }, 400)
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (
         !(await limiter.consumeRateLimit(`api-login:${ip}`, 20, 60_000)).allowed
       )
@@ -2187,7 +2219,7 @@ export async function handleBitwarden(
     if (!username || !password || !deviceId || deviceId.length > 200)
       return failure("Missing credentials")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const allowed = await limiter.consumeRateLimit(
       `${authRequestId ? "auth-login" : "login"}:${ip}`,
       20,
@@ -2266,7 +2298,7 @@ export async function handleBitwarden(
     })
   }
 
-  const user = await authenticatedVaultUser(env, request)
+  const user = authenticated ?? (await authenticatedVaultUser(env, request))
   if (!user) return failure("Unauthorized", 401)
   const vault = await env.APP_DATABASE.getByName(`vault:${user.id}`)
   await settleVaultKeyRotation(env, user)
@@ -2508,7 +2540,7 @@ export async function handleBitwarden(
       normalizeEmail(newEmail) === user.email
     )
       return failure("Invalid new email")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -3026,7 +3058,7 @@ export async function handleBitwarden(
     if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email) return failure("Email is required")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -3055,7 +3087,7 @@ export async function handleBitwarden(
     if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email || !code) return failure("Invalid email factor")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -3337,26 +3369,26 @@ export async function handleBitwarden(
     return new Response(null, { status: 200 })
   }
   if (path === "/api/accounts/revision-date" && method === "GET") {
-    const organizations = await listVaultOrganizations(env, user.id)
-    const sharedRevisions = await Promise.all(
-      organizations.map(async ({ organization, membership }) => {
-        const orgVault = await env.APP_DATABASE.getByName(
-          `org:${organization.id}`
+    // Polled by every client; the own vault and the organizations are read together.
+    const [own, sharedRevisions] = await Promise.all([
+      vault.vaultRevision(),
+      listVaultOrganizations(env, user.id).then((organizations) =>
+        Promise.all(
+          organizations.map(async ({ organization, membership }) =>
+            Math.max(
+              organization.updatedAt.getTime(),
+              membership.createdAt.getTime(),
+              await env.APP_DATABASE.getByName(
+                `org:${organization.id}`
+              ).vaultRevision()
+            )
+          )
         )
-        return Math.max(
-          organization.updatedAt.getTime(),
-          membership.createdAt.getTime(),
-          await orgVault.vaultRevision()
-        )
-      })
-    )
+      ),
+    ])
     return json(
       new Date(
-        Math.max(
-          user.updatedAt.getTime(),
-          await vault.vaultRevision(),
-          ...sharedRevisions
-        )
+        Math.max(user.updatedAt.getTime(), own, ...sharedRevisions)
       ).toISOString()
     )
   }
@@ -4497,61 +4529,52 @@ export async function handleBitwarden(
   }
 
   if (path === "/api/sync" && method === "GET") {
-    const data = await vault.listVault()
-    const organizations = await listVaultOrganizations(env, user.id)
-    const collections = (
-      await Promise.all(
-        organizations.map(async ({ organization, membership }) => {
-          const rights = await listVaultCollectionRights(
-            env,
-            organization.id,
-            membership
+    // Sync is what every client waits on after login and on each change.
+    // Each vault (the user's own, and each organization's) is read and
+    // rendered inside its Durable Object in one call, and the independent
+    // reads run together: in series, the round trips are most of the wait.
+    const organizationsRead = listVaultOrganizations(env, user.id)
+    const twoFactorRead = Promise.all([
+      getTotp(env, user.id),
+      getEmailTwoFactor(env, user.id),
+      getWebauthn(env, user.id),
+    ]).then(
+      ([totp, email, webauthn]) => !!totp || !!email?.email || !!webauthn.factor
+    )
+    const [organizations, own, shared, twoFactorEnabled, passkeyPrf] =
+      await Promise.all([
+        organizationsRead,
+        vault.syncVault(user.id, origin),
+        organizationsRead.then((rows) =>
+          sharedVaults(env, user.id, origin, rows)
+        ),
+        twoFactorRead,
+        passkeyPrfOptions(env, user.id),
+      ])
+    return rawJson(
+      `{"profile":${JSON.stringify(
+        profile(
+          user,
+          twoFactorEnabled,
+          organizations.map(({ organization, membership }) =>
+            profileOrganizationResponse(organization, membership)
           )
-          return (
-            await listVaultCollections(env, organization.id, membership)
-          ).map((collection) =>
-            collectionResponse(
-              collection,
-              membership,
-              rights.get(collection.id)!
-            )
-          )
-        })
-      )
-    ).flat()
-    const passkeyPrf = await passkeyPrfOptions(env, user.id)
-    return json({
-      profile: profile(
-        user,
-        !!(await getTotp(env, user.id)) ||
-          !!(await getEmailTwoFactor(env, user.id))?.email ||
-          !!(await getWebauthn(env, user.id)).factor,
-        organizations.map(({ organization, membership }) =>
-          profileOrganizationResponse(organization, membership)
         )
-      ),
-      folders: data.folders.map(folderResponse),
-      collections,
-      policies: [],
-      ciphers: [
-        ...(await cipherResponses(
-          data.ciphers.map((row) => ({ row })),
-          vault,
-          env,
-          user.id,
-          origin
-        )),
-        ...(await sharedCipherResponses(env, user.id, origin)),
-      ],
-      domains: domainsResponse(user),
-      sends: (await vault.listVaultSends()).map(sendResponse),
-      userDecryption: {
-        masterPasswordUnlock: masterPasswordUnlockResponse(user),
-        ...(passkeyPrf.length ? { webAuthnPrfOptions: passkeyPrf } : {}),
-        ...(user.userKeyId ? { userKeyId: user.userKeyId } : {}),
-      },
-      object: "sync",
-    })
+      )},"folders":${JSON.stringify(own.folders.map(folderResponse))},"collections":${JSON.stringify(
+        shared.collections
+      )},"policies":[],"ciphers":[${[
+        ...own.ciphers,
+        ...sharedCipherJson(shared.ciphers, own.preferences),
+      ].join(",")}],"domains":${JSON.stringify(
+        domainsResponse(user)
+      )},"sends":${JSON.stringify(own.sends.map(sendResponse))},"userDecryption":${JSON.stringify(
+        {
+          masterPasswordUnlock: masterPasswordUnlockResponse(user),
+          ...(passkeyPrf.length ? { webAuthnPrfOptions: passkeyPrf } : {}),
+          ...(user.userKeyId ? { userKeyId: user.userKeyId } : {}),
+        }
+      )},"object":"sync"}`
+    )
   }
 
   if (path === "/api/ciphers/purge" && method === "POST") {
@@ -4566,18 +4589,17 @@ export async function handleBitwarden(
       : new Response(null, { status: 200 })
   }
   if (path === "/api/ciphers" && method === "GET") {
-    const data = await vault.listVault()
-    return json(
-      list([
-        ...(await cipherResponses(
-          data.ciphers.map((row) => ({ row })),
-          vault,
-          env,
-          user.id,
-          origin
-        )),
-        ...(await sharedCipherResponses(env, user.id, origin)),
-      ])
+    const [own, shared] = await Promise.all([
+      vault.syncVault(user.id, origin),
+      listVaultOrganizations(env, user.id).then((rows) =>
+        sharedVaults(env, user.id, origin, rows)
+      ),
+    ])
+    return rawJson(
+      `{"data":[${[
+        ...own.ciphers,
+        ...sharedCipherJson(shared.ciphers, own.preferences),
+      ].join(",")}],"object":"list","continuationToken":null}`
     )
   }
   if (path === "/api/ciphers/import-organization" && method === "POST") {
@@ -4959,7 +4981,7 @@ export async function handleBitwarden(
       return failure("Folder not found", 404)
     const archivedDate = archivedDateField(data)
     if (archivedDate === false) return failure("Invalid archive date")
-    const existing = await getOrgCipherLocator(env, id)
+    const existing = await cipherLocator(id)
     if (!existing) {
       const rawAttachments = field(data, "attachments2")
       if (
@@ -5032,7 +5054,7 @@ export async function handleBitwarden(
   const collectionUpdateMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})\/collections(_v2)?$/.exec(path)
   if (collectionUpdateMatch && (method === "PUT" || method === "POST")) {
-    const locator = await getOrgCipherLocator(env, collectionUpdateMatch[1]!)
+    const locator = await cipherLocator(collectionUpdateMatch[1]!)
     if (!locator) return failure("Cipher not found", 404)
     const member = await getVaultMembership(env, locator.orgId, user.id)
     if (!member) return failure("Cipher not found", 404)
@@ -5095,7 +5117,7 @@ export async function handleBitwarden(
       path
     )
   if (sharedCipherMatch) {
-    const locator = await getOrgCipherLocator(env, sharedCipherMatch[1]!)
+    const locator = await cipherLocator(sharedCipherMatch[1]!)
     if (locator) {
       const member = await getVaultMembership(env, locator.orgId, user.id)
       const view =
@@ -5218,7 +5240,7 @@ export async function handleBitwarden(
   if (attachmentMatch) {
     const cipherId = attachmentMatch[1]!
     const attachmentId = attachmentMatch[2]
-    const locator = await getOrgCipherLocator(env, cipherId)
+    const locator = await cipherLocator(cipherId)
     const member =
       locator && (await getVaultMembership(env, locator.orgId, user.id))
     const organization =
