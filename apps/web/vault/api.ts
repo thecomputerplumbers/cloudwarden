@@ -223,3 +223,37 @@ export const putVaultSelection = (token: string, excluded: string[]) =>
     method: "PUT",
     token,
   })
+
+/** Starts a sign-up. Resolves to a registration token when the server does not verify email first, or null once it has sent the verification email. */
+export const startSignup = (email: string, name: string) =>
+  request<string | null>(
+    "/identity/accounts/register/send-verification-email",
+    {
+      ...json({ email, name: name || null }),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    }
+  )
+
+/** Checks an emailed sign-up link before asking for a master password. */
+export const checkSignupLink = (email: string, token: string) =>
+  request<null>(
+    "/identity/accounts/register/verification-email-clicked",
+    json({ email, emailVerificationToken: token })
+  )
+
+export const register = (body: Record<string, unknown>) =>
+  request<unknown>("/identity/accounts/register/finish", json(body))
+
+export const acceptInvite = (
+  token: string,
+  orgId: string,
+  memberId: string,
+  inviteToken: string
+) =>
+  request<null>(`/api/organizations/${orgId}/users/${memberId}/accept`, {
+    ...json({ token: inviteToken }),
+    token,
+  })

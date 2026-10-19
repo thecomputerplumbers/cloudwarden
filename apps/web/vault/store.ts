@@ -2,7 +2,11 @@
 
 import { useSyncExternalStore } from "react"
 import * as api from "./api.ts"
-import { unlockAccount, type AccountKeys } from "./crypto/account.ts"
+import {
+  newAccount,
+  unlockAccount,
+  type AccountKeys,
+} from "./crypto/account.ts"
 import {
   decryptCipher,
   encryptDraft,
@@ -200,6 +204,61 @@ export async function signIn(input: {
     set({ status: "signed-out", error: message(error) })
     throw error
   }
+}
+
+/** Bitwarden's default for new accounts. */
+const NEW_ACCOUNT_KDF: KdfConfig = { kdf: 0, iterations: 600_000 }
+
+/**
+ * Creates an account, then signs in to it. Registration needs either the
+ * token from a sign-up link or an organization invitation.
+ */
+export async function createAccount(input: {
+  email: string
+  name: string
+  password: string
+  hint: string
+  emailVerificationToken?: string
+  invite?: { memberId: string; token: string }
+}) {
+  const email = normalizeEmail(input.email)
+  const account = await newAccount(email, input.password, NEW_ACCOUNT_KDF)
+  await api.register({
+    email,
+    name: input.name || null,
+    masterPasswordHash: account.masterPasswordHash,
+    masterPasswordHint: input.hint || null,
+    key: account.key,
+    keys: account.keys,
+    kdf: NEW_ACCOUNT_KDF.kdf,
+    kdfIterations: NEW_ACCOUNT_KDF.iterations,
+    ...(input.emailVerificationToken
+      ? { emailVerificationToken: input.emailVerificationToken }
+      : {}),
+    ...(input.invite
+      ? {
+          orgInviteToken: input.invite.token,
+          organizationUserId: input.invite.memberId,
+        }
+      : {}),
+  })
+  // The account exists now; a failed sign-in shows on the sign-in screen.
+  await signIn({ email, password: input.password }).catch(() => {})
+}
+
+/** Accepts an organization invitation for the signed-in account. An admin still confirms it before the organization's items appear. */
+export async function acceptInvite(invite: {
+  orgId: string
+  memberId: string
+  token: string
+}) {
+  await api.acceptInvite(
+    await token(),
+    invite.orgId,
+    invite.memberId,
+    invite.token
+  )
+  await resync()
 }
 
 /** Sends an email sign-in code, for accounts whose second factor is email. */

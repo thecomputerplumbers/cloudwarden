@@ -25,7 +25,7 @@ const POINTS = [
  * The frame shared by sign-in and unlock: a graphite panel drawn like a
  * schematic, with one copper line routed through it, and a focused form.
  */
-function AuthFrame({ children }: { children: ReactNode }) {
+export function AuthFrame({ children }: { children: ReactNode }) {
   return (
     <div className="grid min-h-dvh bg-background lg:grid-cols-[1fr_1fr]">
       <aside className="relative hidden overflow-hidden bg-[oklch(0.17_0.006_265)] text-[oklch(0.95_0.004_75)] lg:flex lg:flex-col lg:justify-between lg:p-12">
@@ -85,7 +85,7 @@ function AuthFrame({ children }: { children: ReactNode }) {
   )
 }
 
-function ErrorLine({ text }: { text: string | null }) {
+export function ErrorLine({ text }: { text: string | null }) {
   return text ? (
     <p
       role="alert"
@@ -96,9 +96,25 @@ function ErrorLine({ text }: { text: string | null }) {
   ) : null
 }
 
-export function SignIn() {
+export function Notice({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-md border border-primary/30 bg-brand-soft px-3 py-2 text-sm">
+      {children}
+    </p>
+  )
+}
+
+export function SignIn({
+  email: invited,
+  notice,
+  onCreateAccount,
+}: {
+  email?: string
+  notice?: ReactNode
+  onCreateAccount?: () => void
+}) {
   const state = vault.useVault()
-  const [email, setEmail] = useState(state.email ?? "")
+  const [email, setEmail] = useState(invited ?? state.email ?? "")
   const [password, setPassword] = useState("")
   const [providers, setProviders] = useState<number[] | null>(null)
   const [provider, setProvider] = useState(0)
@@ -156,6 +172,7 @@ export function SignIn() {
               : "Use your Cloudwarden email and master password."}
           </p>
         </div>
+        {notice && !providers ? <Notice>{notice}</Notice> : null}
         {!providers ? (
           <>
             <div className="space-y-2">
@@ -243,12 +260,24 @@ export function SignIn() {
             Back
           </button>
         )}
+        {onCreateAccount && !providers && (
+          <p className="text-center text-sm text-muted-foreground">
+            New here?{" "}
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              onClick={onCreateAccount}
+            >
+              Create an account
+            </button>
+          </p>
+        )}
       </form>
     </AuthFrame>
   )
 }
 
-export function Unlock() {
+export function Unlock({ notice }: { notice?: ReactNode }) {
   const state = vault.useVault()
   const [password, setPassword] = useState("")
   const [busy, setBusy] = useState(false)
@@ -279,6 +308,7 @@ export function Unlock() {
             <p className="text-sm text-muted-foreground">{state.email}</p>
           </div>
         </div>
+        {notice ? <Notice>{notice}</Notice> : null}
         <div className="space-y-2">
           <Label htmlFor="cw-unlock">Master password</Label>
           <Input

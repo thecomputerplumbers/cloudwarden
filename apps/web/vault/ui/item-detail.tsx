@@ -250,7 +250,7 @@ export function ItemDetail({
   return (
     <article className="flex h-full min-w-0 flex-col bg-background">
       <header className="shrink-0 border-b">
-        <div className="flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
+        <div className="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3 md:px-6">
           {onBack && (
             <Button
               variant="ghost"
@@ -328,7 +328,7 @@ export function ItemDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="max-w-2xl space-y-4 px-4 py-5 md:px-6">
+        <div className="mx-auto max-w-2xl space-y-4 px-4 py-5 md:px-6">
           {item.error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
               This item could not be decrypted: {item.error}
