@@ -1,3 +1,4 @@
+import { issueAttachmentToken, verifyAttachmentToken } from "./attachment-token"
 import { DurableObject } from "cloudflare:workers"
 import { and, eq, like, lt } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/durable-sqlite"
@@ -1846,11 +1847,12 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     this.assertVaultActive()
     const attachment = await this.getVaultAttachment(id, cipherId)
     if (!attachment?.uploaded) return null
-    this.db
-      .delete(schema.vaultAttachmentToken)
-      .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
-      .run()
-    return this.insertVaultAttachmentToken(id, userId)
+    return issueAttachmentToken(
+      this.env.BETTER_AUTH_SECRET ?? "",
+      id,
+      cipherId,
+      userId
+    )
   }
 
   /**
@@ -1942,7 +1944,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     })[]
   }
 
-  /** Attachments (with fresh download tokens) and archive dates for a set of ciphers. */
+  /** Attachments (with stateless download tokens) and archive dates for a set of ciphers. */
   private async cipherDetails(ids: Set<string>, userId: string) {
     const { attachments, archived } = await this.listVaultCipherDetails(
       [...ids],
@@ -2000,14 +2002,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .where(eq(schema.vaultCipherArchive.userId, userId))
       .all()
       .filter((row) => ids.has(row.cipherId))
-    if (attachments.length)
-      this.db
-        .delete(schema.vaultAttachmentToken)
-        .where(lt(schema.vaultAttachmentToken.expiresAt, new Date()))
-        .run()
     const tokens = await Promise.all(
       attachments.map((attachment) =>
-        this.insertVaultAttachmentToken(attachment.id, userId)
+        issueAttachmentToken(
+          this.env.BETTER_AUTH_SECRET ?? "",
+          attachment.id,
+          attachment.cipherId,
+          userId
+        )
       )
     )
     return {
@@ -2029,31 +2031,6 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       .filter((preference) => ids.has(preference.cipherId))
   }
 
-  private async insertVaultAttachmentToken(id: string, userId: string) {
-    const bytes = crypto.getRandomValues(new Uint8Array(32))
-    const token = btoa(String.fromCharCode(...bytes))
-      .replaceAll("+", "-")
-      .replaceAll("/", "_")
-      .replaceAll("=", "")
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(token)
-    )
-    const hash = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-    this.db
-      .insert(schema.vaultAttachmentToken)
-      .values({
-        hash,
-        attachmentId: id,
-        userId,
-        expiresAt: new Date(Date.now() + 5 * 60_000),
-      })
-      .run()
-    return token
-  }
-
   async validateVaultAttachmentToken(
     id: string,
     cipherId: string,
@@ -2061,26 +2038,39 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     userId: string
   ) {
     this.assertVaultActive()
-    if (!/^[-_A-Za-z0-9]{43}$/.test(token)) return false
+    // Previously issued URLs remain valid for their original five-minute
+    // lifetime across an upgrade. New tokens never insert a grant row.
+    if (/^[-_A-Za-z0-9]{43}$/.test(token)) {
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(token)
+      )
+      const hash = Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("")
+      const grant = this.db
+        .select()
+        .from(schema.vaultAttachmentToken)
+        .where(eq(schema.vaultAttachmentToken.hash, hash))
+        .get()
+      if (
+        !grant ||
+        grant.attachmentId !== id ||
+        grant.userId !== userId ||
+        grant.expiresAt.getTime() <= Date.now()
+      )
+        return false
+    } else if (
+      !(await verifyAttachmentToken(
+        this.env.BETTER_AUTH_SECRET ?? "",
+        id,
+        cipherId,
+        userId,
+        token
+      ))
+    )
+      return false
     const attachment = await this.getVaultAttachment(id, cipherId)
-    if (!attachment?.uploaded) return false
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(token)
-    )
-    const hash = Array.from(new Uint8Array(digest), (byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-    const grant = this.db
-      .select()
-      .from(schema.vaultAttachmentToken)
-      .where(eq(schema.vaultAttachmentToken.hash, hash))
-      .get()
-    return (
-      !!grant &&
-      grant.attachmentId === id &&
-      grant.userId === userId &&
-      grant.expiresAt.getTime() > Date.now()
-    )
+    return !!attachment?.uploaded
   }
 }

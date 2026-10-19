@@ -1,3 +1,4 @@
+import { vaultRateLimiter } from "./vault-rate-limit"
 import { createMailer } from "@workspace/email"
 import { and, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
@@ -472,7 +473,7 @@ function validWaitTime(days: number | undefined): days is number {
 }
 
 async function inviteAllowed(env: CloudflareEnv, userId: string) {
-  const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+  const limiter = vaultRateLimiter(env)
   return (
     await limiter.consumeRateLimit(
       `emergency-invite:${userId}`,

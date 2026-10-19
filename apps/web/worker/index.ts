@@ -2,12 +2,9 @@ import { processEmergencyAccess } from "./bitwarden-emergency-access"
 import { prunePasskeyChallenges } from "./bitwarden-passkey-login"
 import product from "../config/product.json"
 import { observeRequest } from "../lib/diagnostics"
-import vinextWorker from "vinext/server/app-router-entry"
 
 export { AppDatabase } from "./database"
 
-import { auth } from "../lib/auth"
-import { handleMcp } from "../mcp/handler"
 import {
   canonicalBitwardenPath,
   handleBitwarden,
@@ -34,6 +31,7 @@ import { pruneAuthRequests } from "./bitwarden-auth-request"
 import { handleVaultRecovery } from "./bitwarden-recovery"
 import {
   handleVaultNotification,
+  mutationNotification,
   organizationNotificationTargets,
   publishOrganizationSync,
   publishVaultNotification,
@@ -125,22 +123,42 @@ export default {
           user && path === "/api/ciphers/share" && request.method === "PUT"
             ? request.clone()
             : null
-        const response = await handleBitwarden(request, env, user ?? undefined)
+        const response = await handleBitwarden(
+          request,
+          env,
+          user ?? undefined,
+          cipherId ? { id: cipherId, locator: beforeLocator } : undefined
+        )
         if (user && response.ok) {
           // Other devices are told after the response is sent: the client that
           // made the change has its answer, and publishing takes several round trips.
           const created =
             request.method === "POST" &&
-            (path === "/api/ciphers" || path === "/api/organizations")
+            (path === "/api/ciphers" ||
+              path === "/api/ciphers/create" ||
+              path === "/api/organizations")
               ? response.clone()
               : null
+          const mutationResponse = vaultMutation ? response.clone() : null
           const notify = async () => {
             try {
-              if (vaultMutation)
-                await publishVaultNotification(env, {
-                  type: 5,
-                  userId: user.id,
-                })
+              const event = vaultMutation
+                ? await mutationNotification(
+                    path,
+                    request.method,
+                    mutationResponse!,
+                    user.id,
+                    user.notificationDeviceId
+                  )
+                : null
+              // Only the owner receives personal updates. Shared updates are
+              // sent below to the currently authorized collection members.
+              if (
+                event &&
+                (userOnlyCipherMutation ||
+                  (!beforeLocator && !event.organizationId))
+              )
+                await publishVaultNotification(env, event)
               const notices = new Map<string, Set<string> | null>()
               const add = (
                 orgId: string | null | undefined,
@@ -160,8 +178,15 @@ export default {
                 add(beforeLocator.orgId, beforeLocator.collectionIds)
               for (const locator of batchLocators)
                 if (locator) add(locator.orgId, locator.collectionIds)
+              let afterLocator = null
               if (cipherId) {
-                const afterLocator = await getOrgCipherLocator(env, cipherId)
+                // These routes cannot change the locator or collection assignments.
+                afterLocator =
+                  /^\/api\/ciphers\/[0-9a-f-]{36}(?:\/(?:delete|restore))?$/.test(
+                    path
+                  )
+                    ? beforeLocator
+                    : await getOrgCipherLocator(env, cipherId)
                 if (afterLocator)
                   add(afterLocator.orgId, afterLocator.collectionIds)
               }
@@ -181,7 +206,10 @@ export default {
                 )
                   add(body.ciphers[0].organizationId, body.collectionIds)
               }
-              if (path === "/api/ciphers" && request.method === "POST") {
+              if (
+                (path === "/api/ciphers" || path === "/api/ciphers/create") &&
+                request.method === "POST"
+              ) {
                 const body = (await created?.json().catch(() => null)) as {
                   organizationId?: string
                   collectionIds?: string[]
@@ -205,7 +233,21 @@ export default {
                 await publishOrganizationSync(
                   env,
                   orgId,
-                  collections ? [...collections] : null
+                  collections ? [...collections] : null,
+                  event &&
+                    [0, 1, 2].includes(event.type) &&
+                    (!beforeLocator ||
+                      !afterLocator ||
+                      JSON.stringify(
+                        [...beforeLocator.collectionIds].sort()
+                      ) ===
+                        JSON.stringify([...afterLocator.collectionIds].sort()))
+                    ? { ...event, organizationId: orgId }
+                    : {
+                        type: 5,
+                        userId: user.id,
+                        contextId: user.notificationDeviceId,
+                      }
                 )
               if (orgIdFromPath && beforeMembers.length) {
                 const afterMembers = new Set(
@@ -243,14 +285,26 @@ export default {
           (path === "/billing" || path.startsWith("/api/stripe/")))
       )
         return new Response("Not found", { status: 404 })
-      if (path === "/mcp") return handleMcp(request)
-      if (path.startsWith("/.well-known/")) return auth.handler(request)
+      if (path === "/mcp") {
+        const { handleMcp } = await import("../mcp/handler")
+        return handleMcp(request)
+      }
+      if (path.startsWith("/.well-known/")) {
+        const { auth } = await import("../lib/auth")
+        return auth.handler(request)
+      }
       if (product.slug === "cloudwarden") {
-        if (path === "/api/health") return vinextWorker.fetch(request, env, ctx)
+        if (path === "/api/health") {
+          const { default: vinextWorker } =
+            await import("vinext/server/app-router-entry")
+          return vinextWorker.fetch(request, env, ctx)
+        }
         if (path.startsWith("/api/"))
           return new Response("Not found", { status: 404 })
         return env.ASSETS.fetch(request)
       }
+      const { default: vinextWorker } =
+        await import("vinext/server/app-router-entry")
       return vinextWorker.fetch(request, env, ctx)
     })
   },

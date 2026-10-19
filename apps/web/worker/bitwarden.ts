@@ -1,3 +1,5 @@
+import { vaultRateLimiter } from "./vault-rate-limit"
+import { verifyAttachmentToken } from "./attachment-token"
 import { createMailer } from "@workspace/email"
 import {
   attachmentBody,
@@ -1177,12 +1179,20 @@ export function canonicalBitwardenPath(path: string) {
 export async function handleBitwarden(
   request: Request,
   env: CloudflareEnv,
-  authenticated?: Awaited<ReturnType<typeof authenticatedVaultUser>>
+  authenticated?: Awaited<ReturnType<typeof authenticatedVaultUser>>,
+  cipherLookup?: {
+    id: string
+    locator: Awaited<ReturnType<typeof getOrgCipherLocator>>
+  }
 ): Promise<Response> {
   const url = new URL(request.url)
   const origin = env.APP_URL ? new URL(env.APP_URL).origin : url.origin
   const path = canonicalBitwardenPath(url.pathname.toLowerCase())
   const method = request.method.toUpperCase()
+  const cipherLocator = (id: string) =>
+    cipherLookup?.id === id
+      ? Promise.resolve(cipherLookup.locator)
+      : getOrgCipherLocator(env, id)
 
   const sendDownload = /^\/api\/sends\/([0-9a-f-]{36})\/([0-9a-f]{64})$/.exec(
     path
@@ -1305,6 +1315,17 @@ export async function handleBitwarden(
       (orgId && !/^[0-9a-f-]{36}$/.test(orgId))
     )
       return failure("Attachment not found", 404)
+    if (
+      !/^[-_A-Za-z0-9]{43}$/.test(token) &&
+      !(await verifyAttachmentToken(
+        env.BETTER_AUTH_SECRET ?? "",
+        downloadMatch[2]!,
+        downloadMatch[1]!,
+        userId,
+        token
+      ))
+    )
+      return failure("Attachment not found", 404)
     if (!(await findVaultUserById(env, userId)))
       return failure("Attachment not found", 404)
     if (orgId) {
@@ -1391,7 +1412,7 @@ export async function handleBitwarden(
       return failure("Invalid device lookup")
     }
     if (email.length > 254) return failure("Invalid device lookup")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`known-device:${ip}`, 60, 60_000))
@@ -1425,7 +1446,7 @@ export async function handleBitwarden(
     )
       return failure("Invalid auth request")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(await limiter.consumeRateLimit(`auth-request:${ip}`, 10, 15 * 60_000))
         .allowed
@@ -1475,7 +1496,7 @@ export async function handleBitwarden(
     if (!code || code.length > 200 || !Number.isInteger(deviceType))
       return failure("Invalid auth request", 400)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(await limiter.consumeRateLimit(`auth-response:${ip}`, 60, 60_000))
         .allowed
@@ -1582,7 +1603,7 @@ export async function handleBitwarden(
       return failure("Invalid email")
     if (!env.APP_URL || !env.EMAIL_FROM)
       return failure("Password hints are unavailable", 503)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`password-hint:${ip}`, 5, 60 * 60_000))
@@ -1876,7 +1897,7 @@ export async function handleBitwarden(
       return failure("Invalid email")
     if (!env.APP_URL || !env.EMAIL_FROM)
       return failure("Account email is unavailable", 503)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`delete-recover:${ip}`, 5, 60 * 60_000))
@@ -1922,7 +1943,7 @@ export async function handleBitwarden(
     const token = body && stringField(body, "token")
     if (!userId || !/^[0-9a-f-]{36}$/i.test(userId) || !token)
       return failure("Invalid deletion token", 400)
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`delete-confirm:${ip}`, 10, 5 * 60_000))
@@ -1952,7 +1973,7 @@ export async function handleBitwarden(
     const email = body && stringField(body, "email")
     const password = body && stringField(body, "masterPasswordHash")
     if (!email || !password) return failure("Credentials are required")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
     if (
       !(await limiter.consumeRateLimit(`email-login:${ip}`, 10, 60 * 60_000))
@@ -1988,7 +2009,7 @@ export async function handleBitwarden(
       if (!deviceId || deviceId.length > 200)
         return json({ error: "invalid_grant" }, 400)
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
         return failure("Too many login attempts", 429)
       const passkey = await verifyPasskeyGrant(
@@ -2040,7 +2061,7 @@ export async function handleBitwarden(
       if (!code || !verifier || !deviceId || deviceId.length > 200)
         return failure("Invalid SSO token request")
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (!(await limiter.consumeRateLimit(`login:${ip}`, 20, 60_000)).allowed)
         return failure("Too many login attempts", 429)
       let sso: Awaited<ReturnType<typeof redeemVaultSso>>
@@ -2155,7 +2176,7 @@ export async function handleBitwarden(
       )
         return json({ error: "invalid_grant" }, 400)
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-      const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+      const limiter = vaultRateLimiter(env)
       if (
         !(await limiter.consumeRateLimit(`api-login:${ip}`, 20, 60_000)).allowed
       )
@@ -2196,7 +2217,7 @@ export async function handleBitwarden(
     if (!username || !password || !deviceId || deviceId.length > 200)
       return failure("Missing credentials")
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     const allowed = await limiter.consumeRateLimit(
       `${authRequestId ? "auth-login" : "login"}:${ip}`,
       20,
@@ -2517,7 +2538,7 @@ export async function handleBitwarden(
       normalizeEmail(newEmail) === user.email
     )
       return failure("Invalid new email")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -3035,7 +3056,7 @@ export async function handleBitwarden(
     if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email) return failure("Email is required")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -3064,7 +3085,7 @@ export async function handleBitwarden(
     if (!(await twoFactorChangeVerified(env, user, body)))
       return failure("Invalid password", 403)
     if (!email || !code) return failure("Invalid email factor")
-    const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+    const limiter = vaultRateLimiter(env)
     if (
       !(
         await limiter.consumeRateLimit(
@@ -4920,7 +4941,7 @@ export async function handleBitwarden(
       return failure("Folder not found", 404)
     const archivedDate = archivedDateField(data)
     if (archivedDate === false) return failure("Invalid archive date")
-    const existing = await getOrgCipherLocator(env, id)
+    const existing = await cipherLocator(id)
     if (!existing) {
       const rawAttachments = field(data, "attachments2")
       if (
@@ -4993,7 +5014,7 @@ export async function handleBitwarden(
   const collectionUpdateMatch =
     /^\/api\/ciphers\/([0-9a-f-]{36})\/collections(_v2)?$/.exec(path)
   if (collectionUpdateMatch && (method === "PUT" || method === "POST")) {
-    const locator = await getOrgCipherLocator(env, collectionUpdateMatch[1]!)
+    const locator = await cipherLocator(collectionUpdateMatch[1]!)
     if (!locator) return failure("Cipher not found", 404)
     const member = await getVaultMembership(env, locator.orgId, user.id)
     if (!member) return failure("Cipher not found", 404)
@@ -5056,7 +5077,7 @@ export async function handleBitwarden(
       path
     )
   if (sharedCipherMatch) {
-    const locator = await getOrgCipherLocator(env, sharedCipherMatch[1]!)
+    const locator = await cipherLocator(sharedCipherMatch[1]!)
     if (locator) {
       const member = await getVaultMembership(env, locator.orgId, user.id)
       const view =
@@ -5179,7 +5200,7 @@ export async function handleBitwarden(
   if (attachmentMatch) {
     const cipherId = attachmentMatch[1]!
     const attachmentId = attachmentMatch[2]
-    const locator = await getOrgCipherLocator(env, cipherId)
+    const locator = await cipherLocator(cipherId)
     const member =
       locator && (await getVaultMembership(env, locator.orgId, user.id))
     const organization =

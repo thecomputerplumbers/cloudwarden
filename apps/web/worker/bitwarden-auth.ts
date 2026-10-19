@@ -695,9 +695,9 @@ export async function issueVaultSession(
   )
   const refresh = randomToken()
   const now = Date.now()
-  await drizzle(env.DB)
-    .insert(vaultSession)
-    .values({
+  const db = drizzle(env.DB)
+  await db.batch([
+    db.insert(vaultSession).values({
       id: crypto.randomUUID(),
       userId: user.id,
       deviceId,
@@ -719,28 +719,27 @@ export async function issueVaultSession(
         : null,
       accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
-    })
-    .run()
-  await drizzle(env.DB)
-    .insert(vaultDevice)
-    .values({
-      id: `${user.id}:${deviceId}`,
-      userId: user.id,
-      deviceId,
-      deviceType: Number(deviceType) || 0,
-      deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
-      createdAt: new Date(now),
-      updatedAt: new Date(now),
-    })
-    .onConflictDoUpdate({
-      target: vaultDevice.id,
-      set: {
+    }),
+    db
+      .insert(vaultDevice)
+      .values({
+        id: `${user.id}:${deviceId}`,
+        userId: user.id,
+        deviceId,
         deviceType: Number(deviceType) || 0,
         deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
+        createdAt: new Date(now),
         updatedAt: new Date(now),
-      },
-    })
-    .run()
+      })
+      .onConflictDoUpdate({
+        target: vaultDevice.id,
+        set: {
+          deviceType: Number(deviceType) || 0,
+          deviceName: options.deviceName?.slice(0, 200) || "Unknown device",
+          updatedAt: new Date(now),
+        },
+      }),
+  ])
   return { access, refresh, expiresIn: ACCESS_LIFETIME_MS / 1000 }
 }
 
@@ -751,24 +750,23 @@ export async function refreshVaultSession(
 ) {
   const db = drizzle(env.DB)
   const oldHash = await tokenHash(refresh)
-  const session = await db
-    .select()
+  const row = await db
+    .select({ session: vaultSession, user: vaultUser })
     .from(vaultSession)
+    .innerJoin(
+      vaultUser,
+      and(eq(vaultUser.id, vaultSession.userId), isNull(vaultUser.deletingAt))
+    )
     .where(eq(vaultSession.refreshHash, oldHash))
     .get()
+  if (!row) return null
+  const { session, user } = row
   if (
-    !session ||
     session.apiKey ||
-    session.refreshExpiresAt.getTime() <= Date.now()
+    session.refreshExpiresAt.getTime() <= Date.now() ||
+    session.securityStamp !== user.securityStamp
   )
     return null
-  const user = await db
-    .select()
-    .from(vaultUser)
-    .where(and(eq(vaultUser.id, session.userId), isNull(vaultUser.deletingAt)))
-    .get()
-  if (!user) return null
-  if (session.securityStamp !== user.securityStamp) return null
   let nextSsoRefresh = session.ssoRefreshToken
   if (session.ssoIssuer) {
     const config = env as CloudflareEnv & {
@@ -856,6 +854,7 @@ export async function authenticatedVaultUser(
   // and (for API-key sessions) the current key hash, joined.
   const row = await drizzle(env.DB)
     .select({
+      deviceId: vaultSession.deviceId,
       apiKey: vaultSession.apiKey,
       apiKeyHash: vaultSession.apiKeyHash,
       securityStamp: vaultSession.securityStamp,
@@ -887,7 +886,9 @@ export async function authenticatedVaultUser(
     (!row.apiKeyHash || row.currentApiKeyHash !== row.apiKeyHash)
   )
     return null
-  return row.securityStamp === row.user.securityStamp ? row.user : null
+  return row.securityStamp === row.user.securityStamp
+    ? Object.assign(row.user, { notificationDeviceId: row.deviceId })
+    : null
 }
 
 export async function listVaultDevices(env: CloudflareEnv, userId: string) {

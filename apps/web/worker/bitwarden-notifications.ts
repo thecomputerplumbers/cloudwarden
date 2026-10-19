@@ -88,6 +88,8 @@ export type VaultNotification = {
   type: number
   userId: string
   id?: string
+  revisionDate?: Date
+  organizationId?: string | null
   contextId?: string | null
   anonymous?: boolean
   activeSessionIds?: string[]
@@ -97,7 +99,17 @@ export function notificationFrame(event: VaultNotification) {
   const payload =
     event.type === 5 || event.type === 11
       ? { UserId: event.userId, Date: new Date() }
-      : { Id: event.id, UserId: event.userId }
+      : {
+          Id: event.id,
+          UserId: event.organizationId ? null : event.userId,
+          ...(event.revisionDate ? { RevisionDate: event.revisionDate } : {}),
+          ...([0, 1, 2].includes(event.type)
+            ? {
+                OrganizationId: event.organizationId ?? null,
+                CollectionIds: null,
+              }
+            : {}),
+        }
   return framed(
     event.anonymous
       ? [
@@ -244,7 +256,8 @@ export async function organizationNotificationTargets(
 export async function publishOrganizationSync(
   env: CloudflareEnv,
   orgId: string,
-  collectionIds: string[] | null
+  collectionIds: string[] | null,
+  event?: VaultNotification
 ) {
   try {
     const users = await organizationNotificationTargets(
@@ -256,7 +269,12 @@ export async function publishOrganizationSync(
       await Promise.all(
         users
           .slice(index, index + 20)
-          .map((userId) => publishVaultNotification(env, { type: 5, userId }))
+          .map((userId) =>
+            publishVaultNotification(
+              env,
+              event ? { ...event, userId } : { type: 5, userId }
+            )
+          )
       )
   } catch {
     console.error("Organization notification delivery failed")
@@ -355,4 +373,84 @@ export async function handleVaultNotification(
       }
     )
   )
+}
+
+// Bulk mutations and access changes still require a full refresh.
+export async function mutationNotification(
+  path: string,
+  method: string,
+  response: Response,
+  userId: string,
+  contextId: string | null
+): Promise<VaultNotification> {
+  const fallback: VaultNotification = { type: 5, userId, contextId }
+  if (path === "/api/ciphers/create") path = "/api/ciphers"
+  if (path === "/api/sends/file/v2") path = "/api/sends"
+  const attachment =
+    /^\/api\/ciphers\/([0-9a-f-]{36})\/attachment(?:\/|$)/i.exec(path)
+  if (attachment) {
+    path = `/api/ciphers/${attachment[1]}`
+    method = "PUT"
+  }
+  const upload = /^\/api\/sends\/([0-9a-f-]{36})\/file\/[0-9a-f]{64}$/i.exec(
+    path
+  )
+  if (upload) {
+    path = `/api/sends/${upload[1]}`
+    method = "PUT"
+  }
+
+  const match =
+    /^\/api\/(ciphers|folders|sends)(?:\/([0-9a-f-]{36}))?(?:\/(delete|restore|partial|archive|unarchive|remove-password))?$/i.exec(
+      path
+    )
+  if (!match) return fallback
+  const [, resource, pathId, action] = match
+  if (!pathId && method !== "POST") return fallback
+  let body =
+    response.status === 204
+      ? null
+      : ((await response.json().catch(() => null)) as {
+          id?: string
+          revisionDate?: string
+          organizationId?: string | null
+          sendResponse?: { id: string; revisionDate: string }
+        } | null)
+  body = body?.sendResponse ?? body
+  const id = pathId ?? body?.id
+  if (!id) return fallback
+  const deleted =
+    method === "DELETE" ||
+    (action === "delete" && !(resource === "ciphers" && method === "PUT"))
+  const created = !pathId && method === "POST"
+  const type =
+    resource === "ciphers"
+      ? deleted
+        ? 2
+        : created
+          ? 1
+          : 0
+      : resource === "folders"
+        ? deleted
+          ? 3
+          : created
+            ? 7
+            : 8
+        : deleted
+          ? 14
+          : created
+            ? 12
+            : 13
+  const revisionDate = body?.revisionDate
+    ? new Date(body.revisionDate)
+    : new Date()
+  if (!Number.isFinite(revisionDate.getTime())) return fallback
+  return {
+    type,
+    userId,
+    id,
+    contextId,
+    revisionDate,
+    organizationId: body?.organizationId,
+  }
 }

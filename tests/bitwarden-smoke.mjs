@@ -1131,9 +1131,11 @@ assert.equal(
 const syncFrame = await syncNotification
 const syncEvent = decodeNotificationFrame(syncFrame)
 assert.equal(syncEvent[3], "ReceiveMessage")
-assert.equal(syncEvent[4][0].Type, 5)
+assert.equal(syncEvent[4][0].Type, 8)
+assert.equal(syncEvent[4][0].Payload.Id, createdFolder.body.id)
+assert.equal(syncEvent[4][0].ContextId, loginDeviceId)
 assert.equal(syncEvent[4][0].Payload.UserId, sync.body.profile.id)
-assert.ok(syncEvent[4][0].Payload.Date instanceof Date)
+assert.ok(syncEvent[4][0].Payload.RevisionDate instanceof Date)
 syncNotificationSocket.close()
 const authResponse = await call(
   `/api/auth-requests/${authRequestId}/response?code=${authAccessCode}`,
@@ -1506,10 +1508,19 @@ assert.equal(
   204
 )
 assert.equal((await authorized(`/api/ciphers/${cipherId}`)).body.folderId, null)
+const trashSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(currentAccessToken)}`
+)
+const trashNotification = nextSocketMessage(trashSocket)
 assert.equal(
   (await authorized(`/api/ciphers/${cipherId}/delete`, "PUT")).status,
   204
 )
+const trashEvent = decodeNotificationFrame(await trashNotification)[4][0]
+assert.equal(trashEvent.Type, 0)
+assert.equal(trashEvent.Payload.Id, cipherId)
+assert.equal(trashEvent.ContextId, loginDeviceId)
+trashSocket.close()
 assert.ok((await authorized(`/api/ciphers/${cipherId}`)).body.deletedDate)
 assert.equal(
   (await authorized(`/api/ciphers/${cipherId}/restore`, "PUT")).status,
@@ -3090,6 +3101,26 @@ assert.equal(
 const memberNotificationSocket = await notificationSocket(
   `/notifications/hub?access_token=${encodeURIComponent(otherTokens.access_token)}`
 )
+const sharedEditNotification = nextSocketMessage(memberNotificationSocket)
+assert.equal(
+  (
+    await authorized(`/api/ciphers/${sharedId}`, "PUT", {
+      ...sharedCipherBody,
+      collectionIds: [secondCollection.body.id],
+      name: "2.shared-notification-edit",
+    })
+  ).status,
+  200
+)
+const sharedEditEvent = decodeNotificationFrame(
+  await sharedEditNotification
+)[4][0]
+assert.equal(sharedEditEvent.Type, 0)
+assert.equal(sharedEditEvent.ContextId, loginDeviceId)
+assert.equal(sharedEditEvent.Payload.Id, sharedId)
+assert.equal(sharedEditEvent.Payload.OrganizationId, orgId)
+assert.equal(sharedEditEvent.Payload.UserId, null)
+assert.ok(sharedEditEvent.Payload.RevisionDate instanceof Date)
 const movedAwayNotification = nextSocketMessage(memberNotificationSocket)
 const movedShared = await authorized(
   `/api/ciphers/${sharedId}/collections_v2`,
@@ -3099,7 +3130,11 @@ const movedShared = await authorized(
   }
 )
 assert.equal(movedShared.status, 200)
-assert.equal(decodeNotificationFrame(await movedAwayNotification)[4][0].Type, 5)
+const movedAwayEvent = decodeNotificationFrame(
+  await movedAwayNotification
+)[4][0]
+assert.equal(movedAwayEvent.Type, 5)
+assert.equal(movedAwayEvent.ContextId, loginDeviceId)
 assert.equal(
   movedShared.body.cipher.collectionIds[0],
   orgCollections.body.data[0].id
@@ -3233,7 +3268,22 @@ const sendBody = {
   disabled: false,
   maxAccessCount: 1,
 }
+const sendSocket = await notificationSocket(
+  `/notifications/hub?access_token=${encodeURIComponent(otherTokens.access_token)}`
+)
+const sendNotification = nextSocketMessage(sendSocket)
 const send = await otherAuthorized("/api/sends", sendBody)
+const sendEvent = decodeNotificationFrame(await sendNotification)[4][0]
+assert.equal(sendEvent.Type, 12)
+assert.equal(sendEvent.Payload.Id, send.body.id)
+assert.ok(sendEvent.Payload.RevisionDate instanceof Date)
+assert.equal(
+  sendEvent.ContextId,
+  JSON.parse(
+    Buffer.from(otherTokens.access_token.split(".")[1], "base64url").toString()
+  ).device
+)
+sendSocket.close()
 assert.equal(send.status, 200)
 assert.equal(send.body.text.text, "2.encrypted-send-body")
 assert.equal(

@@ -1,3 +1,4 @@
+import { vaultRateLimiter } from "./vault-rate-limit"
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -628,7 +629,7 @@ export async function passkeyAssertionOptions(
   request: Request
 ): Promise<Response> {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown"
-  const limiter = await env.APP_DATABASE.getByName("bitwarden-login-rates")
+  const limiter = vaultRateLimiter(env)
   if (
     !(await limiter.consumeRateLimit(`passkey-options:${ip}`, 30, 60_000))
       .allowed
