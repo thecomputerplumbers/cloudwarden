@@ -13,7 +13,11 @@ import {
   type ItemDraft,
   type VaultItem,
 } from "./crypto/cipher.ts"
-import { DecryptionError, decryptOptional } from "./crypto/enc-string.ts"
+import {
+  DecryptionError,
+  decryptOptional,
+  encryptBytes,
+} from "./crypto/enc-string.ts"
 import {
   decryptSummaries,
   stop as stopDecryptor,
@@ -23,8 +27,10 @@ import {
   hashMasterPassword,
   makeMasterKey,
   normalizeEmail,
+  stretchMasterKey,
   type KdfConfig,
 } from "./crypto/kdf.ts"
+import { keyBytes } from "./crypto/keys.ts"
 
 /**
  * The native vault's state. Keys and decrypted items exist only in this
@@ -166,6 +172,73 @@ async function token() {
 
 /** A current vault session token, for other parts of the vault (Secrets Manager) that call the API. */
 export const sessionToken = () => token()
+
+/** The signed-in account's key derivation settings. */
+export function currentKdf() {
+  if (!secrets) throw new Error("The vault is locked")
+  return secrets.kdf
+}
+
+/** The hash the server checks when an action asks for the master password again. */
+export async function masterPasswordHash(password: string) {
+  return hashMasterPassword(
+    await makeMasterKey(password, state.email!, currentKdf()),
+    password
+  )
+}
+
+/**
+ * Changes the master password, the key derivation settings, or both. The
+ * user key stays the same, so nothing in the vault is re-encrypted; only its
+ * wrapping changes. The server keeps this session and ends every other one.
+ */
+export async function changeMasterPassword(input: {
+  current: string
+  next: string
+  /** Left as it is when undefined. */
+  hint?: string | null
+  kdf?: KdfConfig
+}) {
+  const email = state.email!
+  const kdf = input.kdf ?? currentKdf()
+  const [currentHash, masterKey] = await Promise.all([
+    masterPasswordHash(input.current),
+    makeMasterKey(input.next, email, kdf),
+  ])
+  const nextHash = await hashMasterPassword(masterKey, input.next)
+  const key = await encryptBytes(
+    keyBytes(secrets!.keys.userKey),
+    await stretchMasterKey(masterKey)
+  )
+  const access = await token()
+  if (input.kdf) {
+    const settings = {
+      kdfType: kdf.kdf,
+      iterations: kdf.iterations,
+      memory: kdf.kdf === 1 ? kdf.memory : null,
+      parallelism: kdf.kdf === 1 ? kdf.parallelism : null,
+    }
+    await api.changeKdf(access, {
+      masterPasswordHash: currentHash,
+      masterPasswordHint: input.hint,
+      authenticationData: {
+        kdf: settings,
+        masterPasswordAuthenticationHash: nextHash,
+        salt: email,
+      },
+      unlockData: { kdf: settings, masterKeyWrappedUserKey: key, salt: email },
+    })
+  } else
+    await api.changePassword(access, {
+      masterPasswordHash: currentHash,
+      newMasterPasswordHash: nextHash,
+      masterPasswordHint: input.hint,
+      key,
+    })
+  if (!secrets) return
+  secrets.kdf = kdf
+  persist({ email, kdf, refreshToken: secrets.refreshToken })
+}
 
 /** An organization's key, while the vault is unlocked. Never leaves memory. */
 export function organizationKey(orgId: string) {
