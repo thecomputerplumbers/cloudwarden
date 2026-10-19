@@ -1,4 +1,5 @@
 import { processEmergencyAccess } from "./bitwarden-emergency-access"
+import { handleSecretsManager, isSecretsManagerPath } from "./secrets-manager"
 import { prunePasskeyChallenges } from "./bitwarden-passkey-login"
 import product from "../config/product.json"
 import { observeRequest } from "../lib/diagnostics"
@@ -55,6 +56,9 @@ export default {
             headers: { "Cache-Control": "no-store", "Retry-After": "300" },
           }
         )
+      // Secrets Manager (docs/secrets-manager.md): cloudwarden's own API, with its own auth.
+      if (isSecretsManagerPath(path))
+        return handleSecretsManager(request, env, ctx)
       if (
         path === "/notifications/hub" ||
         path === "/notifications/anonymous-hub"

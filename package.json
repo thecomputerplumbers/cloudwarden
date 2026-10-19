@@ -16,6 +16,7 @@
     "test:worker": "pnpm build && node tests/run-worker-smoke.mjs",
     "test:cli": "node tests/bitwarden-cli-smoke.mjs",
     "test:vault": "pnpm build && node tests/vault-interop.mjs",
+    "test:secrets": "pnpm build && node tests/secrets-manager.mjs",
     "project:init": "node scripts/init-project.mjs",
     "r2:snapshot": "node scripts/r2-snapshot.mjs",
     "r2:restore": "node scripts/r2-restore.mjs",
