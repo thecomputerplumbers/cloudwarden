@@ -37,6 +37,9 @@ const AccountSettings = lazy(() =>
     default: AccountSettings,
   }))
 )
+const Sends = lazy(() =>
+  import("./sends.tsx").then(({ Sends }) => ({ default: Sends }))
+)
 const OrgAdmin = lazy(() =>
   import("./org-admin.tsx").then(({ OrgAdmin }) => ({ default: OrgAdmin }))
 )
@@ -95,9 +98,9 @@ export function Unlocked() {
     kind: ItemKind
   } | null>(null)
   const [pane, setPane] = useState<"nav" | "list" | "detail">("list")
-  const [area, setArea] = useState<"vault" | "secrets" | "admin" | "settings">(
-    "vault"
-  )
+  const [area, setArea] = useState<
+    "vault" | "secrets" | "admin" | "settings" | "sends"
+  >("vault")
   useIdleLock(true)
   // Secrets Manager is for organization owners and admins whose key unwrapped.
   const adminOrgs = state.vaults.filter(
@@ -127,6 +130,12 @@ export function Unlocked() {
         <AccountSettings onExit={() => setArea("vault")} />
       </Suspense>
     )
+  if (area === "sends")
+    return (
+      <Suspense fallback={<VaultLoading message="Opening Send" />}>
+        <Sends onExit={() => setArea("vault")} />
+      </Suspense>
+    )
   if (area === "admin" && adminOrgs.length)
     return (
       <Suspense
@@ -154,6 +163,7 @@ export function Unlocked() {
           filter={filter}
           onFilter={(next) => (setFilter(next), setPane("list"))}
           onSettings={() => setArea("settings")}
+          onSends={() => setArea("sends")}
           {...(adminOrgs.length
             ? {
                 onSecrets: () => setArea("secrets"),

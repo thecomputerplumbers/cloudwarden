@@ -20,6 +20,7 @@ import {
   LockIcon,
   LogOutIcon,
   RefreshCwIcon,
+  SendIcon,
   ServerCogIcon,
   SettingsIcon,
   StarIcon,
@@ -111,12 +112,14 @@ export function Sidebar({
   filter,
   onFilter,
   onSecrets,
+  onSends,
   onAdmin,
   onSettings,
 }: {
   filter: ItemFilter
   onFilter: (filter: ItemFilter) => void
   onSettings: () => void
+  onSends: () => void
   /** Opens Secrets Manager; absent when the account administers no organization. */
   onSecrets?: () => void
   /** Opens organization admin; absent when the account administers no organization. */
@@ -292,6 +295,11 @@ export function Sidebar({
                 (item) => item.deleted && !state.excluded.has(vaultOf(item))
               ).length
             }
+          />
+          <Row
+            onClick={onSends}
+            icon={<SendIcon className="size-4" />}
+            label="Send"
           />
           {onAdmin && (
             <Row

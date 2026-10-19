@@ -3739,6 +3739,8 @@ assert.equal(
     .status,
   200
 )
+// Editing a Send revokes its access tokens; a revoked token is a 401, as an
+// expired one is in Bitwarden, so clients ask for a new one.
 assert.equal(
   (
     await call("/api/sends/access", {
@@ -3746,7 +3748,7 @@ assert.equal(
       headers: { Authorization: `Bearer ${itemAccessToken}` },
     })
   ).status,
-  404
+  401
 )
 assert.equal(
   (
@@ -3850,6 +3852,8 @@ assert.equal(
   ).status,
   200
 )
+// Editing a Send revokes its access tokens; a revoked token is a 401, as an
+// expired one is in Bitwarden, so clients ask for a new one.
 assert.equal(
   (
     await call("/api/sends/access", {
@@ -3857,7 +3861,7 @@ assert.equal(
       headers: { Authorization: `Bearer ${passwordToken}` },
     })
   ).status,
-  404
+  401
 )
 assert.equal(
   (
