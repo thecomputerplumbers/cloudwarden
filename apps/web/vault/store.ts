@@ -27,6 +27,9 @@ import {
 import { PERSONAL_VAULT as PERSONAL } from "./filter.ts"
 export { PERSONAL }
 
+// One collator for every sort: localeCompare with options builds a new one per comparison.
+const byName = new Intl.Collator(undefined, { sensitivity: "base" })
+
 export interface Vault {
   /** `PERSONAL` for the account's own vault, else the organization ID. */
   id: string
@@ -213,8 +216,15 @@ export async function unlock(password: string) {
   if (!saved) return void set({ status: "signed-out" })
   set({ status: "loading", error: null })
   try {
-    const tokens = await api.refresh(saved.refreshToken)
-    const masterKey = await makeMasterKey(password, saved.email, saved.kdf)
+    // The session refresh is a round trip and key derivation is local work: run both at once.
+    const [tokens, masterKey] = await Promise.all([
+      api.refresh(saved.refreshToken).then((fresh) => {
+        // Keep the rotated refresh token even if the password turns out wrong.
+        persist({ ...saved, refreshToken: fresh.refresh_token })
+        return fresh
+      }),
+      makeMasterKey(password, saved.email, saved.kdf),
+    ])
     await open(saved.email, saved.kdf, masterKey, tokens)
   } catch (error) {
     // A MAC failure unwrapping the user key is what a wrong password looks like.
@@ -300,10 +310,10 @@ async function apply(data: api.SyncResponse, keys: AccountKeys) {
     })
   )
   const items = (
-    await Promise.all(data.ciphers.map((raw) => decryptCipher(raw, keys)))
-  ).sort((a, b) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-  )
+    await Promise.all(
+      data.ciphers.map((raw) => decryptCipher(raw, keys, false))
+    )
+  ).sort((a, b) => byName.compare(a.name, b.name))
   set({
     vaults,
     folders: folders.sort((a, b) => a.name.localeCompare(b.name)),
@@ -362,15 +372,32 @@ export function setExcluded(excluded: Set<string>) {
 const replace = (item: VaultItem) => {
   const others = state.items.filter((entry) => entry.id !== item.id)
   set({
-    items: [...others, item].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    items: [...others, item].sort((a, b) => byName.compare(a.name, b.name)),
+  })
+}
+
+/**
+ * An item decrypted in full. The vault opens with summaries; an item's
+ * secrets are decrypted the first time it is opened, then kept in the store.
+ */
+export async function loadItem(item: VaultItem) {
+  if (item.complete) return item
+  if (!secrets) throw new Error("The vault is locked")
+  const full = await decryptCipher(item.raw, secrets.keys)
+  // A sync may have replaced the item meanwhile; only fill in the same revision.
+  set({
+    items: state.items.map((entry) =>
+      entry.id === full.id && entry.raw === item.raw ? full : entry
     ),
   })
+  return full
 }
 
 /** Creates an item, or updates `previous`. Returns the saved item. */
 export async function saveItem(draft: ItemDraft, previous?: VaultItem) {
   if (!secrets) throw new Error("The vault is locked")
+  // Password history compares against the previous password.
+  if (previous) previous = await loadItem(previous)
   const body = await encryptDraft(draft, secrets.keys, previous)
   const raw = previous
     ? await api.updateCipher(await token(), previous.id, body)
@@ -381,6 +408,7 @@ export async function saveItem(draft: ItemDraft, previous?: VaultItem) {
 }
 
 export async function toggleFavorite(item: VaultItem) {
+  item = await loadItem(item)
   return saveItem(
     {
       kind: item.kind === "unknown" ? "note" : item.kind,

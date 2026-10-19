@@ -130,6 +130,13 @@ export interface VaultItem {
   attachments: { id: string; fileName: string; size: number; url: string }[]
   /** Set when the item could not be decrypted; the rest is empty. */
   error: string | null
+  /**
+   * False for a summary: only what the list and search show is decrypted
+   * (name, notes, username, URIs, and each kind's subtitle fields). Passwords,
+   * TOTP secrets, custom fields, the rest of a card, identity, or SSH key, and
+   * attachments stay null or empty until the item is decrypted in full.
+   */
+  complete: boolean
   raw: RawCipher
 }
 
@@ -160,13 +167,27 @@ async function decryptRecord<K extends string>(
 ) {
   if (!record) return null
   const out: Partial<Record<K, string | null>> = {}
-  for (const name of names) out[name] = await decryptOptional(record[name], key)
+  await Promise.all(
+    names.map(async (name) => {
+      out[name] = await decryptOptional(record[name], key)
+    })
+  )
   return out
 }
 
+// What a summary decrypts of each kind: the list's subtitle and search fields.
+const CARD_SUMMARY = ["brand", "number"] as const
+const IDENTITY_SUMMARY = ["firstName", "lastName", "email"] as const
+const SSH_SUMMARY = ["keyFingerprint"] as const
+
+/**
+ * Decrypts an item. A summary (`full` false) decrypts only what the list and
+ * search use, which is most of the work saved when a large vault opens.
+ */
 export async function decryptCipher(
   raw: RawCipher,
-  keys: AccountKeys
+  keys: AccountKeys,
+  full = true
 ): Promise<VaultItem> {
   const base: VaultItem = {
     id: raw.id,
@@ -188,15 +209,18 @@ export async function decryptCipher(
     fields: [],
     attachments: [],
     error: null,
+    complete: full,
     raw,
   }
   try {
     const key = await cipherKey(raw, keys)
+    const secret = (value: string | null | undefined) =>
+      full ? decryptOptional(value, key) : null
     const login = raw.login
       ? {
           username: await decryptOptional(raw.login.username, key),
-          password: await decryptOptional(raw.login.password, key),
-          totp: await decryptOptional(raw.login.totp, key),
+          password: await secret(raw.login.password),
+          totp: await secret(raw.login.totp),
           uris: (
             await Promise.all(
               (raw.login.uris ?? []).map(async (entry) => ({
@@ -212,18 +236,30 @@ export async function decryptCipher(
       name: (await decryptOptional(raw.name, key)) ?? "",
       notes: await decryptOptional(raw.notes, key),
       login,
-      card: await decryptRecord(raw.card, CARD_FIELDS, key),
-      identity: await decryptRecord(raw.identity, IDENTITY_FIELDS, key),
-      sshKey: await decryptRecord(raw.sshKey, SSH_FIELDS, key),
+      card: await decryptRecord(
+        raw.card,
+        full ? CARD_FIELDS : CARD_SUMMARY,
+        key
+      ),
+      identity: await decryptRecord(
+        raw.identity,
+        full ? IDENTITY_FIELDS : IDENTITY_SUMMARY,
+        key
+      ),
+      sshKey: await decryptRecord(
+        raw.sshKey,
+        full ? SSH_FIELDS : SSH_SUMMARY,
+        key
+      ),
       fields: await Promise.all(
-        (raw.fields ?? []).map(async (entry) => ({
+        (full ? (raw.fields ?? []) : []).map(async (entry) => ({
           name: await decryptOptional(entry.name, key),
           value: await decryptOptional(entry.value, key),
           type: entry.type,
         }))
       ),
       attachments: await Promise.all(
-        (raw.attachments ?? []).map(async (entry) => ({
+        (full ? (raw.attachments ?? []) : []).map(async (entry) => ({
           id: entry.id,
           fileName:
             (await decryptOptional(entry.fileName, key)) ?? "attachment",
