@@ -61,6 +61,7 @@ pnpm test:cli    # Optional native Bitwarden CLI check with a disposable account
 pnpm test:vault  # Native vault crypto against the official bw CLI (needs bw)
 pnpm test:secrets # Secrets Manager end to end; set SECRETS_READER_BIN to include the Go reader
 pnpm test:reader  # Go vet and tests for the in-cluster secrets reader
+pnpm test:cli:local # CLI 2026.10.0 against a disposable local HTTPS Worker (requires BW_CLI_PATH)
 pnpm project:init # Configure Cloudflare account and environments
 pnpm run doctor  # Check local setup; also accepts staging or production
 pnpm db:seed     # Repeatable local demo users, organizations and projects

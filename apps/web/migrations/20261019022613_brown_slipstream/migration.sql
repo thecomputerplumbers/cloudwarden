@@ -1,0 +1,1 @@
+ALTER TABLE `vault_collection_member` ADD `manage` integer DEFAULT false NOT NULL;

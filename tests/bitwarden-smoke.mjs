@@ -614,6 +614,11 @@ assert.equal(login.status, 200)
 const tokens = await login.json()
 assert.ok(tokens.access_token)
 assert.ok(tokens.refresh_token)
+assert.equal(tokens.expires_in, 900)
+const tokenTimes = JSON.parse(
+  Buffer.from(tokens.access_token.split(".")[1], "base64url").toString()
+)
+assert.equal(tokenTimes.exp - tokenTimes.nbf, tokens.expires_in)
 assert.equal(
   tokens.AccountKeys.publicKeyEncryptionKeyPair.wrappedPrivateKey,
   "2.encrypted-private-key"
@@ -909,6 +914,38 @@ assert.deepEqual(
 assert.deepEqual(
   (await authorized("/api/sync")).body.domains.equivalentDomains,
   [["example.test", "example.org"]]
+)
+const configuredDomains = await authorized("/api/settings/domains", "PUT", {
+  equivalentDomains: [["example.test", "example.org"]],
+  excludedGlobalEquivalentDomains: [0],
+})
+assert.equal(
+  configuredDomains.body.globalEquivalentDomains.find(
+    (group) => group.type === 0
+  ).excluded,
+  true
+)
+assert.equal(
+  (
+    await authorized("/api/settings/domains?excluded=false")
+  ).body.globalEquivalentDomains.some((group) => group.type === 0),
+  false
+)
+assert.equal(
+  (await authorized("/api/sync")).body.domains.globalEquivalentDomains.some(
+    (group) => group.type === 0
+  ),
+  false
+)
+assert.equal(
+  (await authorized("/api/sync?excludeDomains=true")).body.domains,
+  null
+)
+const currentConfig = await call("/api/config")
+assert.equal(currentConfig.body.version, "2026.10.0")
+assert.equal(
+  currentConfig.body.featureStates["pm-34203-temporary-item-sharing"],
+  true
 )
 // Newer item types keep their type-specific data.
 const licenseItem = await authorized("/api/ciphers", "POST", {
@@ -1556,6 +1593,17 @@ const refreshed = await fetch(`${origin}/identity/connect/token`, {
 })
 assert.equal(refreshed.status, 200)
 const refreshedTokens = await refreshed.json()
+assert.equal(refreshedTokens.expires_in, 900)
+const refreshedTimes = JSON.parse(
+  Buffer.from(
+    refreshedTokens.access_token.split(".")[1],
+    "base64url"
+  ).toString()
+)
+assert.equal(
+  refreshedTimes.exp - refreshedTimes.nbf,
+  refreshedTokens.expires_in
+)
 assert.equal(
   (
     await call("/api/accounts/profile", {
@@ -2701,6 +2749,46 @@ const groupCreated = await authorized(
 )
 assert.equal(groupCreated.status, 200)
 const groupId = groupCreated.body.id
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/groups/${groupId}`, "PUT", {
+      ...groupInput,
+      accessAll: true,
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+      undefined,
+      "GET"
+    )
+  ).body.manage,
+  false
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+      { name: secondCollection.body.name },
+      "PUT"
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await authorized(
+      `/api/organizations/${orgId}/groups/${groupId}`,
+      "PUT",
+      groupInput
+    )
+  ).status,
+  200
+)
+
 const grantedCollection = (
   await authorized(`/api/organizations/${orgId}/collections`, "POST", {
     name: "2.bulk-access-collection",
@@ -2998,9 +3086,53 @@ const groupAttachmentLink = (
   await otherAuthorized(`/api/ciphers/${sharedId}`, undefined, "GET")
 ).body.attachments[0].url
 assert.equal((await fetch(groupAttachmentLink)).status, 200)
+for (const bad of [
+  { manage: true, readOnly: true, hidePasswords: false },
+  { manage: true, readOnly: false, hidePasswords: true },
+]) {
+  assert.equal(
+    (
+      await authorized(`/api/organizations/${orgId}/groups/${groupId}`, "PUT", {
+        ...groupInput,
+        collections: [{ id: secondCollection.body.id, ...bad }],
+      })
+    ).status,
+    400
+  )
+  assert.equal(
+    (
+      await authorized(
+        `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+        "PUT",
+        {
+          name: secondCollection.body.name,
+          users: [{ id: invitee.id, ...bad }],
+        }
+      )
+    ).status,
+    400
+  )
+  assert.equal(
+    (
+      await authorized(
+        `/api/organizations/${orgId}/users/${invitee.id}`,
+        "PUT",
+        { type: 2, collections: [{ id: secondCollection.body.id, ...bad }] }
+      )
+    ).status,
+    400
+  )
+}
 const managedGroup = {
   ...groupInput,
-  collections: [{ ...groupInput.collections[0], manage: true }],
+  collections: [
+    {
+      ...groupInput.collections[0],
+      manage: true,
+      readOnly: false,
+      hidePasswords: false,
+    },
+  ],
 }
 assert.equal(
   (
@@ -3018,7 +3150,7 @@ const managedCipher = await otherAuthorized(
   "GET"
 )
 assert.equal(managedCipher.body.edit, true)
-assert.equal(managedCipher.body.viewPassword, false)
+assert.equal(managedCipher.body.viewPassword, true)
 assert.equal(
   (
     await otherAuthorized(
@@ -3040,6 +3172,76 @@ assert.equal(
   404
 )
 assert.equal((await fetch(groupAttachmentLink)).status, 404)
+// A direct collection manager has authority only over the assigned collection.
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [
+        {
+          id: secondCollection.body.id,
+          readOnly: false,
+          hidePasswords: false,
+          manage: true,
+        },
+      ],
+    })
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+      undefined,
+      "GET"
+    )
+  ).body.manage,
+  true
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/${secondCollection.body.id}`,
+      { name: secondCollection.body.name },
+      "PUT"
+    )
+  ).status,
+  200
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/${grantedCollection}`,
+      { name: "2.must-not-change" },
+      "PUT"
+    )
+  ).status,
+  404
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/organizations/${orgId}/collections/bulk-access`,
+      {
+        collectionIds: [grantedCollection],
+        users: [{ id: invitee.id, manage: true }],
+        groups: [],
+      }
+    )
+  ).status,
+  403
+)
+assert.equal(
+  (
+    await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
+      type: 2,
+      collections: [],
+    })
+  ).status,
+  200
+)
+
 assert.equal(
   (
     await authorized(`/api/organizations/${orgId}/users/${invitee.id}`, "PUT", {
@@ -3348,6 +3550,226 @@ assert.equal(
   200
 )
 
+// Current clients share an encrypted snapshot, never a server-decrypted cipher.
+const itemSource = await otherAuthorized("/api/ciphers", {
+  type: 1,
+  name: "2.item-send-source",
+})
+assert.equal(itemSource.status, 200)
+const recipient = `send-recipient-${crypto.randomUUID()}@example.test`
+const itemSendBody = {
+  ...sendBody,
+  type: 2,
+  authType: 0,
+  emails: ` ${recipient.toUpperCase()} `,
+  notes: "2.owner-only-notes",
+  maxAccessCount: 2,
+  data: {
+    encryptionVersion: 1,
+    data: "2.encrypted-item-snapshot",
+    metadata: { itemId: itemSource.body.id },
+  },
+}
+for (const invalid of [
+  { ...itemSendBody, authType: 2 },
+  { ...itemSendBody, emails: "" },
+  { ...itemSendBody, data: { encryptionVersion: 1, data: "2.data" } },
+  { ...itemSendBody, data: { ...itemSendBody.data, encryptionVersion: 2 } },
+  {
+    ...itemSendBody,
+    data: { ...itemSendBody.data, metadata: { itemId: crypto.randomUUID() } },
+  },
+  {
+    ...itemSendBody,
+    data: { ...itemSendBody.data, metadata: { itemId: sharedId } },
+  },
+])
+  assert.equal((await otherAuthorized("/api/sends", invalid)).status, 400)
+for (const restrictedType of [1, 5]) {
+  const source = await otherAuthorized("/api/ciphers", {
+    type: restrictedType,
+    name: "2.restricted-send-source",
+  })
+  assert.equal(source.status, 200)
+  if (restrictedType === 1)
+    assert.equal(
+      (
+        await otherAuthorized(
+          `/api/ciphers/${source.body.id}/archive`,
+          undefined,
+          "PUT"
+        )
+      ).status,
+      200
+    )
+  assert.equal(
+    (
+      await otherAuthorized("/api/sends", {
+        ...itemSendBody,
+        data: { ...itemSendBody.data, metadata: { itemId: source.body.id } },
+      })
+    ).status,
+    400
+  )
+  await otherAuthorized(`/api/ciphers/${source.body.id}`, undefined, "DELETE")
+}
+const itemSend = await otherAuthorized("/api/sends", itemSendBody)
+assert.equal(itemSend.status, 200)
+assert.equal(itemSend.body.type, 2)
+assert.equal(itemSend.body.emails, recipient)
+assert.deepEqual(itemSend.body.data, itemSendBody.data)
+assert.equal(
+  (await otherAuthorized("/api/sync", undefined, "GET")).body.sends.find(
+    (entry) => entry.id === itemSend.body.id
+  ).data.data,
+  itemSendBody.data.data
+)
+const emailSendAccess = (accessId, email, otp) =>
+  fetch(`${origin}/identity/connect/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "CF-Connecting-IP": "203.0.113.74",
+    },
+    body: new URLSearchParams({
+      grant_type: "send_access",
+      client_id: "send",
+      send_id: accessId,
+      ...(email ? { email } : {}),
+      ...(otp ? { otp } : {}),
+    }),
+  })
+assert.equal(
+  (await (await emailSendAccess(itemSend.body.accessId)).json())
+    .send_access_error_type,
+  "email_required"
+)
+assert.equal(
+  (
+    await (
+      await emailSendAccess(itemSend.body.accessId, "unlisted@example.test")
+    ).json()
+  ).send_access_error_type,
+  "email_and_otp_required"
+)
+assert.equal(
+  (await emailSendAccess(itemSend.body.accessId, recipient.toUpperCase()))
+    .status,
+  400
+)
+const otpMail = await invitationMail(
+  recipient,
+  "Your Cloudwarden Send verification code"
+)
+const sendOtp = /verification code is (\d{6})/.exec(otpMail)?.[1]
+assert.ok(sendOtp)
+const invalidOtp = sendOtp === "000000" ? "111111" : "000000"
+assert.equal(
+  (await emailSendAccess(itemSend.body.accessId, recipient, invalidOtp)).status,
+  400
+)
+assert.equal(
+  (
+    await emailSendAccess(
+      itemSend.body.accessId,
+      "unlisted@example.test",
+      sendOtp
+    )
+  ).status,
+  400
+)
+const otpRace = await Promise.all([
+  emailSendAccess(itemSend.body.accessId, recipient, sendOtp),
+  emailSendAccess(itemSend.body.accessId, recipient, sendOtp),
+])
+assert.deepEqual(otpRace.map((entry) => entry.status).sort(), [200, 400])
+const itemAccessToken = (
+  await otpRace.find((entry) => entry.status === 200).json()
+).access_token
+const itemAccess = await call("/api/sends/access", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${itemAccessToken}` },
+})
+assert.equal(itemAccess.status, 200)
+assert.equal(itemAccess.body.id, itemSend.body.accessId)
+assert.deepEqual(itemAccess.body.data, itemSendBody.data)
+for (const privateField of ["key", "notes", "emails"])
+  assert.equal(itemAccess.body[privateField], undefined)
+assert.equal(
+  (await otherAuthorized(`/api/sends/${itemSend.body.id}`, undefined, "GET"))
+    .body.accessCount,
+  1
+)
+assert.equal(
+  (await emailSendAccess(itemSend.body.accessId, recipient, sendOtp)).status,
+  400
+)
+// Keeping an existing snapshot editable is intentional even after its source is deleted.
+await otherAuthorized(`/api/ciphers/${itemSource.body.id}`, undefined, "DELETE")
+assert.equal(
+  (await otherAuthorized(`/api/sends/${itemSend.body.id}`, itemSendBody, "PUT"))
+    .status,
+  200
+)
+assert.equal(
+  (
+    await call("/api/sends/access", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${itemAccessToken}` },
+    })
+  ).status,
+  404
+)
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/sends/${itemSend.body.id}/remove-auth`,
+      undefined,
+      "PUT"
+    )
+  ).body.authType,
+  2
+)
+assert.equal((await sendAccessRequest(itemSend.body.accessId)).status, 200)
+await otherAuthorized(`/api/sends/${itemSend.body.id}`, undefined, "DELETE")
+
+// Email verification is also supported for text Sends; failed attempts cannot bypass it.
+const lockoutSend = await otherAuthorized("/api/sends", {
+  ...sendBody,
+  authType: 0,
+  emails: recipient,
+})
+assert.equal(lockoutSend.status, 200)
+await emailSendAccess(lockoutSend.body.accessId, recipient)
+const lockoutMail = await invitationMail(
+  recipient,
+  "Your Cloudwarden Send verification code"
+)
+const lockoutCode = /verification code is (\d{6})/.exec(lockoutMail)?.[1]
+assert.ok(lockoutCode)
+for (let i = 0; i < 5; i++)
+  assert.equal(
+    (
+      await emailSendAccess(
+        lockoutSend.body.accessId,
+        recipient,
+        lockoutCode === "000000" ? "111111" : "000000"
+      )
+    ).status,
+    400
+  )
+assert.equal(
+  (await emailSendAccess(lockoutSend.body.accessId, recipient, lockoutCode))
+    .status,
+  400
+)
+assert.equal(
+  (await otherAuthorized(`/api/sends/${lockoutSend.body.id}`, undefined, "GET"))
+    .body.accessCount,
+  0
+)
+await otherAuthorized(`/api/sends/${lockoutSend.body.id}`, undefined, "DELETE")
+
 const passwordSend = await otherAuthorized("/api/sends", {
   ...sendBody,
   password: "recipient-secret",
@@ -3438,6 +3860,16 @@ assert.equal(fileSend.status, 200)
 assert.equal(fileSend.body.fileUploadType, 0)
 assert.equal(fileSend.body.sendResponse.file.size, "4")
 const fileSendId = fileSend.body.sendResponse.id
+assert.equal(
+  (
+    await otherAuthorized(
+      `/api/sends/${fileSendId}/file/${fileSend.body.sendResponse.file.id}`,
+      undefined,
+      "GET"
+    )
+  ).status,
+  200
+)
 const fileId = fileSend.body.sendResponse.file.id
 assert.equal(
   (await sendAccessRequest(fileSend.body.sendResponse.accessId)).status,

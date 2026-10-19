@@ -50,6 +50,8 @@ try {
     "--var",
     "SIGNUPS_ALLOWED:true",
     "--var",
+    "ACCESS_TOKEN_LIFETIME_SECONDS:900",
+    "--var",
     "SIGNUPS_VERIFY:true",
     "--var",
     "ORG_INVITATION_EMAILS_ENABLED:true",

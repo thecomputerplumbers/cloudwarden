@@ -15,6 +15,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:worker": "pnpm build && node tests/run-worker-smoke.mjs",
     "test:cli": "node tests/bitwarden-cli-smoke.mjs",
+    "test:cli:local": "pnpm build && node tests/run-bitwarden-cli-local.mjs",
     "test:vault": "pnpm build && node tests/vault-interop.mjs",
     "test:secrets": "pnpm build && node tests/secrets-manager.mjs",
     "test:reader": "cd services/secrets-reader && go vet ./... && go test -race ./...",

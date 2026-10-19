@@ -261,10 +261,9 @@ by IP and email address. Hints are stored as plaintext in D1, so they must
 never contain the master password.
 
 This is an initial protocol implementation. Current clients may need routes or
-response fields beyond the ones listed above. Other
-two-factor providers, organization account recovery and emergency access, and
-complete notification coverage still need
-implementation. A browser flow has been tested, but mobile and desktop clients
+response fields beyond the ones listed above. Client-specific features beyond the implemented routes still need explicit
+compatibility checks. See the 2026.10 compatibility section below for the
+current verified surface and boundaries. A browser flow has been tested, but mobile and desktop clients
 have not been tested, so this cannot yet replace Vaultwarden.
 
 The local smoke test runs against a real Wrangler Worker with disposable D1
@@ -312,6 +311,70 @@ upgrades, so the run did not verify realtime notifications or device approval.
 The upstream bundle also links
 to `/css/vaultwarden.css` without shipping that stylesheet, so the build writes
 one that hides the duplicate SSO email input.
+
+## Bitwarden 2026.10 compatibility
+
+The API advertises `2026.10.0` as its client compatibility version. Cloudwarden
+is an independent implementation, not a deployment of the upstream Bitwarden
+server. The version does not advertise every product or enterprise capability.
+
+This update follows the [upstream 2026.10.0 release](https://github.com/bitwarden/server/releases/tag/v2026.10.0)
+and its request/response models:
+
+| Capability                         | Implementation and verification                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Temporary item sharing             | Type-2 Sends preserve encrypted `data`, encryption version 1, and `metadata.itemId`. New or changed source IDs must identify a visible, editable cipher with view-password access, outside Trash/archive and not an SSH key. Keeping an existing snapshot is allowed after its source disappears.                                                                                                             |
+| Email-verified Sends               | Text, file, and item Sends support `authType: 0` and a normalized comma-separated recipient list. `send_access` accepts `email`/`otp`, returns upstream `email_required`/`email_and_otp_required` errors, and sends simulated mail in local tests. OTP proofs expire after ten minutes, allow five attempts, and are consumed once inside the owner's Durable Object. Failed mail delivery cancels the proof. |
+| Send authentication administration | Explicit password/none/email authentication transitions are honored. Password edits do not hash an already stored password again. Both `remove-password` and `remove-auth` remove all authentication, and changing a Send revokes existing access/download grants and OTP proofs.                                                                                                                             |
+| Upload renewal                     | An owner can request the existing uncompleted file Send upload URL with `GET /api/sends/{id}/file/{fileId}`.                                                                                                                                                                                                                                                                                                  |
+| Access-token lifetime              | The server setting below controls interactive client JWT claims, stored expiry, and `expires_in`, including refresh.                                                                                                                                                                                                                                                                                          |
+| Collection access                  | Direct and group collection-management grants are retained. Management cannot combine with read-only or hidden-password restrictions. A collection manager can manage only assigned collections; access-all vault permissions alone do not grant collection management. The generated D1 migration adds `vault_collection_member.manage` with a false default.                                                |
+| Equivalent domains                 | Settings and sync use upstream's 22 current global groups and stable IDs. User exclusions are marked in settings and filtered from sync. `excludeDomains=true` omits domains from sync.                                                                                                                                                                                                                       |
+| Existing Password Manager flows    | Worker regressions cover login, account keys, personal/shared ciphers, attachments, folders, Sends, two-factor authentication, recovery, deletion, and isolation.                                                                                                                                                                                                                                             |
+
+The feature state `pm-34203-temporary-item-sharing` is enabled because its
+server-side checks and email access flow are implemented. Unsupported flags,
+including forced v2 encryption and the new emergency-access SDK API, remain
+disabled. The existing emergency-access API remains available.
+
+This update does not add PAM, Secrets Manager, Access Intelligence reports,
+upstream subscription/billing workflows, Teams/Slack integrations, an inbound
+SCIM provisioning server or its discovery endpoints, or legacy U2F credential
+migration. Organization policies and event-log persistence also remain outside
+the implemented surface. These are not advertised as supported. Existing
+SCIM-style directory **pull** synchronization is a separate feature.
+
+`ACCESS_TOKEN_LIFETIME_SECONDS` is an optional server environment variable.
+Set it in the selected environment's Wrangler `vars`, as a positive integer
+number of seconds. Interactive web/browser/desktop/mobile/CLI sessions default
+to 3,600 seconds; directory-connector sessions retain their 86,400-second
+default and personal API-key sessions retain 3,600 seconds. The override does
+not affect public Send tokens. Upstream recommends at least 600 seconds because
+clients refresh early. A changed setting affects new access tokens and refreshes;
+already issued tokens retain their recorded expiry.
+
+Bitwarden CLI **2026.10.0** passed real encrypted login, sync, item editing,
+folder assignment, attachment upload and byte-for-byte download, text Send
+creation/recipient decryption, Trash, restore, and permanent deletion against a
+disposable local HTTPS Worker. The test uses real encrypted account keys and a
+trusted local test certificate. It creates no remote accounts or real mail.
+Repeat it with an externally installed CLI and OpenSSL available:
+
+```sh
+BW_CLI_PATH=/path/to/@bitwarden/cli/build/bw.js pnpm test:cli:local
+```
+
+The runner checks version 2026.10.0 by default; set `BW_CLI_VERSION` when
+intentionally testing another installed release. All account data, TLS keys,
+D1/DO/R2 state, and CLI profiles are disposable. On failure it retains local
+Worker diagnostics for investigation.
+
+The pinned Vaultwarden web vault remains **2026.7.0**, the latest published
+`bw_web_builds` release checked during this update. No unreleased archive is
+substituted. Item-Send GUI support in that older bundle, and 2026.10 mobile and
+desktop GUI flows, have not been verified; the new item-sharing API itself is
+covered by Worker tests. Native-client and HTTP tests are evidence for their
+specific flows, not a claim of complete parity with every upstream product.
 
 ## Account keys, settings, and recovery
 

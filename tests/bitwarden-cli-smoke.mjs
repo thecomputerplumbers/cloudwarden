@@ -28,12 +28,14 @@ const binary = resolve(cliPath)
 let session = ""
 let itemId = ""
 let folderId = ""
+let sendId = ""
 
 function run(args) {
   const result = spawnSync(process.execPath, [binary, ...args], {
     env: environment,
     encoding: "utf8",
     maxBuffer: 5_000_000,
+    timeout: 120_000,
   })
   if (result.status !== 0)
     throw new Error(`Bitwarden CLI ${args[0]} failed (exit ${result.status})`)
@@ -105,6 +107,17 @@ try {
   ])
   assert.equal(readFileSync(destination, "utf8"), bytes)
 
+  const sendText = `Cloudwarden native Send ${crypto.randomUUID()}`
+  const nativeSend = JSON.parse(
+    withSession(["send", sendText, "--fullObject", "--name", "Native CLI Send"])
+  )
+  sendId = nativeSend.id
+  assert.ok(sendId)
+  assert.ok(nativeSend.accessUrl)
+  assert.ok(run(["send", "receive", nativeSend.accessUrl]).includes(sendText))
+  withSession(["send", "delete", sendId])
+  sendId = ""
+
   withSession(["delete", "item", item.id])
   withSession(["restore", "item", item.id])
   withSession(["delete", "item", item.id, "--permanent"])
@@ -119,10 +132,17 @@ try {
     false
   )
   console.log(
-    "Bitwarden CLI login, sync, item, attachment, Trash, and deletion passed"
+    "Bitwarden CLI login, sync, item, attachment, Send create/receive, Trash, and deletion passed"
   )
 } finally {
   if (session) {
+    if (sendId) {
+      try {
+        run(["send", "delete", sendId, "--session", session])
+      } catch {
+        console.error("Could not remove the disposable CLI Send")
+      }
+    }
     if (itemId) {
       try {
         run(["delete", "item", itemId, "--permanent", "--session", session])

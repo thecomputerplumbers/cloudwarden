@@ -1,3 +1,6 @@
+import { domainsResponse } from "./equivalent-domains"
+import { validCollectionAccess } from "./collection-access"
+import { newSendOtp, sendOtpHash } from "./send-otp"
 import { vaultRateLimiter } from "./vault-rate-limit"
 import { verifyAttachmentToken } from "./attachment-token"
 import { createMailer } from "@workspace/email"
@@ -414,12 +417,18 @@ function collectionGrantsField(body: Body, name: string) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null
     const id = stringField(item as Body, "id")
     if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return null
-    grants.push({
+    for (const flag of ["readOnly", "hidePasswords", "manage"]) {
+      const raw = field(item as Body, flag)
+      if (raw != null && typeof raw !== "boolean") return null
+    }
+    const grant = {
       id,
       readOnly: field(item as Body, "readOnly") === true,
       hidePasswords: field(item as Body, "hidePasswords") === true,
       manage: field(item as Body, "manage") === true,
-    })
+    }
+    if (!validCollectionAccess(grant)) return null
+    grants.push(grant)
   }
   return grants
 }
@@ -553,24 +562,6 @@ async function verifySecondFactor(
     return recovered
   }
   return false
-}
-
-function storedList<T>(value: string | null): T[] {
-  if (!value) return []
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return Array.isArray(parsed) ? (parsed as T[]) : []
-  } catch {
-    return []
-  }
-}
-
-function domainsResponse(user: VaultUser) {
-  return {
-    equivalentDomains: storedList<string[]>(user.equivalentDomains),
-    globalEquivalentDomains: [],
-    object: "domains",
-  }
 }
 
 function masterPasswordUnlockResponse(user: VaultUser) {
@@ -1090,11 +1081,47 @@ export function isBitwardenPath(path: string) {
   )
 }
 
+async function validItemSend(
+  env: CloudflareEnv,
+  vault: VaultStub,
+  userId: string,
+  payload: string,
+  previousPayload?: string
+) {
+  const data = JSON.parse(payload) as {
+    type: number
+    data?: { metadata?: { itemId?: string } }
+  }
+  if (data.type !== 2) return true
+  const id = data.data?.metadata?.itemId
+  if (!id) return false
+  const previous = previousPayload
+    ? (JSON.parse(previousPayload) as typeof data)
+    : null
+  if (previous?.type === 2 && previous.data?.metadata?.itemId === id)
+    return true
+  const locator = await getOrgCipherLocator(env, id)
+  if (!locator) return vault.canShareVaultCipher(id, userId)
+  const member = await getVaultMembership(env, locator.orgId, userId)
+  const view =
+    member &&
+    (await orgCipherView(env, locator.orgId, member, locator.collectionIds))
+  return (
+    !!view?.edit &&
+    !!view.viewPassword &&
+    (await env.APP_DATABASE.getByName(
+      `org:${locator.orgId}`
+    ).canShareVaultCipher(id, userId))
+  )
+}
+
 async function issuePublicSendAccess(
   env: CloudflareEnv,
   request: Request,
   accessId: string,
-  password: string | null
+  password: string | null,
+  email?: string | null,
+  otp?: string | null
 ) {
   const id = sendIdFromAccessId(accessId)
   if (!id) return { error: "unavailable" as const }
@@ -1107,11 +1134,65 @@ async function issuePublicSendAccess(
   if (!(await findVaultUserById(env, locator.userId)))
     return { error: "unavailable" as const }
   const vault = await env.APP_DATABASE.getByName(`vault:${locator.userId}`)
-  const salt = await vault.getVaultSendPasswordSalt(id)
+  const auth = await vault.getVaultSendAuthentication(id)
+  if (!auth) return { error: "unavailable" as const }
+  const normalizedEmail = email?.trim().toLowerCase()
+  if (auth.authType === 0) {
+    if (!normalizedEmail) return { error: "email_required" as const }
+    if (
+      normalizedEmail.length > 254 ||
+      !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(normalizedEmail)
+    )
+      return { error: "email_and_otp_required" as const }
+    if (!otp) {
+      const code = newSendOtp()
+      const hash = await sendOtpHash(
+        env.BETTER_AUTH_SECRET ?? "",
+        id,
+        normalizedEmail,
+        code
+      )
+      if (
+        env.EMAIL_FROM &&
+        (await vault.prepareVaultSendOtp(id, normalizedEmail, hash))
+      ) {
+        try {
+          await createMailer(
+            env.EMAIL,
+            env.EMAIL_FROM
+          )({
+            to: normalizedEmail,
+            subject: "Your Cloudwarden Send verification code",
+            message: `Your Cloudwarden Send verification code is ${code}. It expires in 10 minutes.`,
+            url: env.APP_URL ?? "https://localhost",
+            label: "Open Cloudwarden",
+          })
+        } catch {
+          await vault.cancelVaultSendOtp(id, normalizedEmail, hash)
+        }
+      }
+      return { error: "email_and_otp_required" as const }
+    }
+  }
   const passwordHash =
-    password && salt ? await hashSendPassword(password, salt) : null
+    password && auth.salt ? await hashSendPassword(password, auth.salt) : null
   const access = await newSendAccessToken(id)
-  const result = await vault.issueVaultSendAccess(id, passwordHash, access.hash)
+  const result = await vault.issueVaultSendAccess(
+    id,
+    passwordHash,
+    access.hash,
+    auth.authType === 0
+      ? {
+          email: normalizedEmail!,
+          hash: await sendOtpHash(
+            env.BETTER_AUTH_SECRET ?? "",
+            id,
+            normalizedEmail!,
+            otp!
+          ),
+        }
+      : undefined
+  )
   return result === "ok"
     ? { token: access.token, userId: locator.userId }
     : { error: result }
@@ -1373,7 +1454,7 @@ export async function handleBitwarden(
 
   if (path === "/api/config" && method === "GET") {
     return json({
-      version: "2026.2.0",
+      version: "2026.10.0",
       server: { name: "Cloudwarden" },
       settings: { disableUserRegistration: !registrationsAllowed(env) },
       environment: {
@@ -1385,7 +1466,7 @@ export async function handleBitwarden(
         cloudRegion: null,
       },
       push: { pushTechnology: 0, vapidPublicKey: null },
-      featureStates: {},
+      featureStates: { "pm-34203-temporary-item-sharing": true },
       gitHash: (env as CloudflareEnv & { BUILD_ID?: string }).BUILD_ID ?? null,
       communication: null,
       object: "config",
@@ -1519,7 +1600,7 @@ export async function handleBitwarden(
   if (path === "/api/alive" && method === "GET") return json(true)
   if (path === "/api/now" && method === "GET")
     return json(new Date().toISOString())
-  if (path === "/api/version" && method === "GET") return json("2026.2.0")
+  if (path === "/api/version" && method === "GET") return json("2026.10.0")
   // The web vault loads plans before it will show the organization form.
   if (path === "/api/plans" && method === "GET")
     return json(
@@ -2135,25 +2216,35 @@ export async function handleBitwarden(
         env,
         request,
         accessId,
-        stringField(body, "password_hash_b64") ?? null
+        stringField(body, "password_hash_b64") ?? null,
+        stringField(body, "email"),
+        stringField(body, "otp")
       )
       if ("error" in result) {
         if (result.error === "limited")
           return failure("Too many Send attempts", 429)
+        const emailRequired =
+          result.error === "email_required" ||
+          result.error === "email_and_otp_required"
         const required = result.error === "password_required"
         return json(
           {
-            error: required ? "invalid_request" : "invalid_grant",
-            error_description: required
-              ? "Password required"
-              : "Send is unavailable",
-            send_access_error_type: required
-              ? "password_hash_b64_required"
-              : result.error === "password_invalid"
-                ? "password_hash_b64_invalid"
-                : "send_id_invalid",
+            error:
+              required || emailRequired ? "invalid_request" : "invalid_grant",
+            error_description: emailRequired
+              ? "Email and verification code are required"
+              : required
+                ? "Password required"
+                : "Send is unavailable",
+            send_access_error_type: emailRequired
+              ? result.error
+              : required
+                ? "password_hash_b64_required"
+                : result.error === "password_invalid"
+                  ? "password_hash_b64_invalid"
+                  : "send_id_invalid",
           },
-          required ? 400 : 404
+          required || emailRequired ? 400 : 404
         )
       }
       return json({
@@ -3393,7 +3484,9 @@ export async function handleBitwarden(
     )
   }
   if (path === "/api/settings/domains" && method === "GET")
-    return json(domainsResponse(user))
+    return json(
+      domainsResponse(user, url.searchParams.get("excluded") !== "false")
+    )
   if (
     path === "/api/settings/domains" &&
     (method === "PUT" || method === "POST")
@@ -3673,12 +3766,15 @@ export async function handleBitwarden(
     if (!membership) return failure("Organization not found", 404)
     if (collectionAccessMatch[2] === "bulk-access") {
       if (method !== "POST") return failure("Not found", 404)
-      if (membership.role > 1)
-        return failure("Collection management is forbidden", 403)
       const body = await bodyOf(request)
       const collectionIds = body && collectionIdsField(body)
       const users = body && collectionGrantsField(body, "users")
       const groups = body && collectionGrantsField(body, "groups")
+      if (membership.role > 1 && collectionIds) {
+        const rights = await listVaultCollectionRights(env, orgId, membership)
+        if (collectionIds.some((id) => !rights.get(id)?.manage))
+          return failure("Collection management is forbidden", 403)
+      }
       return collectionIds &&
         users &&
         groups &&
@@ -3689,7 +3785,9 @@ export async function handleBitwarden(
     if (method !== "GET") return failure("Not found", 404)
     const rights = await listVaultCollectionRights(env, orgId, membership)
     const access =
-      membership.role <= 1 ? await listCollectionAccess(env, orgId) : null
+      membership.role <= 1 || [...rights.values()].some((grant) => grant.manage)
+        ? await listCollectionAccess(env, orgId)
+        : null
     const details = (await listVaultCollections(env, orgId, membership)).map(
       (collection) => ({
         ...collectionResponse(
@@ -3699,8 +3797,12 @@ export async function handleBitwarden(
         ),
         assigned: true,
         unmanaged: false,
-        users: access?.get(collection.id)?.users ?? [],
-        groups: access?.get(collection.id)?.groups ?? [],
+        users: rights.get(collection.id)?.manage
+          ? (access?.get(collection.id)?.users ?? [])
+          : [],
+        groups: rights.get(collection.id)?.manage
+          ? (access?.get(collection.id)?.groups ?? [])
+          : [],
         object: "collectionAccessDetails",
       })
     )
@@ -3860,21 +3962,9 @@ export async function handleBitwarden(
       const emails = body && field(body, "emails")
       const role = body && integerField(body, "type")
       const accessAll = !!body && field(body, "accessAll") === true
-      const collectionData = body && field(body, "collections")
-      const invitedCollections = Array.isArray(collectionData)
-        ? collectionData.map((item) => {
-            const id =
-              item && typeof item === "object"
-                ? stringField(item as Body, "id")
-                : undefined
-            return {
-              id,
-              readOnly: !!id && field(item as Body, "readOnly") === true,
-              hidePasswords:
-                !!id && field(item as Body, "hidePasswords") === true,
-            }
-          })
-        : []
+      const invitedCollections =
+        body && collectionGrantsField(body, "collections")
+      if (!invitedCollections) return failure("Invalid invitation collections")
       const collectionIds = invitedCollections.map((item) => item.id)
       const invitedGroups = (body && field(body, "groups")) ?? []
       if (
@@ -4045,20 +4135,8 @@ export async function handleBitwarden(
             )))
       )
         return failure("Invalid member settings")
-      const collections = rawCollections.map((item) => {
-        if (!item || typeof item !== "object") return null
-        const entry = item as Body
-        const id = stringField(entry, "id")
-        return id && /^[0-9a-f-]{36}$/.test(id)
-          ? {
-              id,
-              readOnly: field(entry, "readOnly") === true,
-              hidePasswords: field(entry, "hidePasswords") === true,
-            }
-          : null
-      })
-      if (collections.some((entry) => !entry))
-        return failure("Invalid member collections")
+      const collections = body && collectionGrantsField(body, "collections")
+      if (!collections) return failure("Invalid member collections")
       const groupIds = groups as string[] | undefined
       const availableGroups = new Set(
         (await listVaultGroups(env, orgId)).map((group) => group.id)
@@ -4096,6 +4174,7 @@ export async function handleBitwarden(
             id: string
             readOnly: boolean
             hidePasswords: boolean
+            manage: boolean
           }[]
         ))
       )
@@ -4207,7 +4286,8 @@ export async function handleBitwarden(
           /^[0-9a-f-]{36}$/i.test(id) &&
           typeof readOnly === "boolean" &&
           typeof hidePasswords === "boolean" &&
-          typeof manage === "boolean"
+          typeof manage === "boolean" &&
+          validCollectionAccess({ manage, readOnly, hidePasswords })
           ? { id, readOnly, hidePasswords, manage }
           : null
       })
@@ -4328,7 +4408,7 @@ export async function handleBitwarden(
       if (!rights) return failure("Collection not found", 404)
       if (method === "GET")
         return json(collectionResponse(collection, membership, rights))
-      if (membership.role !== 0 && membership.role !== 1)
+      if (membership.role > 1 && !rights.manage)
         return failure("Collection management is forbidden", 403)
       if (method === "PUT" || method === "POST") {
         const body = await bodyOf(request)
@@ -4392,9 +4472,13 @@ export async function handleBitwarden(
     const fileSend = path === "/api/sends/file/v2"
     if (
       !input ||
-      (JSON.parse(input.payload) as Body).type !== (fileSend ? 1 : 0)
+      (fileSend
+        ? (JSON.parse(input.payload) as Body).type !== 1
+        : (JSON.parse(input.payload) as Body).type === 1)
     )
       return failure("Invalid Send")
+    if (!(await validItemSend(env, vault, user.id, input.payload)))
+      return failure("Item not found", 400)
     const id = crypto.randomUUID()
     const password = input.password
       ? await (async () => {
@@ -4424,6 +4508,20 @@ export async function handleBitwarden(
   }
   const sendUpload =
     /^\/api\/sends\/([0-9a-f-]{36})\/file\/([0-9a-f]{64})$/.exec(path)
+  if (sendUpload && method === "GET") {
+    const send = await vault.getVaultSend(sendUpload[1]!)
+    const file = send
+      ? (JSON.parse(send.payload) as { file?: { id?: string } }).file
+      : null
+    if (!send || send.uploaded || !file || file.id !== sendUpload[2])
+      return failure("Send file not found", 404)
+    return json({
+      fileUploadType: 0,
+      object: "send-fileUpload",
+      url: `/sends/${send.id}/file/${file.id}`,
+      sendResponse: sendResponse(send),
+    })
+  }
   if (sendUpload && method === "POST") {
     const id = sendUpload[1]!
     const fileId = sendUpload[2]!
@@ -4456,12 +4554,14 @@ export async function handleBitwarden(
     return new Response(null, { status: 204 })
   }
   const sendMatch =
-    /^\/api\/sends\/([0-9a-f-]{36})(?:\/(remove-password))?$/.exec(path)
+    /^\/api\/sends\/([0-9a-f-]{36})(?:\/(remove-password|remove-auth))?$/.exec(
+      path
+    )
   if (sendMatch) {
     const id = sendMatch[1]!
     const existing = await vault.getVaultSend(id)
     if (!existing) return failure("Send not found", 404)
-    if (sendMatch[2] === "remove-password" && method === "PUT") {
+    if (sendMatch[2] && method === "PUT") {
       const send = await vault.removeVaultSendPassword(id)
       return json(sendResponse(send!))
     }
@@ -4480,12 +4580,28 @@ export async function handleBitwarden(
       const body = await bodyOf(request)
       const input = body && parseSend(body, existing)
       if (!input) return failure("Invalid Send")
-      const password = input.password
-        ? await (async () => {
-            const salt = newSendPasswordSalt()
-            return { salt, hash: await hashSendPassword(input.password!, salt) }
-          })()
-        : undefined
+      if (
+        !(await validItemSend(
+          env,
+          vault,
+          user.id,
+          input.payload,
+          existing.payload
+        ))
+      )
+        return failure("Item not found", 400)
+      const password =
+        input.password === null
+          ? null
+          : input.password
+            ? await (async () => {
+                const salt = newSendPasswordSalt()
+                return {
+                  salt,
+                  hash: await hashSendPassword(input.password!, salt),
+                }
+              })()
+            : undefined
       const send = await vault.putVaultSend(id, { ...input, password })
       return json(sendResponse(send))
     }
@@ -4566,7 +4682,9 @@ export async function handleBitwarden(
         ...own.ciphers,
         ...sharedCipherJson(shared.ciphers, own.preferences),
       ].join(",")}],"domains":${JSON.stringify(
-        domainsResponse(user)
+        url.searchParams.get("excludeDomains")?.toLowerCase() === "true"
+          ? null
+          : domainsResponse(user, false)
       )},"sends":${JSON.stringify(own.sends.map(sendResponse))},"userDecryption":${JSON.stringify(
         {
           masterPasswordUnlock: masterPasswordUnlockResponse(user),

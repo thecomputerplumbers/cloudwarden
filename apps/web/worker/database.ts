@@ -1,6 +1,6 @@
 import { issueAttachmentToken, verifyAttachmentToken } from "./attachment-token"
 import { DurableObject } from "cloudflare:workers"
-import { and, eq, like, lt } from "drizzle-orm"
+import { and, eq, gte, like, lt } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/durable-sqlite"
 import { migrate } from "drizzle-orm/durable-sqlite/migrator"
 
@@ -549,6 +549,14 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       tx.delete(schema.vaultAttachment).run()
       tx.delete(schema.vaultSendDownloadToken).run()
       tx.delete(schema.vaultSendToken).run()
+      tx.delete(schema.setting)
+        .where(
+          and(
+            gte(schema.setting.key, "vault:send-otp:"),
+            lt(schema.setting.key, "vault:send-otp;")
+          )
+        )
+        .run()
       tx.delete(schema.vaultSend).run()
       tx.delete(schema.vaultCipherPreference).run()
       tx.delete(schema.vaultCipherArchive).run()
@@ -804,14 +812,135 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     )
   }
 
-  async getVaultSendPasswordSalt(id: string) {
+  async getVaultSendAuthentication(id: string) {
     this.assertVaultActive()
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    if (
+      !send ||
+      !send.uploaded ||
+      !this.vaultSendAccessible(send) ||
+      (send.maxAccessCount !== null && send.accessCount >= send.maxAccessCount)
+    )
+      return null
+    const data = JSON.parse(send.payload) as { authType?: number }
+    return {
+      authType: data.authType === 0 ? 0 : send.passwordHash ? 1 : 2,
+      salt: send.passwordSalt,
+    }
+  }
+
+  private vaultSendEmailAllowed(
+    send: typeof schema.vaultSend.$inferSelect,
+    email: string
+  ) {
+    const data = JSON.parse(send.payload) as {
+      authType?: number
+      emails?: string
+    }
     return (
-      this.db
-        .select({ salt: schema.vaultSend.passwordSalt })
-        .from(schema.vaultSend)
-        .where(eq(schema.vaultSend.id, id))
-        .get()?.salt ?? null
+      data.authType === 0 &&
+      !!email &&
+      !!data.emails?.split(",").includes(email)
+    )
+  }
+
+  async prepareVaultSendOtp(id: string, email: string, hash: string) {
+    this.assertVaultActive()
+    const send = this.db
+      .select()
+      .from(schema.vaultSend)
+      .where(eq(schema.vaultSend.id, id))
+      .get()
+    if (
+      !send ||
+      !send.uploaded ||
+      !this.vaultSendAccessible(send) ||
+      (send.maxAccessCount !== null &&
+        send.accessCount >= send.maxAccessCount) ||
+      !this.vaultSendEmailAllowed(send, email)
+    )
+      return false
+    const now = Date.now()
+    this.db
+      .delete(schema.setting)
+      .where(
+        and(
+          like(schema.setting.key, "vault:send-otp:%"),
+          lt(schema.setting.updatedAt, new Date(now - 10 * 60_000))
+        )
+      )
+      .run()
+    const key = `vault:send-otp:${id}:${email}`
+    const existing = this.db
+      .select()
+      .from(schema.setting)
+      .where(eq(schema.setting.key, key))
+      .get()
+    if (existing && now - existing.updatedAt.getTime() < 30_000) return false
+    this.db
+      .insert(schema.setting)
+      .values({
+        key,
+        value: JSON.stringify({
+          hash,
+          expiresAt: now + 10 * 60_000,
+          attempts: 0,
+        }),
+        updatedAt: new Date(now),
+      })
+      .onConflictDoUpdate({
+        target: schema.setting.key,
+        set: {
+          value: JSON.stringify({
+            hash,
+            expiresAt: now + 10 * 60_000,
+            attempts: 0,
+          }),
+          updatedAt: new Date(now),
+        },
+      })
+      .run()
+    return true
+  }
+
+  async cancelVaultSendOtp(id: string, email: string, hash: string) {
+    this.assertVaultActive()
+    const key = `vault:send-otp:${id}:${email}`
+    const row = this.db
+      .select()
+      .from(schema.setting)
+      .where(eq(schema.setting.key, key))
+      .get()
+    if (row && (JSON.parse(row.value) as { hash: string }).hash === hash)
+      this.db.delete(schema.setting).where(eq(schema.setting.key, key)).run()
+  }
+
+  async canShareVaultCipher(id: string, userId: string) {
+    this.assertVaultActive()
+    const cipher = this.db
+      .select()
+      .from(schema.vaultCipher)
+      .where(eq(schema.vaultCipher.id, id))
+      .get()
+    const archived = this.db
+      .select()
+      .from(schema.vaultCipherArchive)
+      .where(
+        and(
+          eq(schema.vaultCipherArchive.cipherId, id),
+          eq(schema.vaultCipherArchive.userId, userId)
+        )
+      )
+      .get()
+    return (
+      !!cipher &&
+      !cipher.deletedAt &&
+      !archived &&
+      (JSON.parse(cipher.payload) as { type: number }).type !== 5
     )
   }
 
@@ -852,12 +981,30 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       updatedAt: now,
     }
     if (existing)
-      return this.db
-        .update(schema.vaultSend)
-        .set(values)
-        .where(eq(schema.vaultSend.id, id))
-        .returning()
-        .get()
+      return this.db.transaction((tx) => {
+        // A previously authenticated recipient must not retain access after
+        // the owner changes authentication or the encrypted Send contents.
+        tx.delete(schema.vaultSendToken)
+          .where(eq(schema.vaultSendToken.sendId, id))
+          .run()
+        tx.delete(schema.vaultSendDownloadToken)
+          .where(eq(schema.vaultSendDownloadToken.sendId, id))
+          .run()
+        tx.delete(schema.setting)
+          .where(
+            and(
+              gte(schema.setting.key, `vault:send-otp:${id}:`),
+              lt(schema.setting.key, `vault:send-otp:${id};`)
+            )
+          )
+          .run()
+        return tx
+          .update(schema.vaultSend)
+          .set(values)
+          .where(eq(schema.vaultSend.id, id))
+          .returning()
+          .get()!
+      })
     return this.db
       .insert(schema.vaultSend)
       .values({ id, ...values, createdAt: now })
@@ -867,19 +1014,53 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
 
   async removeVaultSendPassword(id: string) {
     this.assertVaultActive()
-    return (
-      this.db
+    return this.db.transaction((tx) => {
+      const row = tx
+        .select()
+        .from(schema.vaultSend)
+        .where(eq(schema.vaultSend.id, id))
+        .get()
+      if (!row) return null
+      const data = JSON.parse(row.payload) as Record<string, unknown>
+      tx.delete(schema.vaultSendToken)
+        .where(eq(schema.vaultSendToken.sendId, id))
+        .run()
+      tx.delete(schema.vaultSendDownloadToken)
+        .where(eq(schema.vaultSendDownloadToken.sendId, id))
+        .run()
+      tx.delete(schema.setting)
+        .where(
+          and(
+            gte(schema.setting.key, `vault:send-otp:${id}:`),
+            lt(schema.setting.key, `vault:send-otp:${id};`)
+          )
+        )
+        .run()
+      return tx
         .update(schema.vaultSend)
-        .set({ passwordHash: null, passwordSalt: null, updatedAt: new Date() })
+        .set({
+          passwordHash: null,
+          passwordSalt: null,
+          payload: JSON.stringify({ ...data, authType: 2, emails: null }),
+          updatedAt: new Date(),
+        })
         .where(eq(schema.vaultSend.id, id))
         .returning()
-        .get() ?? null
-    )
+        .get()!
+    })
   }
 
   async deleteVaultSend(id: string) {
     this.assertVaultActive()
     return this.db.transaction((tx) => {
+      tx.delete(schema.setting)
+        .where(
+          and(
+            gte(schema.setting.key, `vault:send-otp:${id}:`),
+            lt(schema.setting.key, `vault:send-otp:${id};`)
+          )
+        )
+        .run()
       tx.delete(schema.vaultSendToken)
         .where(eq(schema.vaultSendToken.sendId, id))
         .run()
@@ -897,7 +1078,8 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
   async issueVaultSendAccess(
     id: string,
     passwordHash: string | null,
-    tokenHash: string
+    tokenHash: string,
+    emailProof?: { email: string; hash: string }
   ) {
     this.assertVaultActive()
     const send = this.db
@@ -909,6 +1091,38 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
     if (!send.uploaded) return "unavailable" as const
     if (send.maxAccessCount !== null && send.accessCount >= send.maxAccessCount)
       return "unavailable" as const
+    const data = JSON.parse(send.payload) as { authType?: number }
+    if (data.authType === 0) {
+      if (!emailProof?.email) return "email_required" as const
+      if (!this.vaultSendEmailAllowed(send, emailProof.email))
+        return "email_and_otp_required" as const
+      const key = `vault:send-otp:${id}:${emailProof.email}`
+      const row = this.db
+        .select()
+        .from(schema.setting)
+        .where(eq(schema.setting.key, key))
+        .get()
+      const proof = row
+        ? (JSON.parse(row.value) as {
+            hash: string
+            expiresAt: number
+            attempts: number
+          })
+        : null
+      if (!proof || proof.expiresAt <= Date.now() || proof.attempts >= 5)
+        return "email_and_otp_required" as const
+      if (!constantTimeEqual(proof.hash, emailProof.hash)) {
+        this.db
+          .update(schema.setting)
+          .set({
+            value: JSON.stringify({ ...proof, attempts: proof.attempts + 1 }),
+          })
+          .where(eq(schema.setting.key, key))
+          .run()
+        return "email_and_otp_required" as const
+      }
+      this.db.delete(schema.setting).where(eq(schema.setting.key, key)).run()
+    }
     if (send.passwordHash) {
       if (!passwordHash) return "password_required" as const
       if (!constantTimeEqual(send.passwordHash, passwordHash))

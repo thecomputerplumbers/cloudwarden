@@ -1,3 +1,4 @@
+import { validCollectionAccess } from "./collection-access"
 import {
   and,
   eq,
@@ -148,6 +149,7 @@ export async function orgMemberCollections(
       id: vaultCollectionMember.collectionId,
       readOnly: vaultCollectionMember.readOnly,
       hidePasswords: vaultCollectionMember.hidePasswords,
+      manage: vaultCollectionMember.manage,
     })
     .from(vaultCollectionMember)
     .where(eq(vaultCollectionMember.membershipId, memberId))
@@ -158,7 +160,12 @@ export async function setOrgMemberCollections(
   env: CloudflareEnv,
   orgId: string,
   memberId: string,
-  collections: { id: string; readOnly: boolean; hidePasswords: boolean }[]
+  collections: {
+    id: string
+    readOnly: boolean
+    hidePasswords: boolean
+    manage?: boolean
+  }[]
 ) {
   const db = drizzle(env.DB)
   const member = await db
@@ -174,6 +181,7 @@ export async function setOrgMemberCollections(
     .get()
   if (!member) return false
   if (
+    collections.some((grant) => !validCollectionAccess(grant)) ||
     collections.length > 50 ||
     new Set(collections.map((item) => item.id)).size !== collections.length
   )
@@ -197,6 +205,7 @@ export async function setOrgMemberCollections(
         membershipId: memberId,
         readOnly: collection.readOnly,
         hidePasswords: collection.hidePasswords,
+        manage: collection.manage ?? false,
       })
     ),
   ])
@@ -209,9 +218,16 @@ export async function inviteOrgMember(
   userId: string,
   role: number,
   accessAll: boolean,
-  collections: { id: string; readOnly: boolean; hidePasswords: boolean }[],
+  collections: {
+    id: string
+    readOnly: boolean
+    hidePasswords: boolean
+    manage?: boolean
+  }[],
   status = 1
 ) {
+  if (collections.some((grant) => !validCollectionAccess(grant)))
+    throw new Error("Invalid collection access")
   const db = drizzle(env.DB)
   const member: Membership = {
     id: crypto.randomUUID(),
@@ -231,6 +247,7 @@ export async function inviteOrgMember(
         membershipId: member.id,
         readOnly: collection.readOnly,
         hidePasswords: collection.hidePasswords,
+        manage: collection.manage ?? false,
       })
     ),
   ])
@@ -745,11 +762,9 @@ export async function listVaultCollectionRights(
       )
     )
     .all()
-  if (
-    membership.role <= 1 ||
-    membership.accessAll ||
-    groups.some((group) => group.accessAll)
-  ) {
+  const accessAll =
+    membership.accessAll || groups.some((group) => group.accessAll)
+  if (membership.role <= 1) {
     for (const collection of collections)
       rights.set(collection.id, {
         readOnly: false,
@@ -763,6 +778,7 @@ export async function listVaultCollectionRights(
       id: vaultCollectionMember.collectionId,
       readOnly: vaultCollectionMember.readOnly,
       hidePasswords: vaultCollectionMember.hidePasswords,
+      manage: vaultCollectionMember.manage,
     })
     .from(vaultCollectionMember)
     .innerJoin(
@@ -812,11 +828,21 @@ export async function listVaultCollectionRights(
   }
   for (const collection of collections) {
     const directGrant = directById.get(collection.id)
+    if (accessAll) {
+      // Broad vault access grants read/write access, never administrative
+      // control. A separate explicit collection grant may grant management.
+      rights.set(collection.id, {
+        readOnly: false,
+        hidePasswords: false,
+        manage: (directGrant ?? groupById.get(collection.id))?.manage ?? false,
+      })
+      continue
+    }
     if (directGrant)
       rights.set(collection.id, {
         readOnly: directGrant.readOnly,
         hidePasswords: directGrant.hidePasswords,
-        manage: false,
+        manage: directGrant.manage,
       })
     else {
       const groupGrant = groupById.get(collection.id)
@@ -957,6 +983,7 @@ export async function listCollectionAccess(env: CloudflareEnv, orgId: string) {
         id: vaultCollectionMember.membershipId,
         readOnly: vaultCollectionMember.readOnly,
         hidePasswords: vaultCollectionMember.hidePasswords,
+        manage: vaultCollectionMember.manage,
       })
       .from(vaultCollectionMember)
       .innerJoin(
@@ -993,7 +1020,7 @@ export async function listCollectionAccess(env: CloudflareEnv, orgId: string) {
     return created
   }
   for (const { collectionId, ...grant } of users)
-    entry(collectionId).users.push({ ...grant, manage: false })
+    entry(collectionId).users.push(grant)
   for (const { collectionId, ...grant } of groups)
     entry(collectionId).groups.push(grant)
   return access
@@ -1007,6 +1034,12 @@ export async function setCollectionAccess(
   users: CollectionGrant[] | null,
   groups: CollectionGrant[] | null
 ) {
+  if (
+    [...(users ?? []), ...(groups ?? [])].some(
+      (grant) => !validCollectionAccess(grant)
+    )
+  )
+    return false
   const db = drizzle(env.DB)
   const collection = await getVaultCollection(env, orgId, collectionId)
   if (!collection) return false
@@ -1076,6 +1109,7 @@ export async function setCollectionAccess(
         membershipId: user.id,
         readOnly: user.readOnly,
         hidePasswords: user.hidePasswords,
+        manage: user.manage,
       })
     ),
     ...(groups ?? []).map((group) =>
@@ -1102,6 +1136,7 @@ export async function grantCollectionAccess(
   groups: CollectionGrant[]
 ) {
   if (
+    [...users, ...groups].some((grant) => !validCollectionAccess(grant)) ||
     !collectionIds.length ||
     collectionIds.length > 50 ||
     collectionIds.length * (users.length + groups.length) > 1000 ||
@@ -1153,13 +1188,18 @@ export async function grantCollectionAccess(
           membershipId: user.id,
           readOnly: user.readOnly,
           hidePasswords: user.hidePasswords,
+          manage: user.manage,
         })
         .onConflictDoUpdate({
           target: [
             vaultCollectionMember.collectionId,
             vaultCollectionMember.membershipId,
           ],
-          set: { readOnly: user.readOnly, hidePasswords: user.hidePasswords },
+          set: {
+            readOnly: user.readOnly,
+            hidePasswords: user.hidePasswords,
+            manage: user.manage,
+          },
         })
     ),
     ...groups.map((group) =>
@@ -1383,7 +1423,7 @@ export function collectionResponse(
     defaultUserCollectionEmail: null,
     readOnly: rights.readOnly,
     hidePasswords: rights.hidePasswords,
-    manage: member.role <= 1 && rights.manage,
+    manage: rights.manage,
     hasEnabledAccessRule: false,
     object: "collectionDetails",
   }

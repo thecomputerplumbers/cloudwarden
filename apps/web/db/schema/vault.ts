@@ -373,6 +373,7 @@ export const vaultCollectionMember = sqliteTable(
     membershipId: text("membership_id")
       .notNull()
       .references(() => vaultMembership.id, { onDelete: "cascade" }),
+    manage: integer("manage", { mode: "boolean" }).notNull().default(false),
     readOnly: integer("read_only", { mode: "boolean" })
       .notNull()
       .default(false),

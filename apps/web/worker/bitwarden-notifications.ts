@@ -401,7 +401,7 @@ export async function mutationNotification(
   }
 
   const match =
-    /^\/api\/(ciphers|folders|sends)(?:\/([0-9a-f-]{36}))?(?:\/(delete|restore|partial|archive|unarchive|remove-password))?$/i.exec(
+    /^\/api\/(ciphers|folders|sends)(?:\/([0-9a-f-]{36}))?(?:\/(delete|restore|partial|archive|unarchive|remove-password|remove-auth))?$/i.exec(
       path
     )
   if (!match) return fallback

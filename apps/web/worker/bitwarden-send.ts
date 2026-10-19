@@ -54,10 +54,12 @@ export function newSendFileId() {
 
 export function parseSend(body: Body, existing?: SendRow) {
   const type = field(body, "type")
-  const name = field(body, "name")
+  const name = field(body, "name") ?? (type === 2 ? "" : undefined)
   const key = field(body, "key")
   const text = field(body, "text")
   const file = field(body, "file")
+  const data = field(body, "data")
+  const rawAuthType = field(body, "authType")
   const fileLength = field(body, "fileLength")
   const notes = field(body, "notes")
   const password = field(body, "password")
@@ -78,6 +80,40 @@ export function parseSend(body: Body, existing?: SendRow) {
         : null
   const prior = existing ? (JSON.parse(existing.payload) as Body) : null
   const priorFile = prior?.file as Body | undefined
+  const emailList =
+    typeof emails === "string"
+      ? [
+          ...new Set(
+            emails
+              .split(",")
+              .map((email) => email.trim().toLowerCase())
+              .filter(Boolean)
+          ),
+        ]
+      : []
+  const priorAuthType =
+    prior?.authType === 0 ? 0 : existing?.passwordHash ? 1 : 2
+  const authType =
+    rawAuthType ??
+    (emailList.length
+      ? 0
+      : password
+        ? 1
+        : priorAuthType === 0
+          ? 2
+          : priorAuthType)
+  const itemData =
+    data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Body)
+      : null
+  const metadata = itemData && field(itemData, "metadata")
+  const itemId =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? field(metadata as Body, "itemId")
+      : null
+  const encryptionVersion =
+    itemData && (field(itemData, "encryptionVersion") ?? 1)
+  const encryptedData = itemData && field(itemData, "data")
   const announcedSize =
     typeof fileLength === "number"
       ? fileLength
@@ -85,10 +121,10 @@ export function parseSend(body: Body, existing?: SendRow) {
         ? Number(fileLength)
         : null
   if (
-    (type !== 0 && type !== 1) ||
-    (prior && type !== (prior.type === 1 ? 1 : 0)) ||
+    (type !== 0 && type !== 1 && type !== 2) ||
+    (prior && type !== prior.type) ||
     typeof name !== "string" ||
-    !name ||
+    (!name && type !== 2) ||
     name.length > 20_000 ||
     typeof key !== "string" ||
     !key ||
@@ -122,7 +158,24 @@ export function parseSend(body: Body, existing?: SendRow) {
     (hideEmail !== undefined &&
       hideEmail !== null &&
       typeof hideEmail !== "boolean") ||
-    (emails !== undefined && emails !== null)
+    (emails !== undefined && emails !== null && typeof emails !== "string") ||
+    (typeof emails === "string" && emails.length > 4000) ||
+    emailList.some(
+      (email) =>
+        email.length > 254 || !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(email)
+    ) ||
+    (authType !== 0 && authType !== 1 && authType !== 2) ||
+    (authType === 0 && !emailList.length) ||
+    (authType === 1 && !password && !existing?.passwordHash) ||
+    (type === 2 &&
+      (authType !== 0 ||
+        encryptionVersion !== 1 ||
+        typeof itemId !== "string" ||
+        !/^[0-9a-f-]{36}$/i.test(itemId) ||
+        itemId === "00000000-0000-0000-0000-000000000000" ||
+        typeof encryptedData !== "string" ||
+        !encryptedData ||
+        encryptedData.length > 500000))
   )
     return null
   const sanitizedText = type === 0 ? { ...(text as Body) } : null
@@ -147,13 +200,31 @@ export function parseSend(body: Body, existing?: SendRow) {
       notes: notes ?? null,
       text: sanitizedText,
       file: sanitizedFile,
+      ...(type === 2
+        ? {
+            data: {
+              encryptionVersion,
+              data: encryptedData,
+              metadata: { itemId: (itemId as string).toLowerCase() },
+            },
+          }
+        : {}),
+      authType,
+      emails: authType === 0 ? emailList.join(",") : null,
       hideEmail: hideEmail ?? false,
     }),
     maxAccessCount,
     expirationAt,
     deletionAt,
     disabled: disabled === true,
-    password: typeof password === "string" ? password : undefined,
+    password:
+      authType !== 1
+        ? null
+        : rawAuthType === 1 && priorAuthType === 1 && existing
+          ? undefined
+          : typeof password === "string" && password
+            ? password
+            : undefined,
   }
 }
 
@@ -184,7 +255,7 @@ export function newSendPasswordSalt() {
 
 export function sendResponse(row: SendRow) {
   const data = JSON.parse(row.payload) as Body
-  const type = data.type === 1 ? 1 : 0
+  const type = data.type === 2 ? 2 : data.type === 1 ? 1 : 0
   const file =
     data.file && typeof data.file === "object"
       ? { ...(data.file as Body), size: String((data.file as Body).size) }
@@ -197,11 +268,13 @@ export function sendResponse(row: SendRow) {
     notes: data.notes,
     text: type === 0 ? data.text : null,
     file: type === 1 ? file : null,
+    ...(type === 2 ? { data: data.data } : {}),
+    emails: data.emails ?? null,
     key: data.key,
     maxAccessCount: row.maxAccessCount,
     accessCount: row.accessCount,
     password: row.passwordHash,
-    authType: row.passwordHash ? 1 : 2,
+    authType: data.authType === 0 ? 0 : row.passwordHash ? 1 : 2,
     disabled: row.disabled,
     hideEmail: data.hideEmail,
     revisionDate: row.updatedAt.toISOString(),
@@ -213,14 +286,16 @@ export function sendResponse(row: SendRow) {
 
 export function sendAccessResponse(row: SendRow, email: string) {
   const data = JSON.parse(row.payload) as Body
-  const type = data.type === 1 ? 1 : 0
+  const type = data.type === 2 ? 2 : data.type === 1 ? 1 : 0
   const file =
     data.file && typeof data.file === "object"
       ? { ...(data.file as Body), size: String((data.file as Body).size) }
       : null
   return {
-    id: row.id,
+    id: sendAccessId(row.id),
     type,
+    authType: data.authType === 0 ? 0 : row.passwordHash ? 1 : 2,
+    ...(type === 2 ? { data: data.data } : {}),
     name: data.name,
     text: type === 0 ? data.text : null,
     file: type === 1 ? file : null,

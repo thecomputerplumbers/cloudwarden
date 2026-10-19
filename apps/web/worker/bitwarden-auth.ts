@@ -1,3 +1,4 @@
+import { accessTokenLifetimeSeconds } from "./token-lifetime"
 import { drizzle } from "drizzle-orm/d1"
 import {
   and,
@@ -31,7 +32,6 @@ import { hashClientPassword } from "./password-hash"
 
 export type VaultUser = typeof vaultUser.$inferSelect
 
-const ACCESS_LIFETIME_MS = 60 * 60 * 1000
 const REFRESH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
 const ACCESS_REFRESH_OVERLAP_MS = 30 * 1000
 const encoder = new TextEncoder()
@@ -72,7 +72,7 @@ async function accessToken(
     encoder.encode(
       JSON.stringify({
         nbf: now,
-        exp: now + ACCESS_LIFETIME_MS / 1000,
+        exp: now + accessTokenLifetimeSeconds(env, clientId, apiKey),
         iss: "cloudwarden|login",
         sub: user.id,
         premium: true,
@@ -685,6 +685,7 @@ export async function issueVaultSession(
   } = {}
 ) {
   const apiKey = options.apiKey ?? false
+  const accessLifetime = accessTokenLifetimeSeconds(env, clientId, apiKey)
   const access = await accessToken(
     env,
     user,
@@ -717,7 +718,7 @@ export async function issueVaultSession(
             options.sso.refreshToken
           )
         : null,
-      accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
+      accessExpiresAt: new Date(now + accessLifetime * 1000),
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
     }),
     db
@@ -740,7 +741,7 @@ export async function issueVaultSession(
         },
       }),
   ])
-  return { access, refresh, expiresIn: ACCESS_LIFETIME_MS / 1000 }
+  return { access, refresh, expiresIn: accessLifetime }
 }
 
 export async function refreshVaultSession(
@@ -761,6 +762,7 @@ export async function refreshVaultSession(
     .get()
   if (!row) return null
   const { session, user } = row
+  const accessLifetime = accessTokenLifetimeSeconds(env, session.clientId)
   if (
     session.apiKey ||
     session.refreshExpiresAt.getTime() <= Date.now() ||
@@ -829,14 +831,14 @@ export async function refreshVaultSession(
       accessHash: await tokenHash(access),
       refreshHash: await tokenHash(nextRefresh),
       ssoRefreshToken: nextSsoRefresh,
-      accessExpiresAt: new Date(now + ACCESS_LIFETIME_MS),
+      accessExpiresAt: new Date(now + accessLifetime * 1000),
       refreshExpiresAt: new Date(now + REFRESH_LIFETIME_MS),
     })
     .where(eq(vaultSession.refreshHash, oldHash))
     .returning()
     .get()
   return updated
-    ? { access, refresh: nextRefresh, expiresIn: ACCESS_LIFETIME_MS / 1000 }
+    ? { access, refresh: nextRefresh, expiresIn: accessLifetime }
     : null
 }
 

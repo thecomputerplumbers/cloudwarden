@@ -1,3 +1,4 @@
+import { validCollectionAccess } from "./collection-access"
 import { and, eq, inArray } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/d1"
 
@@ -104,6 +105,7 @@ export async function saveVaultGroup(
   }
 ) {
   if (
+    input.collections.some((grant) => !validCollectionAccess(grant)) ||
     input.collections.length > 100 ||
     input.users.length > 100 ||
     new Set(input.collections.map((item) => item.id)).size !==
