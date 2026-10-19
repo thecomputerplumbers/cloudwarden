@@ -750,6 +750,17 @@ export async function listVaultCollectionRights(
   if (membership.orgId !== orgId || membership.status !== 2) return rights
   const collections =
     known ?? (await listVaultCollections(env, orgId, membership))
+  // Owners and administrators already have full collection rights. Resolve
+  // their role before reading group grants, which cannot change the result.
+  if (membership.role <= 1) {
+    for (const collection of collections)
+      rights.set(collection.id, {
+        readOnly: false,
+        hidePasswords: false,
+        manage: true,
+      })
+    return rights
+  }
   const db = drizzle(env.DB)
   const groups = await db
     .select({ id: vaultGroup.id, accessAll: vaultGroup.accessAll })
@@ -764,15 +775,6 @@ export async function listVaultCollectionRights(
     .all()
   const accessAll =
     membership.accessAll || groups.some((group) => group.accessAll)
-  if (membership.role <= 1) {
-    for (const collection of collections)
-      rights.set(collection.id, {
-        readOnly: false,
-        hidePasswords: false,
-        manage: true,
-      })
-    return rights
-  }
   const direct = await db
     .select({
       id: vaultCollectionMember.collectionId,
