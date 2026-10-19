@@ -17,6 +17,7 @@ import {
   DecryptionError,
   decryptOptional,
   encryptBytes,
+  encryptString,
 } from "./crypto/enc-string.ts"
 import {
   decryptSummaries,
@@ -31,6 +32,7 @@ import {
   type KdfConfig,
 } from "./crypto/kdf.ts"
 import { keyBytes } from "./crypto/keys.ts"
+import type { ImportedItem } from "./transfer.ts"
 
 /**
  * The native vault's state. Keys and decrypted items exist only in this
@@ -579,4 +581,62 @@ export async function restoreItem(item: VaultItem) {
       secrets.keys
     )
   )
+}
+
+/** The personal vault in full, for an export: every item decrypted, and its folders. */
+export async function personalVault() {
+  if (!secrets) throw new Error("The vault is locked")
+  const keys = secrets.keys
+  const items = await Promise.all(
+    state.items
+      .filter((item) => !item.organizationId && !item.deleted)
+      .map((item) =>
+        item.complete ? item : decryptCipher(item.raw, keys, true)
+      )
+  )
+  return { items, folders: state.folders }
+}
+
+const IMPORT_BATCH = 1000
+
+/**
+ * Imports items into the personal vault, creating the folders they name
+ * that don't exist yet. Every item is encrypted here, with its own key.
+ */
+export async function importItems(items: ImportedItem[]) {
+  if (!secrets) throw new Error("The vault is locked")
+  const keys = secrets.keys
+  const access = await token()
+  const folderIds = new Map(state.folders.map((f) => [f.name, f.id]))
+  for (const name of new Set(items.map((item) => item.folder))) {
+    if (!name || folderIds.has(name)) continue
+    const created = await api.createFolder(
+      access,
+      await encryptString(name, keys.userKey)
+    )
+    folderIds.set(name, created.id)
+  }
+  const names = [...folderIds.keys()]
+  const folderIndex = new Map(names.map((name, index) => [name, index]))
+  // Each folder already exists; its encrypted name only matters if it was deleted meanwhile.
+  const folders = await Promise.all(
+    names.map(async (name) => ({
+      id: folderIds.get(name)!,
+      name: await encryptString(name, keys.userKey),
+    }))
+  )
+  for (let start = 0; start < items.length; start += IMPORT_BATCH) {
+    const batch = items.slice(start, start + IMPORT_BATCH)
+    const ciphers = await Promise.all(
+      batch.map((item) => encryptDraft(item.draft, keys))
+    )
+    await api.importVault(await token(), {
+      ciphers,
+      folders,
+      folderRelationships: batch.flatMap((item, key) =>
+        item.folder ? [{ key, value: folderIndex.get(item.folder)! }] : []
+      ),
+    })
+  }
+  await resync()
 }
