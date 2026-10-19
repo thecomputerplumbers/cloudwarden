@@ -20,6 +20,7 @@ import {
   LogOutIcon,
   RefreshCwIcon,
   ServerCogIcon,
+  SettingsIcon,
   StarIcon,
   StickyNoteIcon,
   TerminalSquareIcon,
@@ -109,9 +110,11 @@ export function Sidebar({
   filter,
   onFilter,
   onSecrets,
+  onSettings,
 }: {
   filter: ItemFilter
   onFilter: (filter: ItemFilter) => void
+  onSettings: () => void
   /** Opens Secrets Manager; absent when the account administers no organization. */
   onSecrets?: () => void
 }) {
@@ -320,6 +323,9 @@ export function Sidebar({
             <ChevronsUpDownIcon className="size-4 shrink-0 text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-60">
+            <DropdownMenuItem onClick={onSettings}>
+              <SettingsIcon /> Account settings
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => vault.resync()}>
               <RefreshCwIcon className={cn(state.syncing && "animate-spin")} />
               Sync now

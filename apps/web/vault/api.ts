@@ -257,3 +257,131 @@ export const acceptInvite = (
     ...json({ token: inviteToken }),
     token,
   })
+
+export const changePassword = (token: string, body: Record<string, unknown>) =>
+  request<null>("/api/accounts/password", { ...json(body), token })
+
+export const changeKdf = (token: string, body: Record<string, unknown>) =>
+  request<null>("/api/accounts/kdf", { ...json(body), token })
+
+/** Two-step login providers: 0 authenticator app, 1 email, 7 security key. */
+export const twoFactorProviders = (token: string) =>
+  request<{ data: { type: number; enabled: boolean }[] }>("/api/two-factor", {
+    token,
+  })
+
+/** Proof of the master password for two-step login changes, valid for 15 minutes. */
+type Verified = { userVerificationToken: string }
+
+export const getAuthenticator = (token: string, masterPasswordHash: string) =>
+  request<{ enabled: boolean; key: string } & Verified>(
+    "/api/two-factor/get-authenticator",
+    { ...json({ masterPasswordHash }), token }
+  )
+
+export const enableAuthenticator = (
+  token: string,
+  body: { key: string; token: string; userVerificationToken: string }
+) =>
+  request<unknown>("/api/two-factor/authenticator", {
+    ...json(body),
+    method: "PUT",
+    token,
+  })
+
+export const getEmailFactor = (token: string, masterPasswordHash: string) =>
+  request<{ enabled: boolean; email: string | null } & Verified>(
+    "/api/two-factor/get-email",
+    { ...json({ masterPasswordHash }), token }
+  )
+
+export const sendEmailFactorCode = (
+  token: string,
+  body: { email: string; userVerificationToken: string }
+) => request<null>("/api/two-factor/send-email", { ...json(body), token })
+
+export const enableEmailFactor = (
+  token: string,
+  body: { email: string; token: string; userVerificationToken: string }
+) =>
+  request<unknown>("/api/two-factor/email", {
+    ...json(body),
+    method: "PUT",
+    token,
+  })
+
+export interface SecurityKey {
+  id: number
+  name: string
+}
+
+export const getSecurityKeys = (token: string, masterPasswordHash: string) =>
+  request<{ enabled: boolean; keys: SecurityKey[] } & Verified>(
+    "/api/two-factor/get-webauthn",
+    { ...json({ masterPasswordHash }), token }
+  )
+
+export const securityKeyChallenge = (
+  token: string,
+  userVerificationToken: string
+) =>
+  request<Record<string, unknown>>("/api/two-factor/get-webauthn-challenge", {
+    ...json({ userVerificationToken }),
+    token,
+  })
+
+export const addSecurityKey = (
+  token: string,
+  body: {
+    id: number
+    name: string
+    deviceResponse: unknown
+    userVerificationToken: string
+  }
+) =>
+  request<{ keys: SecurityKey[] }>("/api/two-factor/webauthn", {
+    ...json(body),
+    method: "PUT",
+    token,
+  })
+
+export const removeSecurityKey = (
+  token: string,
+  body: { id: number; userVerificationToken: string }
+) =>
+  request<{ keys: SecurityKey[] }>("/api/two-factor/webauthn", {
+    ...json(body),
+    method: "DELETE",
+    token,
+  })
+
+export const disableTwoFactor = (
+  token: string,
+  body: { type: number; userVerificationToken: string }
+) =>
+  request<unknown>("/api/two-factor/disable", {
+    ...json(body),
+    method: "PUT",
+    token,
+  })
+
+export const recoveryCode = (token: string, masterPasswordHash: string) =>
+  request<{ code: string }>("/api/two-factor/get-recover", {
+    ...json({ masterPasswordHash }),
+    token,
+  })
+
+export interface Device {
+  id: string
+  name: string
+  type: number
+  identifier: string
+  creationDate: string
+  lastActivityDate: string
+}
+
+export const devices = (token: string) =>
+  request<{ data: Device[] }>("/api/devices", { token })
+
+export const removeDevice = (token: string, id: string) =>
+  request<null>(`/api/devices/${id}/deactivate`, { method: "POST", token })
