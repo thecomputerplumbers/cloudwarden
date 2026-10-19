@@ -22,7 +22,14 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { cn } from "@workspace/ui/lib/utils"
 import { DicesIcon, PlusIcon, XIcon } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import {
+  cloneElement,
+  isValidElement,
+  useId,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react"
 import type { ItemDraft, ItemKind, VaultItem } from "../crypto/cipher.ts"
 import { generatePassword } from "../password.ts"
 import * as vault from "../store.ts"
@@ -78,19 +85,43 @@ function draftOf(
   }
 }
 
+/**
+ * A labelled form field. A single control is linked to the label; pass a
+ * function to place the id on a control inside a row, or `group` for a set
+ * of controls, which is then labelled as a group.
+ */
 function Field({
   label,
   children,
   className,
+  group,
 }: {
   label: string
-  children: ReactNode
+  children: ReactNode | ((id: string) => ReactNode)
   className?: string
+  group?: boolean
 }) {
+  const id = useId()
+  const labelId = `${id}-label`
+  const control =
+    typeof children === "function"
+      ? children(id)
+      : !group && isValidElement(children)
+        ? cloneElement(children as ReactElement<{ id?: string }>, { id })
+        : children
   return (
-    <div className={cn("space-y-1.5", className)}>
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      {children}
+    <div
+      className={cn("space-y-1.5", className)}
+      {...(group ? { role: "group", "aria-labelledby": labelId } : {})}
+    >
+      <Label
+        id={labelId}
+        {...(group ? {} : { htmlFor: id })}
+        className="text-xs text-muted-foreground"
+      >
+        {label}
+      </Label>
+      {control}
     </div>
   )
 }
@@ -204,7 +235,7 @@ export function ItemEditor({
           className="-mx-4 min-h-0 space-y-4 overflow-y-auto border-t px-4 pt-4"
         >
           {!item && writableVaults.length > 1 && (
-            <Field label="Vault">
+            <Field label="Vault" group>
               <div className="flex flex-wrap gap-1.5">
                 {writableVaults.map((entry) => (
                   <button
@@ -233,7 +264,7 @@ export function ItemEditor({
             </Field>
           )}
           {draft.organizationId && !item && (
-            <Field label="Collections">
+            <Field label="Collections" group>
               <div className="flex flex-wrap gap-1.5">
                 {collections.map((entry) => {
                   const on = draft.collectionIds.includes(entry.id)
@@ -305,24 +336,29 @@ export function ItemEditor({
                 />
               </Field>
               <Field label="Password">
-                <div className="flex gap-2">
-                  <Input
-                    autoComplete="new-password"
-                    value={text(draft.login.password)}
-                    onChange={(e) =>
-                      patchLogin({ password: empty(e.target.value) })
-                    }
-                    className="h-9 font-mono"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-9"
-                    onClick={() => patchLogin({ password: generatePassword() })}
-                  >
-                    <DicesIcon /> Generate
-                  </Button>
-                </div>
+                {(id) => (
+                  <div className="flex gap-2">
+                    <Input
+                      id={id}
+                      autoComplete="new-password"
+                      value={text(draft.login!.password)}
+                      onChange={(e) =>
+                        patchLogin({ password: empty(e.target.value) })
+                      }
+                      className="h-9 font-mono"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-9"
+                      onClick={() =>
+                        patchLogin({ password: generatePassword() })
+                      }
+                    >
+                      <DicesIcon /> Generate
+                    </Button>
+                  </div>
+                )}
               </Field>
               <Field label="Authenticator key (TOTP)">
                 <Input
@@ -333,11 +369,12 @@ export function ItemEditor({
                   placeholder="otpauth://… or base32 secret"
                 />
               </Field>
-              <Field label="Websites">
+              <Field label="Websites" group>
                 <div className="space-y-2">
                   {draft.login.uris.map((entry, index) => (
                     <div key={index} className="flex gap-2">
                       <Input
+                        aria-label={`Website ${index + 1}`}
                         value={entry.uri}
                         placeholder="https://example.com"
                         onChange={(e) =>

@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { writeAssetHeaders } from "./asset-headers.mjs"
 
@@ -22,8 +22,34 @@ const source = `https://github.com/dani-garcia/bw_web_builds/releases/download/v
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const cache = join(root, ".cache", archiveName)
 const client = join(root, "dist", "client")
-// Bitwarden's web client lives at /legacy; the native vault (app/vault) is the site root.
-const assets = join(client, "legacy")
+
+/**
+ * The native vault replaces Bitwarden's web client. What remains are the small
+ * connector pages that Bitwarden's apps and browser extensions open on the
+ * server's origin for SSO, WebAuthn and Duo two-step login, and what they load.
+ * They are served from the site root, where the apps expect them.
+ */
+const CONNECTOR_IMAGES = [
+  "apple-touch-icon.png",
+  "favicon-16x16.png",
+  "favicon-32x32.png",
+  "safari-pinned-tab.svg",
+  "logo-dark@2x.png",
+  "u2fkey-mobile.jpg",
+]
+const keep = (relative) =>
+  /^[a-z-]+-connector\.html$/.test(relative) ||
+  /^styles\.[0-9a-f]{20}\.(css|js)$/.test(relative) ||
+  // The connectors' web app manifest, and the FIDO app ID for security keys.
+  /^[0-9a-f]{20}\.json$/.test(relative) ||
+  relative === "app-id.json" ||
+  relative === "connectors" ||
+  relative.startsWith("connectors/") ||
+  // The connectors translate their text from locales/<language>/messages.json.
+  relative === "locales" ||
+  relative.startsWith("locales/") ||
+  relative === "images" ||
+  CONNECTOR_IMAGES.some((name) => relative === `images/${name}`)
 
 async function verifiedArchive() {
   let data
@@ -60,10 +86,12 @@ try {
   })
   if (extracted.status !== 0) throw new Error("Could not extract web vault")
   const webVault = join(temporary, "web-vault")
-  await cp(webVault, assets, {
+  await cp(webVault, client, {
     recursive: true,
     filter: async (path) => {
+      if (path === webVault) return true
       if (path.endsWith(".map")) return false
+      if (!keep(relative(webVault, path).split(sep).join("/"))) return false
       const info = await stat(path)
       if (info.isFile() && info.size > 25 * 1024 * 1024)
         throw new Error(
@@ -73,24 +101,12 @@ try {
     },
   })
   await writeFile(
-    join(assets, "web-vault-source.txt"),
-    `Vaultwarden web vault v${version}\nSource: https://github.com/dani-garcia/bw_web_builds/tree/v${version}\nLicense: GPL-3.0\nArchive SHA-256: ${checksum}\n`
-  )
-  // The bundle links /css/vaultwarden.css, which Vaultwarden renders at
-  // runtime to hide the variants its patches add. Without it the login form
-  // shows both email inputs stacked over "Remember email".
-  await mkdir(join(assets, "css"), { recursive: true })
-  await writeFile(
-    join(assets, "css", "vaultwarden.css"),
-    `.vw-hide,
-.vw-email-sso {
-  display: none !important;
-}
-`
+    join(client, "bitwarden-connectors-source.txt"),
+    `Bitwarden connector pages from the Vaultwarden web vault v${version}\nSource: https://github.com/dani-garcia/bw_web_builds/tree/v${version}\nLicense: GPL-3.0\nArchive SHA-256: ${checksum}\n`
   )
   const { rules } = await writeAssetHeaders(client)
   console.log(
-    `Installed Vaultwarden web vault v${version} into production assets at /legacy (${rules} immutable cache rules)`
+    `Installed Bitwarden's connector pages from web vault v${version} (${rules} immutable cache rules)`
   )
 } finally {
   await rm(temporary, { recursive: true, force: true })

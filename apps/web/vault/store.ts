@@ -11,6 +11,11 @@ import {
 } from "./crypto/cipher.ts"
 import { DecryptionError, decryptOptional } from "./crypto/enc-string.ts"
 import {
+  decryptSummaries,
+  stop as stopDecryptor,
+  warmDecryptor,
+} from "./decryptor.ts"
+import {
   hashMasterPassword,
   makeMasterKey,
   normalizeEmail,
@@ -246,6 +251,7 @@ async function open(
   tokens: api.TokenResponse
 ) {
   const access = tokens.access_token
+  warmDecryptor()
   const [data, selection] = await Promise.all([
     api.sync(access),
     api.getVaultSelection(access).catch(() => ({ excluded: [] })),
@@ -309,11 +315,9 @@ async function apply(data: api.SyncResponse, keys: AccountKeys) {
       }
     })
   )
-  const items = (
-    await Promise.all(
-      data.ciphers.map((raw) => decryptCipher(raw, keys, false))
-    )
-  ).sort((a, b) => byName.compare(a.name, b.name))
+  const items = (await decryptSummaries(data.ciphers, keys)).sort((a, b) =>
+    byName.compare(a.name, b.name)
+  )
   set({
     vaults,
     folders: folders.sort((a, b) => a.name.localeCompare(b.name)),
@@ -338,6 +342,7 @@ export async function resync() {
 
 export function lock() {
   secrets = null
+  stopDecryptor()
   set({
     ...initial,
     status: persisted() ? "locked" : "signed-out",
@@ -347,6 +352,7 @@ export function lock() {
 
 export function signOut() {
   secrets = null
+  stopDecryptor()
   persist(null)
   set({ ...initial })
 }

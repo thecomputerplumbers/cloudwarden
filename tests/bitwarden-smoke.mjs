@@ -230,41 +230,50 @@ async function registerWithEmail(input) {
   })
 }
 
-// The native vault is the site root; Bitwarden's web client is at /legacy/.
+// The native vault is the site root. Of Bitwarden's web client only the
+// connector pages remain, which its apps open at the root.
 const nativeVault = await fetch(origin)
 assert.equal(nativeVault.status, 200)
 assert.match(await nativeVault.text(), /<title>Cloudwarden<\/title>/)
-const legacyRedirect = await fetch(`${origin}/legacy`, { redirect: "manual" })
-assert.ok([307, 308].includes(legacyRedirect.status))
-assert.equal(
-  new URL(legacyRedirect.headers.get("location"), origin).pathname,
-  "/legacy/"
-)
-const webVault = await fetch(`${origin}/legacy/`)
-assert.equal(webVault.status, 200)
-const webVaultHtml = await webVault.text()
-assert.match(webVaultHtml, /<title page-title>Vaultwarden Web<\/title>/)
-const webVaultScript = /src="(app\/main\.[^"]+\.js)"/.exec(webVaultHtml)?.[1]
-assert.ok(webVaultScript)
-assert.equal((await fetch(`${origin}/legacy/${webVaultScript}`)).status, 200)
-// Apps open the connector pages at the root.
 for (const connector of [
   "sso-connector.html",
   "webauthn-mobile-connector.html",
   "duo-redirect-connector.html",
-])
-  assert.equal((await fetch(`${origin}/${connector}`)).status, 200, connector)
-// The legacy client's API calls under /legacy/ reach the same endpoints.
-assert.equal((await fetch(`${origin}/legacy/api/config`)).status, 200)
+]) {
+  const page = await fetch(`${origin}/${connector}`)
+  assert.equal(page.status, 200, connector)
+  const script = /src="(connectors\/[^"]+\.js)"/.exec(await page.text())?.[1]
+  assert.ok(script, connector)
+  assert.equal((await fetch(`${origin}/${script}`)).status, 200, script)
+}
+assert.equal((await fetch(`${origin}/app-id.json`)).status, 200)
+for (const gone of ["/legacy/", "/app/main.js", "/index.html"])
+  assert.equal((await fetch(`${origin}${gone}`)).status, 404, gone)
 assert.equal((await fetch(`${origin}/sign-in`)).status, 404)
 assert.equal((await fetch(`${origin}/api/auth/ok`)).status, 404)
 assert.equal((await fetch(`${origin}/dashboard`)).status, 404)
 assert.equal((await fetch(`${origin}/api/health`)).status, 200)
 
-async function call(path, options = {}) {
+async function call(path, options = {}, retried = false) {
   const response = await fetch(`${origin}${path}`, options)
   const text = await response.text()
-  return { status: response.status, body: text ? JSON.parse(text) : null }
+  // Local workerd sometimes drops its connection to the Durable Object on a
+  // slow machine (CI) and answers with this text. Try such a request once more.
+  if (
+    !retried &&
+    response.status >= 500 &&
+    text.startsWith("Error: Network connection lost")
+  ) {
+    console.warn(`Retrying ${options.method ?? "GET"} ${path}: ${text.trim()}`)
+    return call(path, options, true)
+  }
+  try {
+    return { status: response.status, body: text ? JSON.parse(text) : null }
+  } catch {
+    throw new Error(
+      `${options.method ?? "GET"} ${path}: ${response.status} ${text.slice(0, 200)}`
+    )
+  }
 }
 
 function post(path, body, token) {
