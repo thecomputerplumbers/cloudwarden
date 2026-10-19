@@ -9,12 +9,18 @@ export type KdfConfig =
 export const normalizeEmail = (email: string) => email.trim().toLowerCase()
 
 /** The master key: the master password stretched with the account's KDF, salted with the email. */
-export async function makeMasterKey(
+export const makeMasterKey = (
   password: string,
   email: string,
   config: KdfConfig
+) => deriveKey(password, normalizeEmail(email), config)
+
+/** A password stretched with a KDF and a salt taken as given, as for a password-protected export. */
+export async function deriveKey(
+  password: string,
+  salt: string,
+  config: KdfConfig
 ) {
-  const salt = normalizeEmail(email)
   if (config.kdf === 0) {
     const key = await crypto.subtle.importKey(
       "raw",
@@ -35,7 +41,7 @@ export async function makeMasterKey(
     )
     return new Uint8Array(bits)
   }
-  // Argon2id is salted with SHA-256 of the email; memory is configured in MiB.
+  // Argon2id is salted with SHA-256 of the salt; memory is configured in MiB.
   const hashedSalt = new Uint8Array(
     await crypto.subtle.digest("SHA-256", buffer(utf8(salt)))
   )

@@ -18,11 +18,13 @@ import { cn } from "@workspace/ui/lib/utils"
 import {
   ArrowLeftIcon,
   GaugeIcon,
+  DownloadIcon,
   KeyRoundIcon,
   LifeBuoyIcon,
   MailIcon,
   MonitorSmartphoneIcon,
   SmartphoneIcon,
+  UploadIcon,
   UsbIcon,
 } from "lucide-react"
 import {
@@ -36,6 +38,7 @@ import { renderSVG } from "uqr"
 import * as api from "../api.ts"
 import type { KdfConfig } from "../crypto/kdf.ts"
 import * as vault from "../store.ts"
+import * as transfer from "../transfer.ts"
 import { copy, toast } from "./toast.tsx"
 
 const MIN_PASSWORD = 12
@@ -416,6 +419,240 @@ function KdfDialog({ onClose }: { onClose: () => void }) {
         <ErrorLine text={error} />
         <Footer busy={busy} label="Save" onClose={onClose} />
       </form>
+    </SettingsDialog>
+  )
+}
+
+// Import and export ---------------------------------------------------------
+
+type ExportFormat = "json" | "protected" | "csv"
+
+const EXPORT_FORMATS: { id: ExportFormat; label: string; detail: string }[] = [
+  {
+    id: "protected",
+    label: "JSON, password-protected",
+    detail: "Encrypted with a password you choose. Opens in Bitwarden too.",
+  },
+  {
+    id: "json",
+    label: "JSON",
+    detail: "Unencrypted. Anyone with the file can read every password.",
+  },
+  {
+    id: "csv",
+    label: "CSV",
+    detail: "Unencrypted, logins and secure notes only.",
+  },
+]
+
+function download(name: string, content: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  const link = document.createElement("a")
+  link.href = url
+  link.download = name
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function ExportDialog({ onClose }: { onClose: () => void }) {
+  const [format, setFormat] = useState<ExportFormat>("protected")
+  const [filePassword, setFilePassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [password, setPassword] = useState("")
+  const { busy, error, setError, run } = useAction(async () => {
+    await api.verifyPassword(
+      await vault.sessionToken(),
+      await vault.masterPasswordHash(password)
+    )
+    const { items, folders } = await vault.personalVault()
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")
+    if (format === "csv")
+      download(
+        `cloudwarden_export_${stamp}.csv`,
+        transfer.exportCsv(items, folders),
+        "text/csv"
+      )
+    else
+      download(
+        `cloudwarden_export_${stamp}.json`,
+        format === "json"
+          ? transfer.exportJson(items, folders)
+          : await transfer.exportProtectedJson(items, folders, filePassword),
+        "application/json"
+      )
+    toast(`Exported ${items.length} items.`)
+    onClose()
+  })
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (format === "protected") {
+      if (filePassword.length < 8)
+        return setError("Use at least 8 characters for the file password.")
+      if (filePassword !== confirmPassword)
+        return setError("The two file passwords do not match.")
+    }
+    void run()
+  }
+  return (
+    <SettingsDialog
+      title="Export vault"
+      description="Your personal vault's items and folders, in Bitwarden's format. Organization items stay with their organization."
+      onClose={onClose}
+    >
+      <form onSubmit={submit} className="grid gap-4">
+        <div role="radiogroup" aria-label="Format" className="grid gap-2">
+          {EXPORT_FORMATS.map((entry) => (
+            <label
+              key={entry.id}
+              className={cn(
+                "flex cursor-pointer gap-3 rounded-md border px-3 py-2.5 transition-colors",
+                format === entry.id && "border-primary bg-brand-soft"
+              )}
+            >
+              <input
+                type="radio"
+                name="cw-export-format"
+                checked={format === entry.id}
+                onChange={() => setFormat(entry.id)}
+                className="mt-1 accent-[var(--primary)]"
+              />
+              <span>
+                <span className="block text-sm font-medium">{entry.label}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {entry.detail}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {format === "protected" ? (
+          <>
+            <Field
+              label="File password"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={filePassword}
+              onChange={(e) => setFilePassword(e.target.value)}
+            />
+            <Field
+              label="Confirm file password"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </>
+        ) : null}
+        <Field
+          label="Master password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <ErrorLine text={error} />
+        <Footer busy={busy} label="Export" onClose={onClose} />
+      </form>
+    </SettingsDialog>
+  )
+}
+
+function ImportDialog({ onClose }: { onClose: () => void }) {
+  const [file, setFile] = useState<{ name: string; content: string } | null>(
+    null
+  )
+  const [needsPassword, setNeedsPassword] = useState(false)
+  const [filePassword, setFilePassword] = useState("")
+  const [parsed, setParsed] = useState<transfer.ImportResult | null>(null)
+  const read = useAction(async () => {
+    if (!file) throw new Error("Choose a file to import.")
+    try {
+      setParsed(
+        await transfer.parseImport(
+          file.content,
+          needsPassword ? filePassword : undefined
+        )
+      )
+    } catch (failure) {
+      if (failure instanceof transfer.ExportPasswordNeeded)
+        return setNeedsPassword(true)
+      throw failure
+    }
+  })
+  const save = useAction(async () => {
+    await vault.importItems(parsed!.items)
+    toast(`Imported ${parsed!.items.length} items.`)
+    onClose()
+  })
+  const folders = new Set(
+    parsed?.items.map((item) => item.folder).filter(Boolean)
+  ).size
+  return (
+    <SettingsDialog
+      title="Import items"
+      description="From a Bitwarden, Vaultwarden or Cloudwarden export (.json or .csv). Items go into your personal vault, encrypted here first."
+      onClose={onClose}
+    >
+      {!parsed ? (
+        <form onSubmit={read.run} className="grid gap-4">
+          <Field
+            label="Export file"
+            type="file"
+            accept=".json,.csv,application/json,text/csv"
+            required
+            className="h-auto py-1.5"
+            onChange={async (e) => {
+              const chosen = e.target.files?.[0]
+              setNeedsPassword(false)
+              setFile(
+                chosen
+                  ? { name: chosen.name, content: await chosen.text() }
+                  : null
+              )
+            }}
+          />
+          {needsPassword ? (
+            <Field
+              label="File password"
+              type="password"
+              autoFocus
+              required
+              hint="This export is password-protected."
+              value={filePassword}
+              onChange={(e) => setFilePassword(e.target.value)}
+            />
+          ) : null}
+          <ErrorLine text={read.error} />
+          <Footer busy={read.busy} label="Continue" onClose={onClose} />
+        </form>
+      ) : (
+        <form onSubmit={save.run} className="grid gap-4">
+          <p className="text-sm">
+            <strong>{parsed.items.length}</strong>{" "}
+            {parsed.items.length === 1 ? "item" : "items"}
+            {folders
+              ? ` in ${folders} ${folders === 1 ? "folder" : "folders"}`
+              : ""}{" "}
+            from <span className="font-mono text-xs">{file?.name}</span>.
+            {parsed.skipped
+              ? ` ${parsed.skipped} of a kind this vault doesn't hold will be left out.`
+              : ""}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Folders with the same name are reused. Importing twice makes
+            duplicates.
+          </p>
+          <ErrorLine text={save.error} />
+          <Footer
+            busy={save.busy}
+            label={`Import ${parsed.items.length}`}
+            onClose={onClose}
+          />
+        </form>
+      )}
     </SettingsDialog>
   )
 }
@@ -910,6 +1147,8 @@ type Open =
   | "email"
   | "keys"
   | "recovery"
+  | "export"
+  | "import"
   | null
 
 export function AccountSettings({ onExit }: { onExit: () => void }) {
@@ -1059,6 +1298,40 @@ export function AccountSettings({ onExit }: { onExit: () => void }) {
           </Section>
 
           <Section
+            title="Import and export"
+            description="Move items in from another password manager's Bitwarden-format export, or take a copy of your vault."
+          >
+            <Row
+              icon={<UploadIcon className="size-4" />}
+              title="Import items"
+              detail="Bitwarden JSON (plain or password-protected) or CSV."
+              action={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setOpen("import")}
+                >
+                  Import
+                </Button>
+              }
+            />
+            <Row
+              icon={<DownloadIcon className="size-4" />}
+              title="Export vault"
+              detail="Your personal vault, as JSON or CSV."
+              action={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setOpen("export")}
+                >
+                  Export
+                </Button>
+              }
+            />
+          </Section>
+
+          <Section
             title="Devices"
             description="Where your account is signed in. Removing a device signs it out."
           >
@@ -1119,6 +1392,8 @@ export function AccountSettings({ onExit }: { onExit: () => void }) {
         <SecurityKeysDialog onClose={close} onChanged={changed} />
       )}
       {open === "recovery" && <RecoveryDialog onClose={close} />}
+      {open === "export" && <ExportDialog onClose={close} />}
+      {open === "import" && <ImportDialog onClose={close} />}
     </div>
   )
 }

@@ -385,3 +385,22 @@ export const devices = (token: string) =>
 
 export const removeDevice = (token: string, id: string) =>
   request<null>(`/api/devices/${id}/deactivate`, { method: "POST", token })
+
+export const createFolder = (token: string, name: string) =>
+  request<{ id: string }>("/api/folders", { ...json({ name }), token })
+
+/** Imports into the personal vault: at most 1,000 items a request. Folders with an ID already exist; `folderRelationships` maps item index to folder index. */
+export const importVault = (
+  token: string,
+  body: {
+    ciphers: Record<string, unknown>[]
+    folders: { id: string; name: string }[]
+    folderRelationships: { key: number; value: number }[]
+  }
+) => request<null>("/api/ciphers/import", { ...json(body), token })
+
+export const verifyPassword = (token: string, masterPasswordHash: string) =>
+  request<null>("/api/accounts/verify-password", {
+    ...json({ masterPasswordHash }),
+    token,
+  })
