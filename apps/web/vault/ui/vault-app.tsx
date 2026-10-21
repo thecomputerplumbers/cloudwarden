@@ -1,6 +1,7 @@
 "use client"
 
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { serverConfig } from "../api.ts"
 import { normalizeEmail } from "../crypto/kdf.ts"
 import * as vault from "../store.ts"
 import { SignIn, Unlock } from "./auth.tsx"
@@ -37,6 +38,16 @@ export function VaultApp() {
   const hash = useLinkHash()
   const link = useMemo(() => parseLink(hash), [hash])
   useEffect(() => vault.restore(), [])
+  // Offer "Create an account" only when the server takes public sign-ups.
+  // Invitation links create accounts on their own screen either way.
+  const [openSignup, setOpenSignup] = useState(false)
+  useEffect(() => {
+    void serverConfig()
+      .then((config) =>
+        setOpenSignup(config.settings?.disableUserRegistration === false)
+      )
+      .catch(() => {})
+  }, [])
   useEffect(() => {
     if (link?.kind !== "unsupported") return
     navigate(null)
@@ -134,7 +145,9 @@ export function VaultApp() {
                 ? `Sign in to join ${link.orgName}.`
                 : undefined
             }
-            onCreateAccount={() => navigate({ kind: "signup" })}
+            {...(openSignup
+              ? { onCreateAccount: () => navigate({ kind: "signup" }) }
+              : {})}
           />
         )}
       </Suspense>

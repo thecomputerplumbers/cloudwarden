@@ -182,6 +182,10 @@ export const sendEmailCode = (email: string, passwordHash: string) =>
     json({ email, masterPasswordHash: passwordHash })
   )
 
+/** Public server settings; registration may be invite-only. */
+export const serverConfig = () =>
+  request<{ settings?: { disableUserRegistration?: boolean } }>("/api/config")
+
 export const sync = (token: string) =>
   request<SyncResponse>("/api/sync?excludeDomains=true", { token })
 
