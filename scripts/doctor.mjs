@@ -46,6 +46,11 @@ if (environment === "local") {
       ),
       "Local APP_URL"
     )
+  if (existsSync(file))
+    check(
+      /^BETTER_AUTH_SECRET=\S{32,}\s*$/m.test(readFileSync(file, "utf8")),
+      "Local BETTER_AUTH_SECRET (32+ characters; see apps/web/.dev.vars.example)"
+    )
   const result = spawnSync(
     "pnpm",
     [

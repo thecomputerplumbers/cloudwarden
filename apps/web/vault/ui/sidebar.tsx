@@ -19,6 +19,7 @@ import {
   LayersIcon,
   LockIcon,
   LogOutIcon,
+  PlusIcon,
   RefreshCwIcon,
   SendIcon,
   ServerCogIcon,
@@ -114,6 +115,7 @@ export function Sidebar({
   onSecrets,
   onSends,
   onAdmin,
+  onNewOrganization,
   onSettings,
 }: {
   filter: ItemFilter
@@ -124,6 +126,8 @@ export function Sidebar({
   onSecrets?: () => void
   /** Opens organization admin; absent when the account administers no organization. */
   onAdmin?: () => void
+  /** Starts creating an organization. */
+  onNewOrganization: () => void
 }) {
   const state = vault.useVault()
   const ids = state.vaults.map((entry) => entry.id)
@@ -315,6 +319,11 @@ export function Sidebar({
               label="Secrets Manager"
             />
           )}
+          <Row
+            onClick={onNewOrganization}
+            icon={<PlusIcon className="size-4" />}
+            label="New organization"
+          />
         </Section>
       </div>
 

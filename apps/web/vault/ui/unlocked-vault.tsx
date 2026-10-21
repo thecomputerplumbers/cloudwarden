@@ -24,6 +24,7 @@ import * as vault from "../store.ts"
 import { ItemDetail } from "./item-detail.tsx"
 import { KIND_LABELS } from "./item-kinds.ts"
 import { ItemList } from "./item-list.tsx"
+import { NewOrganizationDialog } from "./new-organization.tsx"
 import { Sidebar } from "./sidebar.tsx"
 import { VaultLoading } from "./vault-loading.tsx"
 
@@ -101,6 +102,8 @@ export function Unlocked() {
   const [area, setArea] = useState<
     "vault" | "secrets" | "admin" | "settings" | "sends"
   >("vault")
+  const [creatingOrg, setCreatingOrg] = useState(false)
+  const [openOrgId, setOpenOrgId] = useState<string | undefined>()
   useIdleLock(true)
   // Secrets Manager is for organization owners and admins whose key unwrapped.
   const adminOrgs = state.vaults.filter(
@@ -123,6 +126,16 @@ export function Unlocked() {
     )?.id ?? vault.PERSONAL
 
   const select = (id: string) => (setSelectedId(id), setPane("detail"))
+  const newOrgDialog = creatingOrg ? (
+    <NewOrganizationDialog
+      onClose={() => setCreatingOrg(false)}
+      onCreated={(id) => (
+        setCreatingOrg(false),
+        setOpenOrgId(id),
+        setArea("admin")
+      )}
+    />
+  ) : null
 
   if (area === "settings")
     return (
@@ -141,7 +154,14 @@ export function Unlocked() {
       <Suspense
         fallback={<VaultLoading message="Opening organization admin" />}
       >
-        <OrgAdmin organizations={adminOrgs} onExit={() => setArea("vault")} />
+        <OrgAdmin
+          key={openOrgId}
+          organizations={adminOrgs}
+          initialId={openOrgId}
+          onExit={() => setArea("vault")}
+          onNewOrganization={() => setCreatingOrg(true)}
+        />
+        {newOrgDialog}
       </Suspense>
     )
   if (area === "secrets" && adminOrgs.length)
@@ -164,6 +184,7 @@ export function Unlocked() {
           onFilter={(next) => (setFilter(next), setPane("list"))}
           onSettings={() => setArea("settings")}
           onSends={() => setArea("sends")}
+          onNewOrganization={() => setCreatingOrg(true)}
           {...(adminOrgs.length
             ? {
                 onSecrets: () => setArea("secrets"),
@@ -269,6 +290,7 @@ export function Unlocked() {
           {state.error}
         </div>
       )}
+      {newOrgDialog}
     </div>
   )
 }

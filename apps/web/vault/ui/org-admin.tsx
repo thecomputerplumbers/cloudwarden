@@ -683,15 +683,25 @@ type Dialogs =
     }
   | null
 
+const NEW_ORGANIZATION = "new"
+
 export function OrgAdmin({
   organizations,
+  initialId,
   onExit,
+  onNewOrganization,
 }: {
   organizations: Vault[]
+  /** Organization to open first, such as one just created. */
+  initialId?: string
   onExit: () => void
+  onNewOrganization: () => void
 }) {
   const state = admin.useOrg()
-  const [orgId, setOrgId] = useState(organizations[0]!.id)
+  const [orgId, setOrgId] = useState(
+    organizations.find((entry) => entry.id === initialId)?.id ??
+      organizations[0]!.id
+  )
   const [tab, setTab] = useState<Tab>("members")
   const [dialog, setDialog] = useState<Dialogs>(null)
   const organization =
@@ -771,20 +781,23 @@ export function OrgAdmin({
             </h1>
             <p className="text-sm text-muted-foreground">Organization admin</p>
           </div>
-          {organizations.length > 1 ? (
-            <select
-              aria-label="Organization"
-              value={orgId}
-              onChange={(e) => setOrgId(e.target.value)}
-              className={cn(selectClass, "h-9 max-w-48")}
-            >
-              {organizations.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          <select
+            aria-label="Organization"
+            value={orgId}
+            onChange={(e) =>
+              e.target.value === NEW_ORGANIZATION
+                ? onNewOrganization()
+                : setOrgId(e.target.value)
+            }
+            className={cn(selectClass, "h-9 max-w-48")}
+          >
+            {organizations.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
+            <option value={NEW_ORGANIZATION}>New organization…</option>
+          </select>
         </div>
         <div className="mx-auto flex max-w-3xl items-end justify-between gap-3 px-4 md:px-6">
           <nav aria-label="Organization admin" className="flex gap-1">

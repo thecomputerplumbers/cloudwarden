@@ -185,6 +185,18 @@ export const sendEmailCode = (email: string, passwordHash: string) =>
 export const sync = (token: string) =>
   request<SyncResponse>("/api/sync?excludeDomains=true", { token })
 
+export const publicKeyOf = (token: string, userId: string) =>
+  request<{ publicKey: string }>(`/api/users/${userId}/public-key`, { token })
+
+export const createOrganization = (
+  token: string,
+  body: Record<string, unknown>
+) =>
+  request<{ id: string; name: string }>("/api/organizations", {
+    ...json(body),
+    token,
+  })
+
 export const createCipher = (
   token: string,
   body: Record<string, unknown>,
