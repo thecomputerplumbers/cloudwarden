@@ -32,6 +32,7 @@ import {
   type KdfConfig,
 } from "./crypto/kdf.ts"
 import { keyBytes } from "./crypto/keys.ts"
+import { newOrganization } from "./crypto/organization.ts"
 import type { ImportedItem } from "./transfer.ts"
 
 /**
@@ -112,6 +113,7 @@ let state: VaultState = initial
 const listeners = new Set<() => void>()
 let secrets: {
   keys: AccountKeys
+  userId: string
   token: string
   refreshToken: string
   expiresAt: number
@@ -408,6 +410,7 @@ async function open(
   })
   secrets = {
     keys,
+    userId: data.profile.id,
     token: access,
     refreshToken: tokens.refresh_token,
     expiresAt: Date.now() + tokens.expires_in * 1000,
@@ -464,6 +467,28 @@ async function apply(data: api.SyncResponse, keys: AccountKeys) {
     collections: collections.sort((a, b) => a.name.localeCompare(b.name)),
     items,
   })
+}
+
+/**
+ * Creates an organization this account owns, with a default collection. The
+ * organization key is made here and wrapped with the account's own public key,
+ * so the server never sees it; it is kept in memory so the new organization is
+ * readable without unlocking again.
+ */
+export async function createOrganization(name: string) {
+  if (!secrets) throw new Error("Unlock the vault first")
+  const keys = secrets.keys
+  const access = await token()
+  const { publicKey } = await api.publicKeyOf(access, secrets.userId)
+  const org = await newOrganization(name, publicKey, "Default collection")
+  const created = await api.createOrganization(access, {
+    ...org.body,
+    billingEmail: state.email,
+    planType: 0,
+  })
+  keys.orgKeys.set(created.id, org.orgKey)
+  await resync()
+  return created.id
 }
 
 /** Re-reads the vault from the server. */

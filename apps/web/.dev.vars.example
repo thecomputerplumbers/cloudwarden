@@ -2,5 +2,7 @@ APP_URL=http://localhost:3000
 EMAIL_FROM=cloudwarden@thecomputerplumbers.com
 SIGNUPS_ALLOWED=true
 SIGNUPS_VERIFY=false
-# Set a unique BETTER_AUTH_SECRET outside local development.
+# Signs vault tokens; without it every login fails. Local development only:
+# set a unique one with `wrangler secret put` for staging and production.
+BETTER_AUTH_SECRET=local-development-only-signing-secret-not-for-prod
 # Cloudflare simulates EMAIL locally; never enable remote email in automated tests.

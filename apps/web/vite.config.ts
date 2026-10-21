@@ -41,6 +41,15 @@ export default defineConfig({
      * component renders.
      */
     exclude: ["@base-ui/react", "lucide-react"],
+    /**
+     * Base UI is excluded above, so its CommonJS dependency would be served
+     * raw, and the browser can't import `useSyncExternalStore` from it
+     * ("does not provide an export named"). Pre-bundle just that dependency.
+     */
+    include: [
+      "@workspace/ui > @base-ui/react > @base-ui/utils > use-sync-external-store/shim",
+      "@workspace/ui > @base-ui/react > @base-ui/utils > use-sync-external-store/shim/with-selector",
+    ],
   },
   plugins: [
     durableObjectMigrations(),
