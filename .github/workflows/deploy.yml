@@ -12,9 +12,22 @@ concurrency:
   group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    outputs:
+      runner: ${{ steps.hive.outputs.runner }}
+    steps:
+      # Your hive when one of its machines is free, ubuntu-latest when none is.
+      - id: hive
+        uses: thecomputerplumbers/hiverunner/route@v1
+
   deploy:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    needs: route
+    runs-on: ${{ needs.route.outputs.runner }}
     timeout-minutes: 20
     environment: ${{ inputs.environment }}
     env:
