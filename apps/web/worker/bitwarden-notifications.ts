@@ -16,7 +16,7 @@ import {
 import { authenticatedVaultUser, tokenHash } from "./bitwarden-auth"
 
 const encoder = new TextEncoder()
-const ping = new Uint8Array([1, 0x91, 6])
+const ping = new Uint8Array([2, 0x91, 6])
 
 function packed(value: unknown): Uint8Array {
   if (value === null) return new Uint8Array([0xc0])
