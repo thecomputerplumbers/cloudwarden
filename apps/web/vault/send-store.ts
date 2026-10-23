@@ -12,6 +12,7 @@ import {
   encryptString,
 } from "./crypto/enc-string.ts"
 import type { SymmetricKey } from "./crypto/keys.ts"
+import { MAX_FILE_BYTES } from "../worker/file-limits.ts"
 import {
   newSendMaterial,
   sendKey,
@@ -143,8 +144,8 @@ export interface SendDraft {
   disabled: boolean
 }
 
-/** Bitwarden limits a Send file to 500 MB; this server, to 20 MB encrypted. */
-export const MAX_FILE = 20_000_000 - 49 - 16
+/** Bitwarden limits a Send file to 500 MB; this server, to 100 MB encrypted. */
+export const MAX_FILE = MAX_FILE_BYTES - 49 - 16
 
 export async function save(draft: SendDraft, existing?: Send) {
   const token = await sessionToken()

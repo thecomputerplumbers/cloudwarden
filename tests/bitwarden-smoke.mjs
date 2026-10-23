@@ -1546,6 +1546,25 @@ assert.equal(
   404
 )
 
+const limitCipher = await authorized("/api/ciphers", "POST", {
+  type: 1,
+  name: "2.attachment-limit",
+  login: { username: "2.attachment-limit" },
+})
+assert.equal(limitCipher.status, 200)
+const limitInit = (fileSize) =>
+  authorized(`/api/ciphers/${limitCipher.body.id}/attachment/v2`, "POST", {
+    fileName: "2.limit-file",
+    fileSize,
+    key: "2.limit-key",
+  })
+assert.equal((await limitInit(104_857_600)).status, 200)
+assert.equal((await limitInit(104_857_601)).status, 400)
+assert.equal(
+  (await authorized(`/api/ciphers/${limitCipher.body.id}`, "DELETE")).status,
+  204
+)
+
 const updatedCipher = await authorized(`/api/ciphers/${cipherId}`, "PUT", {
   type: 1,
   name: "2.updated-name",
@@ -3880,6 +3899,18 @@ assert.equal(
 )
 assert.equal((await sendAccessRequest(send.body.accessId)).status, 404)
 
+assert.equal(
+  (
+    await otherAuthorized("/api/sends/file/v2", {
+      ...sendBody,
+      type: 1,
+      text: null,
+      file: { fileName: "2.too-large" },
+      fileLength: 104_857_601,
+    })
+  ).status,
+  400
+)
 const fileSend = await otherAuthorized("/api/sends/file/v2", {
   ...sendBody,
   type: 1,

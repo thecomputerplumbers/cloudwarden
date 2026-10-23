@@ -36,7 +36,8 @@ mutation handlers. Cipher creation, editing, import, and personal-to-organizatio
 preserve the acting user's archive date. Reads and writes check current
 collection access. Send content and access counters live in the owner's
 Durable Object; D1 maps public Send IDs to
-that object. File Send uploads are currently capped at 20 MB. A protected-action
+that object. Attachments and file Send uploads are capped at 100 MB (104,857,600
+encrypted bytes), matching Bitwarden. A protected-action
 personal vault purge removes personal ciphers
 and folders while retaining the account, Sends, and organization data. The
 organization purge variant is not yet implemented. Cloudwarden also
