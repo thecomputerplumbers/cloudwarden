@@ -207,6 +207,7 @@ import {
   hasEmergencyAccess,
   handleEmergencyAccess,
 } from "./bitwarden-emergency-access"
+import { MAX_FILE_BYTES } from "./file-limits"
 import {
   handlePasskeyRoutes,
   passkeyAssertionOptions,
@@ -5420,7 +5421,7 @@ export async function handleBitwarden(
         !key ||
         !Number.isSafeInteger(size) ||
         size < 0 ||
-        size > 20_000_000
+        size > MAX_FILE_BYTES
       )
         return failure("Invalid attachment")
       const id = crypto.randomUUID()
@@ -5450,7 +5451,7 @@ export async function handleBitwarden(
       if (!canEdit) return failure("Attachment editing is forbidden", 403)
       const form = await request.formData()
       const data = form.get("data")
-      if (!(data instanceof File) || data.size > 20_000_000)
+      if (!(data instanceof File) || data.size > MAX_FILE_BYTES)
         return failure("Invalid attachment")
       const key = form.get("key")
       const id = crypto.randomUUID()

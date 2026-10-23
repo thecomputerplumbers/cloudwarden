@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/d1"
 import { vaultSendLocator } from "../db/schema/vault"
 import { tokenHash } from "./bitwarden-auth"
 import type { AppDatabase } from "./database"
+import { MAX_FILE_BYTES } from "./file-limits"
 
 type SendRow = NonNullable<Awaited<ReturnType<AppDatabase["getVaultSend"]>>>
 type Body = Record<string, unknown>
@@ -141,7 +142,7 @@ export function parseSend(body: Body, existing?: SendRow) {
         typeof fileLength === "undefined" ||
         !Number.isSafeInteger(announcedSize) ||
         announcedSize! < 0 ||
-        announcedSize! > 20_000_000)) ||
+        announcedSize! > MAX_FILE_BYTES)) ||
     (notes !== undefined && notes !== null && typeof notes !== "string") ||
     (password !== undefined &&
       password !== null &&

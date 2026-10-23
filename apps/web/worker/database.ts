@@ -12,6 +12,7 @@ import {
   notificationPing,
   type VaultNotification,
 } from "./bitwarden-notifications"
+import { MAX_FILE_BYTES } from "./file-limits"
 
 type VaultShare = {
   orgId: string
@@ -1936,7 +1937,7 @@ export class AppDatabase extends DurableObject<CloudflareEnv> {
       input.fileName.length > 10_000 ||
       !Number.isSafeInteger(input.size) ||
       input.size < 0 ||
-      input.size > 20_000_000
+      input.size > MAX_FILE_BYTES
     )
       throw new Error("Invalid attachment")
     if (!(await this.getVaultCipher(input.cipherId)))
