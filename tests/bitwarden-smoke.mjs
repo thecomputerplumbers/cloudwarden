@@ -53,20 +53,28 @@ async function awaitLocalR2Deletion(key) {
   assert.fail(`R2 cleanup did not remove ${key}`)
 }
 
+// The account object's alarm sends SignalR keep-alive pings to every open
+// socket. One can land at any moment, so skip it when waiting for an event.
+function isKeepAlive(data) {
+  const bytes = new Uint8Array(data)
+  return (
+    bytes.length === 3 && bytes[0] === 2 && bytes[1] === 0x91 && bytes[2] === 6
+  )
+}
+
 async function nextSocketMessage(socket) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("Notification socket timed out")),
-      5_000
-    )
-    socket.addEventListener(
-      "message",
-      (event) => {
-        clearTimeout(timeout)
-        resolve(new Uint8Array(event.data))
-      },
-      { once: true }
-    )
+    const received = (event) => {
+      if (isKeepAlive(event.data)) return
+      clearTimeout(timeout)
+      socket.removeEventListener("message", received)
+      resolve(new Uint8Array(event.data))
+    }
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", received)
+      reject(new Error("Notification socket timed out"))
+    }, 5_000)
+    socket.addEventListener("message", received)
   })
 }
 
@@ -120,15 +128,17 @@ function socketClosed(socket) {
 
 async function noSocketMessage(socket, durationMs = 300) {
   return new Promise((resolve) => {
-    const received = () => {
+    const received = (event) => {
+      if (isKeepAlive(event.data)) return
       clearTimeout(timeout)
+      socket.removeEventListener("message", received)
       resolve(false)
     }
     const timeout = setTimeout(() => {
       socket.removeEventListener("message", received)
       resolve(true)
     }, durationMs)
-    socket.addEventListener("message", received, { once: true })
+    socket.addEventListener("message", received)
   })
 }
 
