@@ -181,7 +181,7 @@ metadata:
 spec:
   provider:
     webhook:
-      url: "http://cloudwarden-secrets.cloudwarden.svc/v1/secrets/{{ .remoteRef.key }}"
+      url: "http://cloudwarden-secrets.cloudwarden.svc:80/v1/secrets/{{ .remoteRef.key }}"
       result:
         jsonPath: "$.value"
       headers:

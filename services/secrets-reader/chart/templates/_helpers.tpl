@@ -18,6 +18,10 @@ app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- /*
+The port is always written out: External Secrets Operator validates a webhook store by dialing its
+URL's host, and takes a missing port as 443 whatever the scheme (esutils.NetworkValidate, v2.14).
+*/ -}}
 {{- define "cloudwarden-secrets.url" -}}
-http://{{ include "cloudwarden-secrets.fullname" . }}.{{ .Release.Namespace }}.svc{{ if ne (int .Values.service.port) 80 }}:{{ .Values.service.port }}{{ end }}
+http://{{ include "cloudwarden-secrets.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
 {{- end -}}
